@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TlDraw</string>
+    <string name="title_activity_main">TlDraw</string>
+    <string name="package_name">shubham.akshit.tldraw</string>
+    <string name="custom_url_scheme">shubham.akshit.tldraw</string>
+</resources>
