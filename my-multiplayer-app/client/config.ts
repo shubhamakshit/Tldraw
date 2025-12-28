@@ -1,6 +1,6 @@
 // --- SINGLE SOURCE OF TRUTH ---
 // Update this single line when your IP changes
-export const SERVER_IP = '192.168.0.169'
+export const SERVER_IP = 'tshonq.duckdns.org'
 
 export const SERVER_PORT = '5173'
 

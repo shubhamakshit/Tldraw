@@ -13,6 +13,8 @@
 		"@capacitor/cli": "^8.0.0",
 		"@capacitor/clipboard": "^8.0.0",
 		"@capacitor/core": "^8.0.0",
+		"@capacitor/filesystem": "^8.0.0",
+		"@capacitor/share": "^8.0.0",
 		"@tldraw/sync": "^4.2.1",
 		"@tldraw/sync-core": "^4.2.1",
 		"@tldraw/tlschema": "^4.2.1",
