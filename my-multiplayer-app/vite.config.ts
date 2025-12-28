@@ -9,7 +9,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     // THE FIX: Allow your IP and localhost to bypass the Cloudflare security check
-    allowedHosts: ['localhost', '192.168.0.169', '.local','192.168.0.102'], 
+    allowedHosts: ['localhost', '192.168.0.169', '.local','192.168.0.102','tshonq.duckdns.org'], 
   },
   appType: 'spa',
 })
