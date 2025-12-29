@@ -80,13 +80,31 @@ const SYNC = {
                 if (message.type === 'full-sync' || message.type === 'state-update') {
                     console.log(`ColorRM Sync: Received ${message.type}.`);
                     
-                    // If images are missing (e.g. reload race), try to ensure session is open
+                    // 1. RETRY BASE FILE FETCH if missing (Fix for 404 race condition)
                     if (!App.state.images || App.state.images.length === 0) {
-                         console.warn("ColorRM Sync: App.state.images is empty! Attempting fallback openSession...");
+                         console.warn("ColorRM Sync: Images missing. Retrying base file fetch...");
+                         try {
+                             const res = await fetch(`/api/color_rm/base_file/${this.roomId}`);
+                             if (res.ok) {
+                                 const blob = await res.blob();
+                                 // Import without re-uploading
+                                 await App.importBaseFile(blob); 
+                                 console.log("ColorRM Sync: Base file retry successful.");
+                             } else {
+                                 console.warn("ColorRM Sync: Base file retry failed (Status: " + res.status + ")");
+                             }
+                         } catch(e) { 
+                             console.error("ColorRM Sync: Base file retry error:", e);
+                         }
+                    }
+
+                    // 2. If still missing, try local DB (fallback)
+                    if (!App.state.images || App.state.images.length === 0) {
+                         console.warn("ColorRM Sync: App.state.images still empty! Attempting local DB...");
                          if (this.roomId) await App.openSession(this.roomId);
                     }
 
-                    // 1. Apply History Map to Images (Merge Strategy)
+                    // 3. Apply History Map to Images (Merge Strategy)
                     if (message.state.history_map) {
                         const pagesWithHistory = Object.keys(message.state.history_map);
                         
