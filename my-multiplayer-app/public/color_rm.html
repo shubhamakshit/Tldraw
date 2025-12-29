@@ -881,7 +881,7 @@
                     if(this.state.tool === 'text') {
                         UI.showInput("Add Text", "Type something...", (text) => {
                             const img = this.state.images[this.state.idx]; const fs = this.state.textSize;
-                            img.history.push({ tool: 'text', text: text, x: pt.x, y: pt.y, size: fs, color: this.state.penColor, rotation: 0, w: fs*text.length*0.6, h: fs });
+                            img.history.push({ id: Date.now() + Math.random(), tool: 'text', text: text, x: pt.x, y: pt.y, size: fs, color: this.state.penColor, rotation: 0, w: fs*text.length*0.6, h: fs });
                             this.saveCurrentImg(); this.setTool('none'); this.state.selection = [img.history.length-1]; syncSidebarToSelection(); this.render();
                         }); return;
                     }
@@ -994,7 +994,7 @@
                     } else if(this.state.tool==='shape') {
                         let w=pt.x-startPt.x, h=pt.y-startPt.y;
                         if(Math.abs(w)>2) {
-                            this.state.images[this.state.idx].history.push({tool:'shape', shapeType:this.state.shapeType, x:startPt.x, y:startPt.y, w:w, h:h, border:this.state.shapeBorder, fill:this.state.shapeFill, width:this.state.shapeWidth, rotation:0});
+                            this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), tool:'shape', shapeType:this.state.shapeType, x:startPt.x, y:startPt.y, w:w, h:h, border:this.state.shapeBorder, fill:this.state.shapeFill, width:this.state.shapeWidth, rotation:0});
                             this.saveCurrentImg(); this.state.selection=[this.state.images[this.state.idx].history.length-1]; this.setTool('lasso'); syncSidebarToSelection();
                         }
                     } else if(this.state.tool==='capture') {
@@ -1004,7 +1004,7 @@
                         if(w > 5 && h > 5) this.addToBox(startPt.x, startPt.y, w, h);
                         this.render();
                     } else if(['pen','eraser'].includes(this.state.tool)) {
-                        this.state.images[this.state.idx].history.push({tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize});
+                        this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize});
                         console.log(`Stroke added. History length: ${this.state.images[this.state.idx].history.length}`);
                         this.saveCurrentImg(); this.render();
                     }
@@ -1368,40 +1368,53 @@
             
             async shareSession() {
                 const url = window.location.href;
-                try {
-                    if (navigator.share) {
+                
+                // 1. Native Share
+                if (navigator.share) {
+                    try {
                         await navigator.share({
                             title: 'Join my ColorRM Session',
                             text: 'Collaborate with me!',
                             url: url
                         });
-                    } else if (navigator.clipboard && navigator.clipboard.writeText) {
-                        await navigator.clipboard.writeText(url);
-                        UI.showToast("Link copied to clipboard!");
-                    } else {
-                        throw new Error("Clipboard API unavailable");
-                    }
-                } catch (err) {
-                    console.error('Share failed:', err);
-                    // Fallback to execCommand
-                    try {
-                        const input = document.createElement('textarea');
-                        input.value = url;
-                        // Prevent scrolling to bottom
-                        input.style.position = "fixed";
-                        input.style.left = "0";
-                        input.style.top = "0";
-                        input.style.opacity = "0";
-                        document.body.appendChild(input);
-                        input.focus();
-                        input.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(input);
-                        UI.showToast("Link copied to clipboard!");
+                        return;
                     } catch (e) {
-                        prompt("Copy this link:", url);
+                        console.warn("Native share skipped/failed:", e);
                     }
                 }
+
+                // 2. Clipboard API (Secure Contexts)
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    try {
+                        await navigator.clipboard.writeText(url);
+                        UI.showToast("Link copied to clipboard!");
+                        return;
+                    } catch (e) {
+                        console.warn("Clipboard API failed:", e);
+                    }
+                }
+
+                // 3. Legacy Fallback (execCommand)
+                try {
+                    const input = document.createElement('textarea');
+                    input.value = url;
+                    input.style.position = "fixed";
+                    input.style.left = "0";
+                    input.style.top = "0";
+                    input.style.opacity = "0";
+                    document.body.appendChild(input);
+                    input.focus();
+                    input.select();
+                    const success = document.execCommand('copy');
+                    document.body.removeChild(input);
+                    if (success) {
+                        UI.showToast("Link copied to clipboard!");
+                        return;
+                    }
+                } catch (e) {}
+
+                // 4. Manual Fallback
+                prompt("Copy this link:", url);
             },
             
             drawHeaderFooter(ctx, w, h) {
@@ -1761,7 +1774,7 @@
                     const l = document.getElementById('sessionList'); l.innerHTML = '';
                     if(!req.result || req.result.length === 0) l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
                     req.result.forEach(s => {
-                        l.innerHTML += `<div style="padding:10px; border-bottom:1px solid #333; cursor:pointer" onclick="App.openSession(${s.id})">${s.name} (${s.pageCount} pgs)</div>`;
+                        l.innerHTML += `<div style="padding:10px; border-bottom:1px solid #333; cursor:pointer" onclick="App.openSession('${s.id}')">${s.name} (${s.pageCount} pgs)</div>`;
                     });
                 };
             },
