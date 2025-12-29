@@ -16,6 +16,11 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return error(e)
 	},
 })
+    .get('/api/hello', () => new Response('Hello from Worker!'))
+    .get('/_storage-info', async (request, env) => {
+        const list = await env.TLDRAW_BUCKET.list();
+        return new Response(JSON.stringify(list.objects, null, 2), { headers: { 'Content-Type': 'application/json' } });
+    })
 	// requests to /connect are routed to the Durable Object, and handle realtime websocket syncing
 	.get('/api/connect/:roomId', (request, env) => {
 		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(request.params.roomId)
@@ -39,6 +44,29 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		const room = env.COLORM_DURABLE_OBJECT.get(id)
 		return room.fetch(request.url, { headers: request.headers, body: request.body })
 	})
+
+    // Storage Info Route
+    .get('/api/storage-info', async (request, env) => {
+        console.log("Worker: Received request for /api/storage-info");
+        try {
+            const list = await env.TLDRAW_BUCKET.list();
+            const objects = list.objects.map(obj => ({
+                key: obj.key,
+                size: obj.size,
+                uploaded: obj.uploaded
+            }));
+            
+            return new Response(JSON.stringify({
+                bucket: env.TLDRAW_BUCKET.constructor.name,
+                total_objects: objects.length,
+                objects: objects
+            }, null, 2), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
 
     // Liveblocks Auth
 	.post('/api/liveblocks-auth', async (request, env) => {
@@ -83,6 +111,7 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 
     // Storage Info Route
     .get('/api/storage-info', async (request, env) => {
+        console.log("Worker: Received request for /api/storage-info");
         try {
             const list = await env.TLDRAW_BUCKET.list();
             const objects = list.objects.map(obj => ({

@@ -418,6 +418,14 @@
                         </label>
                     </div>
 
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; background:rgba(255,255,255,0.03); padding:8px; border-radius:6px;">
+                        <span style="font-size:0.8rem; color:#aaa">Show Cursors</span>
+                        <label class="switch" style="transform:scale(0.8)">
+                            <input type="checkbox" id="cursorToggle" checked>
+                            <span class="slider-switch"></span>
+                        </label>
+                    </div>
+
                     <!-- Settings Panel -->
                     <div id="toolSettingsPanel" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; margin-bottom:10px; display:none;">
                         
@@ -829,7 +837,11 @@
                 
                 // Clear old cursors
                 container.innerHTML = '';
+
+                if (!App.state.showCursors) return;
                 
+                if (!this.room) return;
+
                 const others = this.room.getOthers();
                 const rect = document.getElementById('canvas').getBoundingClientRect();
                 const viewRect = document.querySelector('.viewport').getBoundingClientRect();
@@ -1021,7 +1033,7 @@
                 bookmarks: [], activeSideTab: 'tools', projectName: "Untitled", baseFileName: null,
                 clipboardBox: [],
                 ownerId: null, pageLocked: false,
-                selectedSessions: new Set(), isMultiSelect: false
+                selectedSessions: new Set(), isMultiSelect: false, showCursors: true
             },
 
             cache: { currentImg: null, lab: null },
@@ -1287,7 +1299,8 @@
                         shapeFill: this.state.shapeFill,
                         shapeWidth: this.state.shapeWidth,
                         bookmarks: this.state.bookmarks,
-                        clipboardBox: this.state.clipboardBox 
+                        clipboardBox: this.state.clipboardBox,
+                        showCursors: this.state.showCursors
                     };
                     this.dbPut('sessions', s);
                 }
@@ -1423,6 +1436,11 @@
                 document.getElementById('strictRange').oninput = e => { this.state.strict=e.target.value; this.render(); };
                 document.getElementById('strictRange').onchange = () => this.saveSessionState();
                 document.getElementById('previewToggle').onchange = e => { this.state.previewOn=e.target.checked; this.render(); this.saveSessionState(); };
+                document.getElementById('cursorToggle').onchange = e => { 
+                    this.state.showCursors=e.target.checked; 
+                    if(window.LiveSync && LiveSync.renderCursors) LiveSync.renderCursors();
+                    this.saveSessionState(); 
+                };
             },
 
             switchSideTab(tab) {
@@ -2599,7 +2617,11 @@
                     if(session.state) Object.assign(this.state, session.state);
                     if(!this.state.bookmarks) this.state.bookmarks = [];
                     if(!this.state.clipboardBox) this.state.clipboardBox = [];
+                    if(this.state.showCursors === undefined) this.state.showCursors = true;
+                    const cToggle = document.getElementById('cursorToggle');
+                    if(cToggle) cToggle.checked = this.state.showCursors;
                     this.renderBookmarks();
+                    if(window.LiveSync && LiveSync.renderCursors) LiveSync.renderCursors();
                 }
                 
                 return new Promise((resolve) => {
