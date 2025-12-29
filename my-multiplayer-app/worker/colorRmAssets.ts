@@ -11,10 +11,12 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
     }
 
     const objectKey = `color_rm/base_files/${roomId}`
+    const projectName = request.headers.get('x-project-name') ? decodeURIComponent(request.headers.get('x-project-name')!) : 'ColorRM Project'
 
     try {
         await env.TLDRAW_BUCKET.put(objectKey, request.body, {
             httpMetadata: request.headers,
+            customMetadata: { name: projectName }
         })
         return new Response('Upload successful', { status: 200 })
     } catch (e: any) {

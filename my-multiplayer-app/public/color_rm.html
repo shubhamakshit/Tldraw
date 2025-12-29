@@ -1080,18 +1080,19 @@
                 let ownerId = parts[1];
                 let projectId = parts[2];
 
-                // If owner or project is missing from URL, try to load last project OR default to self
+                // If owner or project is missing from URL, try to load last project OR show dashboard
                 if (!ownerId || !projectId) {
                     const lastSess = await this.db.transaction('sessions', 'readonly').objectStore('sessions').getAll();
                     if (lastSess && lastSess.length > 0) {
                         const latest = lastSess.sort((a,b) => b.lastMod - a.lastMod)[0];
                         ownerId = latest.ownerId || LiveSync.userId;
                         projectId = latest.id;
+                        window.location.replace(`#/color_rm/${ownerId}/${projectId}`);
                     } else {
-                        ownerId = LiveSync.userId;
-                        projectId = `proj_${Date.now()}`;
+                        // NO PROJECTS: Just show the dashboard and wait for user action
+                        UI.showDashboard();
+                        return; // Stop initialization here
                     }
-                    window.location.replace(`#/color_rm/${ownerId}/${projectId}`);
                 }
 
                 this.state.ownerId = ownerId;
@@ -2398,7 +2399,7 @@
 
             async importBaseFile(blob) {
                 // Simulates a file input event to reuse existing handleImport logic
-                const file = new File([blob], "base_document", { type: blob.type });
+                const file = new File([blob], "base_document_blob", { type: blob.type });
                 await this.handleImport({ target: { files: [file] } }, true); // Pass true to skip upload
             },
 
@@ -2418,6 +2419,25 @@
                     await this.createNewProject(false, this.state.sessionId, LiveSync.ownerId || LiveSync.userId);
                 }
                 
+                UI.hideDashboard(); UI.toggleLoader(true, "Initializing...");
+                
+                const nameInput = document.getElementById('newProjectName');
+                let pName = (nameInput && nameInput.value.trim());
+                
+                // Priority: 1. Manual Input, 2. Existing State, 3. File Name, 4. Fallback
+                if (!pName) {
+                    if (this.state.projectName && this.state.projectName !== "Untitled" && !files[0].name.includes("base_document_blob")) {
+                        pName = this.state.projectName;
+                    } else {
+                        pName = files[0].name.replace(/\.[^/.]+$/, "");
+                        // If it's the dummy blob name, try to use existing state name or fallback
+                        if (pName.includes("base_document_blob")) {
+                            pName = (this.state.projectName && this.state.projectName !== "Untitled") ? this.state.projectName : "Untitled Project";
+                        }
+                    }
+                }
+                if(!pName || pName === "Untitled") pName = "Untitled Project";
+
                 // --- Sync to Server ---
                 if (!skipUpload && this.state.sessionId) {
                     console.log('ColorRM Sync: Uploading base file to server for ID:', this.state.sessionId);
@@ -2426,7 +2446,10 @@
                         const uploadRes = await fetch(`/api/color_rm/upload/${this.state.sessionId}`, {
                             method: 'POST',
                             body: files[0],
-                            headers: { 'Content-Type': files[0].type }
+                            headers: { 
+                                'Content-Type': files[0].type,
+                                'x-project-name': encodeURIComponent(pName)
+                            }
                         });
                         if (uploadRes.ok) {
                             console.log('ColorRM Sync: Base file upload successful.');
@@ -2442,11 +2465,6 @@
                 }
                 // -----------------------
 
-                UI.hideDashboard(); UI.toggleLoader(true, "Initializing...");
-                
-                const nameInput = document.getElementById('newProjectName');
-                let pName = (nameInput && nameInput.value.trim()) || files[0].name.replace(/\.[^/.]+$/, "");
-                if(!pName) pName = "Untitled";
                 this.state.projectName = pName;
                 this.state.baseFileName = files[0].name;
                 document.getElementById('headerTitle').innerText = pName;
@@ -2580,8 +2598,6 @@
                 if(c) c.getContext('2d').clearRect(0,0,c.width,c.height);
                 // ----------------------------
 
-                await this.dbPut('sessions', { id: projectId, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: ownerId });
-                
                 UI.setSyncStatus('new');
 
                 // Initialize LiveSync with the Owner's Room and this Project Key
