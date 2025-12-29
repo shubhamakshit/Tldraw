@@ -404,17 +404,18 @@
                 <div class="control-section">
                     <h4>Instruments</h4>
                     <div class="tool-row">
-                        <button class="btn tool-btn" id="toolNone" onclick="App.setTool('none')"><i class="bi bi-cursor"></i> Move</button>
-                        <button class="btn tool-btn" id="toolLasso" onclick="App.setTool('lasso')"><i class="bi bi-bounding-box-circles"></i> Lasso</button>
-                        <button class="btn tool-btn" id="toolPen" onclick="App.setTool('pen')"><i class="bi bi-pen"></i> Pen</button>
+                        <button class="btn tool-btn" id="toolNone" onclick="App.setTool('none')"><i class="bi bi-cursor"></i> Move (V)</button>
+                        <button class="btn tool-btn" id="toolHand" onclick="App.setTool('hand')"><i class="bi bi-hand-index-thumb"></i> Hand (H)</button>
+                        <button class="btn tool-btn" id="toolLasso" onclick="App.setTool('lasso')"><i class="bi bi-bounding-box-circles"></i> Lasso (L)</button>
                     </div>
                     <div class="tool-row">
-                        <button class="btn tool-btn" id="toolShape" onclick="App.setTool('shape')"><i class="bi bi-square"></i> Shape</button>
-                        <button class="btn tool-btn" id="toolText" onclick="App.setTool('text')"><i class="bi bi-fonts"></i> Text</button>
-                        <button class="btn tool-btn" id="toolEraser" onclick="App.setTool('eraser')"><i class="bi bi-eraser"></i> Erase</button>
+                        <button class="btn tool-btn" id="toolPen" onclick="App.setTool('pen')"><i class="bi bi-pen"></i> Pen (P)</button>
+                        <button class="btn tool-btn" id="toolShape" onclick="App.setTool('shape')"><i class="bi bi-square"></i> Shape (S)</button>
+                        <button class="btn tool-btn" id="toolText" onclick="App.setTool('text')"><i class="bi bi-fonts"></i> Text (T)</button>
                     </div>
                     <div class="tool-row">
-                        <button class="btn tool-btn" id="toolCapture" onclick="App.setTool('capture')" style="border-color:#444;"><i class="bi bi-plus-square-dotted"></i> Capture</button>
+                        <button class="btn tool-btn" id="toolEraser" onclick="App.setTool('eraser')"><i class="bi bi-eraser"></i> Erase (E)</button>
+                        <button class="btn tool-btn" id="toolCapture" onclick="App.setTool('capture')" style="border-color:#444;"><i class="bi bi-plus-square-dotted"></i> Box (B)</button>
                     </div>
                     
                     <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; padding:12px; border:1px solid #222; border-radius:6px; background:#0a0a0a;">
@@ -689,7 +690,14 @@
                 </div>
 
                 <button class="btn btn-icon" style="border-radius:4px; background:transparent; border:none;" onclick="App.loadPage(App.state.idx+1)"><i class="bi bi-chevron-right"></i></button>
+                
                 <div style="width:1px; height:16px; background:#333;"></div>
+                
+                <!-- Zoom Indicator -->
+                <button id="zoomBtn" class="btn btn-sm" style="background:transparent; border:none; font-family:monospace; font-size:0.75rem; min-width:50px; color:#888;" onclick="App.resetZoom()">100%</button>
+                
+                <div style="width:1px; height:16px; background:#333;"></div>
+                
                 <button class="btn btn-icon" style="border-radius:4px; background:transparent; border:none;" onclick="App.undo()"><i class="bi bi-arrow-counterclockwise" style="font-size:0.8rem"></i></button>
             </div>
         </main>
@@ -894,8 +902,8 @@
                     div.className = 'remote-cursor';
                     
                     // Map canvas coordinates to screen coordinates
-                    const x = (presence.cursor.x * (rect.width / App.state.viewW)) + rect.left - viewRect.left;
-                    const y = (presence.cursor.y * (rect.height / App.state.viewH)) + rect.top - viewRect.top;
+                    const x = (presence.cursor.x * this.state.zoom + this.state.pan.x) * (rect.width / App.state.viewW) + rect.left - viewRect.left;
+                    const y = (presence.cursor.y * this.state.zoom + this.state.pan.y) * (rect.height / App.state.viewH) + rect.top - viewRect.top;
 
                     div.style.left = `${x}px`;
                     div.style.top = `${y}px`;
@@ -1073,7 +1081,8 @@
                 bookmarks: [], activeSideTab: 'tools', projectName: "Untitled", baseFileName: null,
                 clipboardBox: [],
                 ownerId: null, pageLocked: false,
-                selectedSessions: new Set(), isMultiSelect: false, showCursors: true
+                selectedSessions: new Set(), isMultiSelect: false, showCursors: true,
+                zoom: 1, pan: { x: 0, y: 0 }
             },
 
             cache: { currentImg: null, lab: null },
@@ -1572,9 +1581,15 @@
                     if((e.ctrlKey||e.metaKey) && key==='z') { e.preventDefault(); if(e.shiftKey) this.redo(); else this.undo(); }
                     if(key==='v') this.setTool('none'); if(key==='l') this.setTool('lasso'); if(key==='p') this.setTool('pen'); 
                     if(key==='e') this.setTool('eraser'); if(key==='s') this.setTool('shape'); if(key==='t') this.setTool('text');
-                    if(key==='b') this.setTool('capture');
+                    if(key==='b') this.setTool('capture'); if(key==='h') this.setTool('hand');
                     if(e.key==='ArrowLeft') this.loadPage(this.state.idx-1); if(e.key==='ArrowRight') this.loadPage(this.state.idx+1); if(e.key==='Delete' || e.key==='Backspace') this.deleteSelected();
                 });
+            },
+
+            resetZoom() {
+                this.state.zoom = 1;
+                this.state.pan = { x: 0, y: 0 };
+                this.render();
             },
 
             setupDrawing() {
@@ -1612,7 +1627,15 @@
                 });
                 // --------------------------
 
-                const getPt = e => { const r = c.getBoundingClientRect(); return { x: (e.clientX - r.left)*(c.width/r.width), y: (e.clientY - r.top)*(c.height/r.height) }; };
+                const getPt = e => { 
+                    const r = c.getBoundingClientRect(); 
+                    const screenX = (e.clientX - r.left)*(c.width/r.width);
+                    const screenY = (e.clientY - r.top)*(c.height/r.height);
+                    return { 
+                        x: (screenX - this.state.pan.x) / this.state.zoom, 
+                        y: (screenY - this.state.pan.y) / this.state.zoom 
+                    }; 
+                };
                 const getSelectionBounds = () => {
                     if(this.state.selection.length===0) return null;
                     const img = this.state.images[this.state.idx];
@@ -1652,6 +1675,8 @@
 
                 c.onpointerdown = e => {
                     const pt = getPt(e); startPt = pt;
+                    this.lastScreenX = e.clientX;
+                    this.lastScreenY = e.clientY;
                     if(this.state.tool === 'text') {
                         UI.showInput("Add Text", "Type something...", (text) => {
                             const img = this.state.images[this.state.idx]; const fs = this.state.textSize;
@@ -1685,6 +1710,21 @@
                     }
 
                     if(isMovingSelection) { this.dragOffset = {x:pt.x-dragStart.x, y:pt.y-dragStart.y}; this.render(); return; }
+                    
+                    if (this.state.tool === 'hand' && this.isDragging) {
+                        const dx = e.clientX - this.lastScreenX;
+                        const dy = e.clientY - this.lastScreenY;
+                        
+                        this.state.pan.x += dx;
+                        this.state.pan.y += dy;
+                        
+                        this.lastScreenX = e.clientX;
+                        this.lastScreenY = e.clientY;
+                        
+                        this.render();
+                        return;
+                    }
+
                     if(!this.isDragging) return;
                     if(this.state.tool==='lasso') { lassoPath.push(pt); this.renderLasso(c.getContext('2d'), lassoPath); }
                     else if(this.state.tool==='shape' || this.state.tool==='capture') { 
@@ -1755,6 +1795,65 @@
 
                 window.addEventListener('resize', () => LiveSync.renderCursors());
                 document.querySelector('.viewport').addEventListener('scroll', () => LiveSync.renderCursors());
+
+                // --- Zoom & Pan Logic ---
+                let lastPinchDist = null;
+                c.addEventListener('wheel', e => {
+                    if (e.ctrlKey) {
+                        e.preventDefault();
+                        const r = c.getBoundingClientRect();
+                        const mouseX = (e.clientX - r.left) * (c.width / r.width);
+                        const mouseY = (e.clientY - r.top) * (c.height / r.height);
+
+                        const zoomSpeed = 0.001;
+                        const delta = -e.deltaY;
+                        const factor = Math.pow(1.1, delta / 100);
+                        const newZoom = Math.min(Math.max(this.state.zoom * factor, 0.1), 10);
+
+                        // Adjust pan to zoom towards mouse position
+                        this.state.pan.x = mouseX - (mouseX - this.state.pan.x) * (newZoom / this.state.zoom);
+                        this.state.pan.y = mouseY - (mouseY - this.state.pan.y) * (newZoom / this.state.zoom);
+                        this.state.zoom = newZoom;
+
+                        this.render();
+                    } else if (this.state.tool === 'none' || e.shiftKey) {
+                        // Standard scroll pans the canvas if in 'none' tool or shift held
+                        e.preventDefault();
+                        this.state.pan.x -= e.deltaX;
+                        this.state.pan.y -= e.deltaY;
+                        this.render();
+                    }
+                }, { passive: false });
+
+                c.addEventListener('touchstart', e => {
+                    if (e.touches.length === 2) {
+                        lastPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                    }
+                }, { passive: false });
+
+                c.addEventListener('touchmove', e => {
+                    if (e.touches.length === 2 && lastPinchDist !== null) {
+                        e.preventDefault();
+                        const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                        const factor = dist / lastPinchDist;
+                        
+                        const r = c.getBoundingClientRect();
+                        const centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left) * (c.width / r.width);
+                        const centerY = ((e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top) * (c.height / r.height);
+
+                        const newZoom = Math.min(Math.max(this.state.zoom * factor, 0.1), 10);
+                        this.state.pan.x = centerX - (centerX - this.state.pan.x) * (newZoom / this.state.zoom);
+                        this.state.pan.y = centerY - (centerY - this.state.pan.y) * (newZoom / this.state.zoom);
+                        this.state.zoom = newZoom;
+                        lastPinchDist = dist;
+                        this.render();
+                    }
+                }, { passive: false });
+
+                c.addEventListener('touchend', e => {
+                    if (e.touches.length < 2) lastPinchDist = null;
+                });
+                // --------------------------
 
                 window.onpointerup = e => {
                     if(isMovingSelection) { 
@@ -2834,9 +2933,16 @@
                 const ctx = c.getContext('2d');
                 ctx.globalCompositeOperation = 'source-over';
                 ctx.clearRect(0,0,c.width,c.height);
+
+                ctx.save();
+                ctx.translate(this.state.pan.x, this.state.pan.y);
+                ctx.scale(this.state.zoom, this.state.zoom);
+
                 ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
 
                 if(this.state.previewOn || (tempHex && this.state.pickerMode==='remove')) {
+                    // Note: Color removal logic might need optimization for zoom, 
+                    // but for now we draw the processed image.
                     let targets = this.state.colors.map(x=>x.lab);
                     if(tempHex) {
                         const i = parseInt(tempHex.slice(1), 16);
@@ -2852,7 +2958,11 @@
                             for(let t of targets) if(((l-t[0])**2 + (a-t[1])**2 + (b-t[2])**2) <= sq) { keep = true; break; }
                             if(!keep) d[i+3] = 0; 
                         }
-                        ctx.putImageData(imgD, 0, 0);
+                        // We need a temporary canvas to put imageData because ctx is scaled
+                        const tmpC = document.createElement('canvas');
+                        tmpC.width = this.state.viewW; tmpC.height = this.state.viewH;
+                        tmpC.getContext('2d').putImageData(imgD, 0, 0);
+                        ctx.drawImage(tmpC, 0, 0);
                     }
                 }
 
@@ -2885,11 +2995,15 @@
 
                 if(this.state.selection.length > 0) this.renderSelectionOverlay(ctx, hist);
                 
+                // Update Zoom UI
+                const zb = document.getElementById('zoomBtn');
+                if (zb) zb.innerText = Math.round(this.state.zoom * 100) + '%';
+
                 if(this.state.guideLines.length > 0) {
                     ctx.save();
                     ctx.strokeStyle = '#f472b6'; 
-                    ctx.lineWidth = 1;
-                    ctx.setLineDash([4, 4]);
+                    ctx.lineWidth = 1 / this.state.zoom;
+                    ctx.setLineDash([4 / this.state.zoom, 4 / this.state.zoom]);
                     ctx.beginPath();
                     this.state.guideLines.forEach(g => {
                         if(g.type==='v') { ctx.moveTo(g.x, 0); ctx.lineTo(g.x, this.state.viewH); }
@@ -2898,6 +3012,8 @@
                     ctx.stroke();
                     ctx.restore();
                 }
+
+                ctx.restore(); // Important: Restore the transform context
             },
             renderObject(ctx, st, dx, dy) {
                 ctx.save(); 
@@ -2985,9 +3101,15 @@
                 const sx = cr.width/this.state.viewW; const sy = cr.height/this.state.viewH;
                 
                 menu.style.display = 'flex';
-                let mx = (minX + maxX)/2 * sx;
-                let my = (minY * sy) - 50;
-                if(my < 10) my = (maxY * sy) + 50;
+                // Transform bounds to screen space correctly
+                const screenMinX = (minX * this.state.zoom + this.state.pan.x) * sx;
+                const screenMaxX = (maxX * this.state.zoom + this.state.pan.x) * sx;
+                const screenMinY = (minY * this.state.zoom + this.state.pan.y) * sy;
+                const screenMaxY = (maxY * this.state.zoom + this.state.pan.y) * sy;
+
+                let mx = (screenMinX + screenMaxX)/2;
+                let my = (screenMinY) - 50;
+                if(my < 10) my = (screenMaxY) + 50;
 
                 menu.style.left = (cr.left + mx - menu.offsetWidth/2) + 'px';
                 menu.style.top = (cr.top + my) + 'px';
@@ -3052,10 +3174,15 @@
             },
             setTool(t) {
                 this.state.tool = t;
-                ['None','Lasso','Pen','Shape','Text','Eraser','Capture'].forEach(x => {
+                ['None','Lasso','Pen','Shape','Text','Eraser','Capture','Hand'].forEach(x => {
                     const el = document.getElementById('tool'+x);
                     if(el) el.classList.toggle('active', t===x.toLowerCase());
                 });
+                
+                const vp = document.getElementById('viewport');
+                if (t === 'hand') vp.style.cursor = 'grab';
+                else vp.style.cursor = 'default';
+
                 document.getElementById('toolSettingsPanel').style.display = ['pen','shape','eraser','text'].includes(t) ? 'block' : 'none';
                 document.getElementById('penOptions').style.display = t==='pen'||t==='text'?'block':'none';
                 document.getElementById('shapeOptions').style.display = t==='shape'?'block':'none';
