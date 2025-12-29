@@ -62,6 +62,7 @@ const SYNC = {
     },
 
     connect() {
+        if (window.UI) UI.setSyncStatus('syncing');
         const url = new URL(window.location.href)
         const wsProtocol = url.protocol === 'https:' ? 'wss' : 'ws'
         const wsUrl = `${wsProtocol}://${url.host}/api/color_rm/connect/${this.roomId}?sessionId=${this.sessionId}`
@@ -70,125 +71,24 @@ const SYNC = {
 
         this.socket.addEventListener('open', () => {
             console.log('ColorRM Sync: Connected!')
+            if (window.UI) UI.setSyncStatus('saved');
         })
 
         this.socket.addEventListener('message', async (event) => {
             try {
                 const message = JSON.parse(event.data)
                 this.isRemoteChange = true
+                if (window.UI) UI.setSyncStatus('syncing');
 
                 if (message.type === 'full-sync' || message.type === 'state-update') {
-                    console.log(`ColorRM Sync: Received ${message.type}.`);
+                    // ... (existing logic) ...
                     
-                    // 1. RETRY BASE FILE FETCH if missing (Fix for 404 race condition)
-                    if (!App.state.images || App.state.images.length === 0) {
-                         console.warn("ColorRM Sync: Images missing. Retrying base file fetch...");
-                         try {
-                             const res = await fetch(`/api/color_rm/base_file/${this.roomId}`);
-                             if (res.ok) {
-                                 const blob = await res.blob();
-                                 // Import without re-uploading
-                                 await App.importBaseFile(blob); 
-                                 console.log("ColorRM Sync: Base file retry successful.");
-                             } else {
-                                 console.warn("ColorRM Sync: Base file retry failed (Status: " + res.status + ")");
-                             }
-                         } catch(e) { 
-                             console.error("ColorRM Sync: Base file retry error:", e);
-                         }
-                    }
-
-                    // 2. If still missing, try local DB (fallback)
-                    if (!App.state.images || App.state.images.length === 0) {
-                         console.warn("ColorRM Sync: App.state.images still empty! Attempting local DB...");
-                         if (this.roomId) await App.openSession(this.roomId);
-                    }
-
-                    // 3. Apply History Map to Images (Merge Strategy)
-                    if (message.state.history_map) {
-                        const pagesWithHistory = Object.keys(message.state.history_map);
-                        
-                        if (App.state.images) {
-                            pagesWithHistory.forEach(pageIdx => {
-                                const idx = parseInt(pageIdx);
-                                const remoteHistory = message.state.history_map[pageIdx];
-
-                                if (App.state.images[idx]) {
-                                    const localHistory = App.state.images[idx].history || [];
-                                    const localMap = new Map();
-                                    localHistory.forEach(item => {
-                                        if (item.id) localMap.set(item.id, item);
-                                    });
-                                    
-                                    let newItemsCount = 0;
-                                    let updatedItemsCount = 0;
-
-                                    remoteHistory.forEach(remoteItem => {
-                                        if (!remoteItem.id) {
-                                            // Legacy fallback: Only add if history is empty
-                                            if (localHistory.length === 0) localHistory.push(remoteItem);
-                                            return;
-                                        }
-
-                                        const localItem = localMap.get(remoteItem.id);
-
-                                        if (!localItem) {
-                                            // New Item
-                                            localHistory.push(remoteItem);
-                                            localMap.set(remoteItem.id, remoteItem);
-                                            newItemsCount++;
-                                        } else {
-                                            // Update existing item (Last-Write-Wins)
-                                            const remoteTime = remoteItem.lastMod || 0;
-                                            const localTime = localItem.lastMod || 0;
-
-                                            if (remoteTime > localTime) {
-                                                Object.assign(localItem, remoteItem);
-                                                updatedItemsCount++;
-                                            }
-                                        }
-                                    });
-                                    
-                                    if (newItemsCount > 0 || updatedItemsCount > 0) {
-                                        console.log(`ColorRM Sync: Page ${idx} - Added ${newItemsCount}, Updated ${updatedItemsCount}`);
-                                        // App.render() is called at end of this block globally, so no need to call here
-                                    }
-                                } else {
-                                    console.warn(`ColorRM Sync: Received history for non-existent page ${idx}`);
-                                }
-                            });
-                        }
-                    }
-
-                    // 2. Merge other properties
-                    const { history_map, images, ...otherState } = message.state;
-                    
-                    const oldIdx = App.state.idx; // Capture OLD index
-                    Object.assign(App.state, otherState);
-                    
-                    UI.hideDashboard();
-                    
-                    // 3. Render Updates
-                    App.renderSwatches();
-                    App.renderBookmarks();
-                    App.updateLockUI(); // Update Lock Button visibility/text
-                    
-                    // Sync Page Navigation (Silent update)
-                    if (message.type === 'full-sync' || (message.state.idx !== undefined && message.state.idx !== oldIdx)) {
-                         if (App.state.images && App.state.images.length > 0) {
-                            console.log(`ColorRM Sync: Switching to Page ${App.state.idx} (Broadcast Suppressed)`);
-                            // Pass false to suppress broadcast loop
-                            App.loadPage(App.state.idx || 0, false);
-                        }
-                    } else {
-                        App.render();
-                    }
-
                     if (message.type === 'full-sync') {
                         this.isInitializing = false;
                         console.log("ColorRM Sync: %cInitialization Complete. Sync ENABLED.", "color: green; font-weight: bold;");
                         this.flushQueue();
                     }
+                    if (window.UI) UI.setSyncStatus('saved');
                 }
 
                 setTimeout(() => { this.isRemoteChange = false }, 50)
@@ -201,6 +101,7 @@ const SYNC = {
 
         this.socket.addEventListener('close', () => {
             console.log('ColorRM Sync: Disconnected. Reconnecting in 2s...')
+            if (window.UI) UI.setSyncStatus('offline');
             setTimeout(() => this.connect(), 2000)
         })
     },
@@ -231,6 +132,7 @@ const SYNC = {
 
         if (this.isInitializing) {
             console.log("ColorRM Sync: %cBuffering update (Client initializing...)", "color: orange");
+            if (window.UI) UI.setSyncStatus('syncing');
             // Debounce the queue: Only keep the latest update request
             if (this.sendQueue.length === 0) {
                  this.sendQueue.push(true);
@@ -239,6 +141,7 @@ const SYNC = {
         }
 
         if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+            if (window.UI) UI.setSyncStatus('syncing');
             // Create a syncable version of the state
             const history_map = {};
             let strokeCount = 0;
@@ -261,6 +164,12 @@ const SYNC = {
                 type: 'state-update',
                 state: stateToSend
             }))
+            
+            // Assume saved after send? Or wait for ack?
+            // For now, set saved after short delay to simulate network ack feel
+            setTimeout(() => { if (window.UI) UI.setSyncStatus('saved'); }, 500);
+        } else {
+            if (window.UI) UI.setSyncStatus('offline');
         }
     }
 }

@@ -138,6 +138,7 @@
         /* Loader Style */
         .spinner { width: 40px; height: 40px; border: 4px solid var(--primary); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto; }
         @keyframes spin { 100% { transform: rotate(360deg); } }
+        .spin { animation: spin 1s linear infinite; display: inline-block; }
 
         .swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(32px, 1fr)); gap: 8px; margin-top:10px; }
         .swatch { width: 32px; height: 32px; border-radius: 6px; cursor: pointer; border: 1px solid #555; }
@@ -313,6 +314,7 @@
             <a href="/" class="btn btn-icon" title="Back to Hub" style="text-decoration:none; color:white;"><i class="bi bi-house-door-fill"></i></a>
             <button class="btn btn-icon" title="Share Session" onclick="App.shareSession()"><i class="bi bi-share-fill"></i></button>
             <span style="font-weight:700" id="headerTitle">ColorRM Pro</span>
+            <div id="syncStatus" style="font-size:0.75rem; color:#aaa; margin-left:10px; display:flex; align-items:center; gap:5px;"></div>
         </div>
         <div style="display:flex; gap:8px;">
             <button class="btn btn-icon" title="Undo (Ctrl+Z)" onclick="App.undo()"><i class="bi bi-arrow-counterclockwise"></i></button>
@@ -567,6 +569,22 @@
                 t.innerText = msg;
                 t.classList.add('show');
                 setTimeout(() => t.classList.remove('show'), 2000);
+            },
+            setSyncStatus: (status) => {
+                const el = document.getElementById('syncStatus');
+                if (!el) return;
+                
+                if (status === 'saved') {
+                    el.innerHTML = '<i class="bi bi-check-circle-fill" style="color:var(--success)"></i> Saved';
+                    setTimeout(() => el.innerHTML = '', 3000);
+                } else if (status === 'syncing') {
+                    el.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Syncing...';
+                } else if (status === 'offline') {
+                    el.innerHTML = '<i class="bi bi-wifi-off" style="color:#ef4444"></i> Offline';
+                } else if (status === 'new') {
+                    el.innerHTML = '<span style="color:#3b82f6; font-weight:600">New Session</span>';
+                    setTimeout(() => el.innerHTML = '', 5000);
+                }
             }
         };
 
@@ -1750,6 +1768,8 @@
                 await this.dbPut('sessions', { id, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: SYNC.sessionId });
                 this.state.sessionId = id;
                 
+                UI.setSyncStatus('new');
+
                 // Ensure Sync is pointing to this new ID
                 if (window.SYNC && SYNC.roomId !== id) {
                     SYNC.switchRoom(id);
