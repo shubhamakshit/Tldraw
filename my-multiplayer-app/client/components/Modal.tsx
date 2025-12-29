@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { colors } from '../constants/theme'
 
@@ -179,7 +179,7 @@ export function showModal(props: Omit<ModalProps, 'onConfirm' | 'onCancel' | 'th
 
         const onCancel = () => {
             cleanup()
-            resolve(props.type === 'prompt' ? null : false)
+            resolve(props.type === 'prompt' ? undefined : false)
         }
 
         root.render(
