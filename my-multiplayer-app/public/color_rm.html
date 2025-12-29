@@ -157,6 +157,9 @@
         .tag-pill { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-family: monospace; color: var(--accent); cursor: pointer; border: 1px solid transparent; }
         .tag-pill:hover { border-color: var(--accent); }
 
+        .owner-badge { font-size: 0.6rem; padding: 2px 4px; border-radius: 4px; background: rgba(59, 130, 246, 0.2); color: var(--primary); border: 1px solid var(--primary); margin-left: 8px; }
+        .other-badge { font-size: 0.6rem; padding: 2px 4px; border-radius: 4px; background: rgba(139, 92, 246, 0.2); color: var(--accent); border: 1px solid var(--accent); margin-left: 8px; }
+
         .opt-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
         .opt-input { background: rgba(0,0,0,0.3); border: 1px solid #444; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; }
 
@@ -202,15 +205,34 @@
     </div>
     
     <!-- Dashboard -->
-    <div id="dashboardModal" class="overlay" style="display:flex">
-        <div class="card">
-            <h2 style="margin-top:0">🎨 ColorRM Pro</h2>
-            <div style="display:flex; gap:10px; margin-bottom:15px;">
-                <input type="text" id="newProjectName" placeholder="Project Name (Optional)" style="flex:1; background:var(--bg-body); border:1px solid var(--border); padding:10px; color:white; border-radius:6px;">
-                <button class="btn btn-primary" onclick="App.createNewProject()">Create</button>
+    <div id="dashboardModal" class="overlay">
+        <div class="card" style="max-width: 450px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:15px;">
+                <h2 style="margin:0">🎨 ColorRM Pro</h2>
+                <button onclick="UI.hideDashboard()" style="background:none; border:none; color:#888; cursor:pointer;"><i class="bi bi-x-lg"></i></button>
             </div>
-            <h4 style="color:var(--text-muted); font-size:0.8rem; text-transform:uppercase;">Recent Projects</h4>
-            <div id="sessionList" style="flex:1; overflow:auto; min-height:200px; border-top:1px solid var(--border); margin-top:10px;"></div>
+
+            <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; margin-bottom:15px; font-size:0.8rem; border:1px solid var(--border);">
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span style="color:#888;">My User ID:</span>
+                    <span id="dashUserId" style="color:var(--accent); font-family:monospace;"></span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <span style="color:#888;">Active Project:</span>
+                    <span id="dashProjId" style="color:var(--primary); font-family:monospace;"></span>
+                </div>
+            </div>
+
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <input type="text" id="newProjectName" placeholder="New Project Name" style="flex:1; background:var(--bg-body); border:1px solid var(--border); padding:10px; color:white; border-radius:6px;">
+                <button class="btn btn-primary" onclick="window.App.createNewProject()">Create</button>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <h4 style="color:var(--text-muted); font-size:0.7rem; text-transform:uppercase; margin:0;">Recent Projects</h4>
+                <button class="btn btn-sm" onclick="window.App.reuploadBaseFile()" title="Repair Server File"><i class="bi bi-cloud-upload"></i> Re-upload Base</button>
+            </div>
+            <div id="sessionList" style="flex:1; overflow:auto; min-height:200px; border-top:1px solid var(--border);"></div>
         </div>
     </div>
 
@@ -465,6 +487,7 @@
 
                 <div class="control-section">
                     <button class="btn btn-sm" style="width:100%; justify-content:center;" onclick="window.App.render()">Force Redraw</button>
+                    <button class="btn btn-sm" style="width:100%; justify-content:center; margin-top:8px;" onclick="window.LiveSync.syncHistory(); window.App.render();">Sync History Now</button>
                     <button class="btn btn-sm" style="width:100%; justify-content:center; margin-top:8px; border-color:#ef4444; color:#ef4444" onclick="location.reload()">Hard Reload</button>
                 </div>
             </div>
@@ -561,21 +584,34 @@
             client: null,
             room: null,
             userId: localStorage.getItem('color_rm_user_id'),
+            ownerId: null,
+            projectId: null,
             unsubscribes: [],
             isInitializing: true,
 
-            async init(roomId) {
+            async init(ownerId, projectId) {
                 if (!this.userId) {
                     this.userId = `user_${Math.random().toString(36).substring(2, 9)}`;
                     localStorage.setItem('color_rm_user_id', this.userId);
                 }
+                
+                const roomId = `room_${ownerId}`;
+                this.ownerId = ownerId;
+                this.projectId = projectId;
+                
+                // Update URL to reflect current project immediately
+                window.location.hash = `/color_rm/${ownerId}/${projectId}`;
+                
+                if (this.room && this.room.id === roomId) {
+                    console.log(`Liveblocks: Switching Project sub-key to ${projectId} in existing room.`);
+                    await this.setupProjectSync(projectId);
+                    return;
+                }
+
                 if (this.room) this.leave();
                 
-                // Update URL to reflect current room
-                window.location.hash = `/color_rm/${roomId}`;
-                
                 UI.setSyncStatus('syncing');
-                console.log("Liveblocks: Connecting to room", roomId);
+                console.log(`Liveblocks: Connecting to Owner Room: ${roomId}`);
 
                 if (!this.client) {
                     this.client = createClient({
@@ -585,70 +621,90 @@
 
                 const { room, leave } = this.client.enterRoom(roomId, {
                     initialStorage: {
-                        metadata: new LiveObject({
-                            name: "Untitled",
-                            idx: 0,
-                            pageCount: 0,
-                            pageLocked: false,
-                            ownerId: null
-                        }),
-                        pagesHistory: new LiveMap(),
-                        bookmarks: new LiveList([]),
-                        colors: new LiveList([])
+                        projects: new LiveMap()
                     }
                 });
 
                 this.room = room;
                 this.leave = leave;
 
-                // Subscribe to connection status changes
                 room.subscribe("status", (status) => {
                     if (status === "connected") UI.setSyncStatus('saved');
                     else if (status === "disconnected") UI.setSyncStatus('offline');
-                    window.App.renderDebug();
+                    if (window.App.renderDebug) window.App.renderDebug();
                 });
 
-                // Wait for storage to load
                 const { root } = await room.getStorage();
                 this.root = root;
 
-                // Sync Initial Data from Storage to App.state
-                this.syncStorageToLocal();
-
-                // Subscribe to storage changes (Remote -> Local)
-                this.unsubscribes.push(
-                    room.subscribe(root.get("metadata"), () => { this.syncMetadata(); window.App.renderDebug(); }),
-                    room.subscribe(root.get("pagesHistory"), () => { this.syncHistory(); window.App.renderDebug(); }, { isDeep: true }),
-                    room.subscribe(root.get("bookmarks"), () => { this.syncBookmarks(); window.App.renderDebug(); }),
-                    room.subscribe(root.get("colors"), () => { this.syncColors(); window.App.renderDebug(); })
-                );
+                await this.setupProjectSync(projectId);
 
                 this.isInitializing = false;
-                console.log("Liveblocks: Ready.");
+                console.log("Liveblocks: Room Ready.");
+            },
+
+            async setupProjectSync(projectId) {
+                const projects = this.root.get("projects");
+                
+                // Ensure the project structure exists
+                if (!projects.has(projectId)) {
+                    projects.set(projectId, new LiveObject({
+                        metadata: new LiveObject({
+                            name: App.state.projectName || "Untitled",
+                            idx: 0,
+                            pageCount: 0,
+                            pageLocked: false,
+                            ownerId: this.ownerId
+                        }),
+                        pagesHistory: new LiveMap(),
+                        bookmarks: new LiveList([]),
+                        colors: new LiveList([])
+                    }));
+                }
+
+                this.syncStorageToLocal();
+
+                // Refresh project-specific subscription
+                this.unsubscribes.forEach(unsub => unsub());
+                this.unsubscribes = [
+                    this.room.subscribe(projects.get(projectId), () => {
+                        this.syncProjectData();
+                        if (window.App.renderDebug) window.App.renderDebug();
+                    }, { isDeep: true })
+                ];
+            },
+
+            getProject() {
+                if (!this.root || !this.projectId) return null;
+                return this.root.get("projects").get(this.projectId);
             },
 
             syncStorageToLocal() {
-                const metadata = this.root.get("metadata").toObject();
+                const project = this.getProject();
+                if (!project) return;
+
+                const metadata = project.get("metadata").toObject();
                 App.state.projectName = metadata.name;
                 App.state.idx = metadata.idx;
                 App.state.pageLocked = metadata.pageLocked;
                 App.state.ownerId = metadata.ownerId;
                 document.getElementById('headerTitle').innerText = metadata.name;
 
-                // Bookmarks
-                App.state.bookmarks = this.root.get("bookmarks").toArray();
+                App.state.bookmarks = project.get("bookmarks").toArray();
                 App.renderBookmarks();
 
-                // Colors
-                App.state.colors = this.root.get("colors").toArray();
+                App.state.colors = project.get("colors").toArray();
                 App.renderSwatches();
 
-                // History is synced per page load or on change
+                this.syncHistory();
                 App.loadPage(App.state.idx, false);
             },
 
-            syncMetadata() {
-                const metadata = this.root.get("metadata").toObject();
+            syncProjectData() {
+                const project = this.getProject();
+                if (!project || this.isInitializing) return;
+
+                const metadata = project.get("metadata").toObject();
                 App.state.projectName = metadata.name;
                 App.state.pageLocked = metadata.pageLocked;
                 App.state.ownerId = metadata.ownerId;
@@ -658,55 +714,53 @@
                     App.loadPage(metadata.idx, false);
                 }
                 
-                // AUTO-RETRY base file fetch if remote has pages but we don't
                 if (metadata.pageCount > 0 && App.state.images.length === 0) {
-                    console.log("Liveblocks: Remote has content. Attempting base file fetch...");
                     App.retryBaseFetch();
                 }
 
+                this.syncHistory();
                 App.updateLockUI();
             },
 
             syncHistory() {
-                if (this.isInitializing || !this.root) return;
+                const project = this.getProject();
+                if (!project || this.isInitializing) return;
                 
-                const pagesHistory = this.root.get("pagesHistory");
-                let hasChanges = false;
+                const pagesHistory = project.get("pagesHistory");
+                let currentIdxChanged = false;
 
-                App.state.images.forEach((img, idx) => {
-                    const remoteHistory = pagesHistory.get(idx.toString());
-                    if (remoteHistory) {
-                        const newHistory = remoteHistory.toArray();
-                        // Simple comparison to avoid unnecessary state updates
-                        if (JSON.stringify(img.history) !== JSON.stringify(newHistory)) {
-                            img.history = newHistory;
-                            hasChanges = true;
-                        }
+                // Priority: Update current page immediately
+                const currentRemote = pagesHistory.get(App.state.idx.toString());
+                if (currentRemote) {
+                    const newHist = currentRemote.toArray();
+                    const localImg = App.state.images[App.state.idx];
+                    if (localImg) {
+                        // Compare lengths or last item for quick check, or just always update
+                        localImg.history = newHist;
+                        currentIdxChanged = true;
                     }
+                }
+
+                // Background sync all other pages
+                App.state.images.forEach((img, idx) => {
+                    if (idx === App.state.idx) return; // Already handled
+                    const remote = pagesHistory.get(idx.toString());
+                    if (remote) img.history = remote.toArray();
                 });
 
-                if (hasChanges) App.render();
-            },
-
-            syncBookmarks() {
-                App.state.bookmarks = this.root.get("bookmarks").toArray();
-                App.renderBookmarks();
-            },
-
-            syncColors() {
-                App.state.colors = this.root.get("colors").toArray();
-                App.renderSwatches();
+                if (currentIdxChanged) App.render();
             },
 
             // --- Local -> Remote Updates ---
             updateMetadata(updates) {
-                if (!this.root) return;
-                this.root.get("metadata").update(updates);
+                const project = this.getProject();
+                if (project) project.get("metadata").update(updates);
             },
 
             addStroke(pageIdx, stroke) {
-                if (!this.root) return;
-                const pagesHistory = this.root.get("pagesHistory");
+                const project = this.getProject();
+                if (!project) return;
+                const pagesHistory = project.get("pagesHistory");
                 const key = pageIdx.toString();
                 if (!pagesHistory.has(key)) {
                     pagesHistory.set(key, new LiveList([]));
@@ -715,19 +769,20 @@
             },
 
             setHistory(pageIdx, history) {
-                if (!this.root) return;
-                const pagesHistory = this.root.get("pagesHistory");
+                const project = this.getProject();
+                if (!project) return;
+                const pagesHistory = project.get("pagesHistory");
                 pagesHistory.set(pageIdx.toString(), new LiveList(history || []));
             },
 
             updateBookmarks(bookmarks) {
-                if (!this.root) return;
-                this.root.set("bookmarks", new LiveList(bookmarks || []));
+                const project = this.getProject();
+                if (project) project.set("bookmarks", new LiveList(bookmarks || []));
             },
 
             updateColors(colors) {
-                if (!this.root) return;
-                this.root.set("colors", new LiveList(colors || []));
+                const project = this.getProject();
+                if (project) project.set("colors", new LiveList(colors || []));
             }
         };
 
@@ -779,41 +834,58 @@
                     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
                 }
 
-                // 4. Initialize Liveblocks Room
-                const hash = window.location.hash.substring(1);
-                let roomId = hash.startsWith('/color_rm/') ? hash.substring(10) : (hash.startsWith('/') ? hash.substring(1) : hash);
+                // 4. Initialize Liveblocks Room & Project Mapping
+                const hashPath = window.location.hash.replace(/^#\/?/, '');
+                const parts = hashPath.split('/').filter(Boolean); 
                 
-                if (!roomId) {
-                    roomId = `color_rm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                    window.location.hash = `/color_rm/${roomId}`;
+                // Failsafe for missing userId
+                if (!LiveSync.userId) {
+                    LiveSync.userId = `user_${Math.random().toString(36).substring(2, 9)}`;
+                    localStorage.setItem('color_rm_user_id', LiveSync.userId);
                 }
 
-                this.state.sessionId = roomId;
+                let ownerId = parts[1];
+                let projectId = parts[2];
+
+                // If owner or project is missing from URL, try to load last project OR default to self
+                if (!ownerId || !projectId) {
+                    const lastSess = await this.db.transaction('sessions', 'readonly').objectStore('sessions').getAll();
+                    if (lastSess && lastSess.length > 0) {
+                        const latest = lastSess.sort((a,b) => b.lastMod - a.lastMod)[0];
+                        ownerId = latest.ownerId || LiveSync.userId;
+                        projectId = latest.id;
+                    } else {
+                        ownerId = LiveSync.userId;
+                        projectId = `proj_${Date.now()}`;
+                    }
+                    window.location.replace(`#/color_rm/${ownerId}/${projectId}`);
+                }
+
+                this.state.ownerId = ownerId;
+                this.state.sessionId = projectId;
                 
                 // Load from local DB (Cache)
-                await this.openSession(roomId);
+                await this.openSession(projectId);
 
-                // Connect to Liveblocks
-                await LiveSync.init(roomId);
+                // Connect to Liveblocks (Specific Owner Room)
+                await LiveSync.init(ownerId, projectId);
 
                 // 5. Sync Base File (Download or Healing Upload)
                 try {
-                    const res = await fetch(`/api/color_rm/base_file/${roomId}`, { method: 'GET' });
+                    const res = await fetch(`/api/color_rm/base_file/${projectId}`, { method: 'GET' });
                     if (res.ok) {
                         if (this.state.images.length === 0) {
                             console.log("Liveblocks: Downloading base file from server...");
                             const blob = await res.blob();
                             await this.importBaseFile(blob);
+                            // Pull remote history immediately after image load
+                            if (LiveSync.syncHistory) LiveSync.syncHistory();
                         }
                     } else if (res.status === 404) {
                         // SERVER HEALING: If I have it but server doesn't, UPLOAD it.
                         if (this.state.images.length > 0 && this.state.images[0].blob) {
                             console.log("Liveblocks: Server missing base file. Healing/Uploading...");
-                            fetch(`/api/color_rm/upload/${roomId}`, {
-                                method: 'POST',
-                                body: this.state.images[0].blob,
-                                headers: { 'Content-Type': this.state.images[0].blob.type }
-                            });
+                            this.reuploadBaseFile();
                         }
                     }
                 } catch(e) {
@@ -821,8 +893,55 @@
                 }
             },
 
+            async reuploadBaseFile() {
+                if (this.state.images.length > 0 && this.state.images[0].blob) {
+                    UI.showToast("Re-uploading base...");
+                    try {
+                        await fetch(`/api/color_rm/upload/${this.state.sessionId}`, {
+                            method: 'POST',
+                            body: this.state.images[0].blob,
+                            headers: { 'Content-Type': this.state.images[0].blob.type }
+                        });
+                        UI.showToast("Base file restored!");
+                    } catch(e) {
+                        UI.showToast("Restore failed");
+                    }
+                } else {
+                    alert("No local file to upload.");
+                }
+            },
+
+            async loadSessionList() {
+                document.getElementById('dashUserId').innerText = LiveSync.userId;
+                document.getElementById('dashProjId').innerText = this.state.sessionId;
+
+                const tx = this.db.transaction('sessions', 'readonly');
+                const req = tx.objectStore('sessions').getAll();
+                req.onsuccess = () => {
+                    const l = document.getElementById('sessionList'); l.innerHTML = '';
+                    if(!req.result || req.result.length === 0) l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
+                    req.result.sort((a,b) => b.lastMod - a.lastMod).forEach(s => {
+                        const isMine = s.ownerId === LiveSync.userId;
+                        const badge = isMine ? '<span class="owner-badge">Owner</span>' : `<span class="other-badge">Shared</span>`;
+                        l.innerHTML += `<div style="padding:12px; border-bottom:1px solid #333; cursor:pointer; display:flex; justify-content:space-between; align-items:center;" onclick="window.App.switchProject('${s.ownerId}', '${s.id}')">
+                            <div>
+                                <div style="font-weight:600; color:white;">${s.name} ${badge}</div>
+                                <div style="font-size:0.7rem; color:#666; font-family:monospace;">${s.id}</div>
+                            </div>
+                            <div style="font-size:0.7rem; color:#888;">${s.pageCount} pgs</div>
+                        </div>`;
+                    });
+                };
+            },
+
+            async switchProject(ownerId, projectId) {
+                UI.hideDashboard();
+                window.location.hash = `/color_rm/${ownerId}/${projectId}`;
+                location.reload(); 
+            },
+
             async saveSessionState() {
-                if(!this.state.sessionId || LiveSync.isInitializing) return;
+                if(!this.state.sessionId || LiveSync.isInitializing || this.isUploading) return;
                 
                 // Save Locally
                 const s = await this.dbGet('sessions', this.state.sessionId);
@@ -850,13 +969,15 @@
                 }
 
                 // Save Remotely (Metadata)
-                LiveSync.updateMetadata({
-                    name: this.state.projectName,
-                    idx: this.state.idx,
-                    pageCount: this.state.images.length,
-                    pageLocked: this.state.pageLocked,
-                    ownerId: this.state.ownerId
-                });
+                if (window.LiveSync && !LiveSync.isInitializing) {
+                    LiveSync.updateMetadata({
+                        name: this.state.projectName,
+                        idx: this.state.idx,
+                        pageCount: this.state.images.length,
+                        pageLocked: this.state.pageLocked,
+                        ownerId: this.state.ownerId
+                    });
+                }
             },
 
             async retryBaseFetch() {
@@ -1009,15 +1130,27 @@
                 document.getElementById('debugHistoryCount').innerText = currentImg ? (currentImg.history || []).length : 0;
                 document.getElementById('debugSelectionCount').innerText = this.state.selection.length;
 
-                // LiveMap Trace
+                // LiveMap Trace (Refactored for User-Owned Room Model)
                 const mapEl = document.getElementById('debugLiveMap');
-                if (LiveSync.root) {
-                    const ph = LiveSync.root.get("pagesHistory");
-                    let html = "pagesHistory Map Keys:<br>";
-                    ph.forEach((val, key) => {
-                        html += `• ${key}: ${val.length} items<br>`;
-                    });
-                    mapEl.innerHTML = html;
+                if (LiveSync.root && LiveSync.projectId) {
+                    const project = LiveSync.getProject();
+                    if (project) {
+                        const ph = project.get("pagesHistory");
+                        if (ph) {
+                            let html = `<b>Project: ${LiveSync.projectId}</b><br>`;
+                            html += "pagesHistory Keys:<br>";
+                            ph.forEach((val, key) => {
+                                html += `• pg ${key}: ${val.length} items<br>`;
+                            });
+                            mapEl.innerHTML = html;
+                        } else {
+                            mapEl.innerHTML = "pagesHistory not found in project.";
+                        }
+                    } else {
+                        mapEl.innerHTML = "Waiting for project data...";
+                    }
+                } else {
+                    mapEl.innerHTML = "LiveSync not connected.";
                 }
             },
 
@@ -1621,8 +1754,10 @@
             },
             
             async shareSession() {
-                // Ensure we use the active session ID for sharing
-                const url = window.location.origin + window.location.pathname + "#/color_rm/" + this.state.sessionId;
+                // Ensure we use the active owner and project IDs for sharing
+                const ownerId = LiveSync.ownerId || LiveSync.userId;
+                const projectId = LiveSync.projectId || this.state.sessionId;
+                const url = `${window.location.origin}${window.location.pathname}#/color_rm/${ownerId}/${projectId}`;
                 
                 // 1. Native Share
                 if (navigator.share) {
@@ -1901,20 +2036,22 @@
                 const files = e.target.files;
                 if(!files || !files.length) return;
 
-                // --- CRITICAL: FORCE UNIQUE ROOM FOR EVERY NEW UPLOAD ---
+                this.isUploading = true; // Set flag
+
+                // --- CRITICAL: FORCE UNIQUE PROJECT FOR EVERY NEW UPLOAD ---
                 if (!skipUpload) {
-                    const newUniqueId = `color_rm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                    console.log("ColorRM: Forcing new unique room for upload:", newUniqueId);
-                    await this.createNewProject(false, newUniqueId);
+                    const newProjectId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                    console.log("ColorRM: Forcing new unique project key for upload:", newProjectId);
+                    await this.createNewProject(false, newProjectId, LiveSync.userId);
                 } else if (!this.state.sessionId) {
-                    // Sync case: only create if missing
-                    const newId = this.state.sessionId || null;
-                    await this.createNewProject(false, newId);
+                    // Sync case: only create if missing (Legacy support)
+                    await this.createNewProject(false, this.state.sessionId, LiveSync.ownerId || LiveSync.userId);
                 }
                 
                 // --- Sync to Server ---
                 if (!skipUpload && this.state.sessionId) {
                     console.log('ColorRM Sync: Uploading base file to server for ID:', this.state.sessionId);
+                    UI.toggleLoader(true, "Uploading to server...");
                     try {
                         const uploadRes = await fetch(`/api/color_rm/upload/${this.state.sessionId}`, {
                             method: 'POST',
@@ -1924,10 +2061,13 @@
                         if (uploadRes.ok) {
                             console.log('ColorRM Sync: Base file upload successful.');
                         } else {
-                            console.error('ColorRM Sync: Base file upload failed with status:', uploadRes.status);
+                            const errTxt = await uploadRes.text();
+                            console.error('ColorRM Sync: Upload failed:', errTxt);
+                            alert(`Upload Failed: ${errTxt}\nCollaborators won't see the document background.`);
                         }
                     } catch (err) {
                         console.error('ColorRM Sync: Error uploading base file:', err);
+                        alert("Network Error: Could not upload base file to server. Collaboration will be limited.");
                     }
                 }
                 // -----------------------
@@ -1940,18 +2080,26 @@
                 this.state.projectName = pName;
                 document.getElementById('headerTitle').innerText = pName;
                 
+                // Ensure ownerId is set before saving
+                if (!this.state.ownerId) this.state.ownerId = LiveSync.userId;
+
                 const session = await this.dbGet('sessions', this.state.sessionId);
                 if(session) {
                     session.name = pName;
+                    session.ownerId = this.state.ownerId;
                     await this.dbPut('sessions', session);
                 } else {
                     // Fallback create
-                    await this.dbPut('sessions', { id: this.state.sessionId, name: pName, pageCount: 0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: LiveSync.userId });
+                    await this.dbPut('sessions', { id: this.state.sessionId, name: pName, pageCount: 0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: this.state.ownerId });
                 }
 
                 const processQueue = Array.from(files);
-                let idx = this.state.images.length;
+                let idx = 0; // Reset for new project
                 const BATCH_SIZE = 5;
+
+                // Update UI immediately
+                document.getElementById('headerTitle').innerText = pName;
+                this.state.images = []; 
 
                 // Wrap processing in a promise to await completion
                 await new Promise((resolve) => {
@@ -1963,6 +2111,8 @@
                                 session.pageCount = idx;
                                 await this.dbPut('sessions', session);
                             }
+                            
+                            // Final reload to ensure everything is synced
                             await this.loadSessionPages(this.state.sessionId);
                             
                             // Signal readiness to Liveblocks
@@ -1973,6 +2123,7 @@
                                 });
                             }
 
+                            this.isUploading = false; // Reset flag
                             UI.toggleLoader(false);
                             resolve(); 
                             return;
@@ -1984,25 +2135,43 @@
                                  const d = await f.arrayBuffer();
                                  const pdf = await pdfjsLib.getDocument(d).promise;
                                  for(let i=1; i<=pdf.numPages; i+=BATCH_SIZE) {
-                                     const promises = [];
+                                     const batch = [];
                                      for(let j=0; j<BATCH_SIZE && (i+j)<=pdf.numPages; j++) {
                                          const pNum = i+j;
-                                         promises.push(pdf.getPage(pNum).then(async page => {
+                                         batch.push(pdf.getPage(pNum).then(async page => {
                                              const v = page.getViewport({scale:1.5});
                                              const cvs = document.createElement('canvas'); cvs.width=v.width; cvs.height=v.height;
                                              await page.render({canvasContext:cvs.getContext('2d'), viewport:v}).promise;
                                              const b = await new Promise(r=>cvs.toBlob(r, 'image/jpeg', 0.8));
-                                             await this.dbPut('pages', { id:`${this.state.sessionId}_${idx+j}`, sessionId:this.state.sessionId, pageIndex:idx+j, blob:b, history:[] });
+                                             const pageObj = { id:`${this.state.sessionId}_${idx+j}`, sessionId:this.state.sessionId, pageIndex:idx+j, blob:b, history:[] };
+                                             await this.dbPut('pages', pageObj);
+                                             return pageObj;
                                          }));
                                      }
-                                     await Promise.all(promises);
-                                     idx += Math.min(BATCH_SIZE, pdf.numPages-i+1);
-                                     UI.updateProgress(((i/pdf.numPages)*100), `PDF Page ${i}/${pdf.numPages}`);
+                                     const results = await Promise.all(batch);
+                                     
+                                     // INCREMENTAL UPDATE: Add results to state and update UI
+                                     this.state.images.push(...results);
+                                     this.state.images.sort((a,b) => a.pageIndex - b.pageIndex);
+                                     
+                                     if (this.state.images.length > 0 && !this.cache.currentImg) {
+                                         await this.loadPage(0, false); // Load first page as soon as it's ready
+                                     }
+                                     
+                                     if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
+                                     document.getElementById('pageTotal').innerText = '/ ' + this.state.images.length;
+
+                                     idx += results.length;
+                                     UI.updateProgress(((i/pdf.numPages)*100), `Processing Page ${i}/${pdf.numPages}`);
                                      await new Promise(r => setTimeout(r, 0)); 
                                  }
                              } catch(e) { console.error(e); alert("Failed to load PDF"); }
                         } else {
-                            await this.dbPut('pages', { id:`${this.state.sessionId}_${idx}`, sessionId:this.state.sessionId, pageIndex:idx, blob:f, history:[] });
+                            const pageObj = { id:`${this.state.sessionId}_${idx}`, sessionId:this.state.sessionId, pageIndex:idx, blob:f, history:[] };
+                            await this.dbPut('pages', pageObj);
+                            this.state.images.push(pageObj);
+                            if (this.state.images.length === 1) await this.loadPage(0, false);
+                            if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
                             idx++;
                         }
                         processNext();
@@ -2011,30 +2180,42 @@
                 });
             },
 
-            async createNewProject(openPicker = true, forceId = null) {
-                // Force new ID for uploads to ensure clean separation (One PDF -> One Room)
-                const id = forceId || `color_rm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            async createNewProject(openPicker = true, forceId = null, forceOwnerId = null) {
+                // Determine IDs (One PDF -> One Project Key in User Room)
+                const ownerId = forceOwnerId || LiveSync.userId;
+                const projectId = forceId || `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 
-                // Clear local state to prevent appending to old project's images
+                // --- IMMEDIATE UI UPDATE ---
+                UI.hideDashboard();
+                window.location.hash = `/color_rm/${ownerId}/${projectId}`;
+                
+                const nameInput = document.getElementById('newProjectName');
+                const name = (nameInput && nameInput.value) || "Untitled";
+                this.state.projectName = name;
+                document.getElementById('headerTitle').innerText = name;
+                
+                // Clear local state for fresh project
                 this.state.images = [];
                 this.state.idx = 0;
                 this.state.bookmarks = [];
                 this.state.clipboardBox = [];
+                document.getElementById('pageTotal').innerText = '/ 0';
+                if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
                 
-                const name = document.getElementById('newProjectName').value || "Untitled";
-                this.state.projectName = name;
-                document.getElementById('headerTitle').innerText = name;
+                const c = document.getElementById('canvas');
+                if(c) c.getContext('2d').clearRect(0,0,c.width,c.height);
+                // ----------------------------
 
                 // Set ownerId to current session on creation
-                this.state.ownerId = LiveSync.userId; 
-                await this.dbPut('sessions', { id, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: LiveSync.userId });
-                this.state.sessionId = id;
+                this.state.ownerId = ownerId; 
+                await this.dbPut('sessions', { id: projectId, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: ownerId });
+                this.state.sessionId = projectId;
                 
                 UI.setSyncStatus('new');
 
-                // Ensure Sync is pointing to this new ID
-                if (window.LiveSync && LiveSync.room && LiveSync.room.id !== id) {
-                    LiveSync.init(id);
+                // Initialize LiveSync in background or await if necessary
+                if (window.LiveSync) {
+                    await LiveSync.init(ownerId, projectId);
                 }
 
                 if(openPicker) document.getElementById('fileIn').click();
@@ -2076,6 +2257,7 @@
                 const session = await this.dbGet('sessions', id);
                 if(session) {
                     this.state.projectName = session.name || "Untitled";
+                    this.state.ownerId = session.ownerId || this.state.ownerId; // Preserve URL owner if DB is missing it
                     document.getElementById('headerTitle').innerText = session.name;
                     if(session.state) Object.assign(this.state, session.state);
                     if(!this.state.bookmarks) this.state.bookmarks = [];
@@ -2105,6 +2287,18 @@
             async loadPage(i, broadcast = true) {
                 if(i<0 || i>=this.state.images.length) return;
                 
+                // --- Sync from LiveSync if available ---
+                if (window.LiveSync) {
+                    const project = LiveSync.getProject();
+                    if (project) {
+                        const remoteHistory = project.get("pagesHistory").get(i.toString());
+                        if (remoteHistory) {
+                            this.state.images[i].history = remoteHistory.toArray();
+                        }
+                    }
+                }
+                // ----------------------------------------
+
                 // --- Presenter Lock Logic ---
                 if (broadcast && this.state.pageLocked && this.state.ownerId !== LiveSync.userId) {
                     UI.showToast("Page is locked by presenter.");
