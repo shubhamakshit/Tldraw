@@ -81,6 +81,28 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	.post('/api/color_rm/upload/:roomId', handleColorRmUpload)
 	.get('/api/color_rm/base_file/:roomId', handleColorRmDownload)
 
+    // Storage Info Route
+    .get('/api/storage-info', async (request, env) => {
+        try {
+            const list = await env.TLDRAW_BUCKET.list();
+            const objects = list.objects.map(obj => ({
+                key: obj.key,
+                size: obj.size,
+                uploaded: obj.uploaded
+            }));
+            
+            return new Response(JSON.stringify({
+                bucket: env.TLDRAW_BUCKET.constructor.name,
+                total_objects: objects.length,
+                objects: objects
+            }, null, 2), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
 	// assets can be uploaded to the bucket under /uploads:
 	.post('/api/uploads/:uploadId', handleAssetUpload)
 
