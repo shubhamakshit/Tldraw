@@ -2414,7 +2414,9 @@
                 const ownerId = forceOwnerId || LiveSync.userId;
                 const projectId = forceId || `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 
-                // --- IMMEDIATE UI UPDATE ---
+                // --- IMMEDIATE UI & URL UPDATE ---
+                this.state.ownerId = ownerId;
+                this.state.sessionId = projectId;
                 UI.hideDashboard();
                 window.location.hash = `/color_rm/${ownerId}/${projectId}`;
                 
@@ -2435,14 +2437,11 @@
                 if(c) c.getContext('2d').clearRect(0,0,c.width,c.height);
                 // ----------------------------
 
-                // Set ownerId to current session on creation
-                this.state.ownerId = ownerId; 
                 await this.dbPut('sessions', { id: projectId, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: ownerId });
-                this.state.sessionId = projectId;
                 
                 UI.setSyncStatus('new');
 
-                // Initialize LiveSync in background or await if necessary
+                // Initialize LiveSync with the Owner's Room and this Project Key
                 if (window.LiveSync) {
                     await LiveSync.init(ownerId, projectId);
                 }
@@ -2451,35 +2450,6 @@
             },
 
             togglePageLock() {
-                if (this.state.ownerId !== LiveSync.userId) return;
-                this.state.pageLocked = !this.state.pageLocked;
-                this.updateLockUI();
-                this.saveSessionState();
-            },
-
-            updateLockUI() {
-                const btn = document.getElementById('lockBtn');
-                const ctrl = document.getElementById('presenterControls');
-                if (this.state.ownerId === LiveSync.userId) {
-                    ctrl.style.display = 'block';
-                    btn.className = this.state.pageLocked ? "btn btn-primary" : "btn";
-                    btn.innerHTML = this.state.pageLocked ? '<i class="bi bi-lock-fill"></i> Presenter Lock: ON' : '<i class="bi bi-unlock"></i> Presenter Lock: OFF';
-                } else {
-                    ctrl.style.display = 'none';
-                }
-            },
-
-            async loadSessionList() {
-                const tx = this.db.transaction('sessions', 'readonly');
-                const req = tx.objectStore('sessions').getAll();
-                req.onsuccess = () => {
-                    const l = document.getElementById('sessionList'); l.innerHTML = '';
-                    if(!req.result || req.result.length === 0) l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
-                    req.result.forEach(s => {
-                        l.innerHTML += `<div style="padding:10px; border-bottom:1px solid #333; cursor:pointer" onclick="App.openSession('${s.id}')">${s.name} (${s.pageCount} pgs)</div>`;
-                    });
-                };
-            },
             
             async openSession(id) {
                 this.state.sessionId = id;
