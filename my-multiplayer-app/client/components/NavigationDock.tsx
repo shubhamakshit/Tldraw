@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+
 import { useEditor } from 'tldraw' // Added useEditor import
 import { colors } from '../constants/theme' // Corrected path
 import { FolderIcon, SettingsIcon, ShareIcon, CloseIcon } from './Icons'
@@ -46,7 +46,7 @@ function NavButton({ children, onClick, active, title, theme }: NavButtonProps) 
 }
 
 export function NavigationDock({ roomId }: { roomId: string }) {
-    const navigate = useNavigate()
+
     const editor = useEditor()
     const [activeTab, setActiveTab] = useState<Tab>('none')
     const [isDark, setIsDark] = useState(false)
@@ -148,18 +148,39 @@ export function NavigationDock({ roomId }: { roomId: string }) {
                     padding: 16,
                     borderBottom: `1px solid ${theme.border}`,
                     display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
+                    flexDirection: 'column',
+                    gap: 8,
                 }}>
-                    <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, color: theme.text }}>
-                        {getTitle()}
-                    </h2>
-                    <button
-                        onClick={close}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: colors.textMuted }}
-                    >
-                        <CloseIcon />
-                    </button>
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                    }}>
+                        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, color: theme.text }}>
+                            {getTitle()}
+                        </h2>
+                        <button
+                            onClick={close}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: colors.textMuted }}
+                        >
+                            <CloseIcon />
+                        </button>
+                    </div>
+                    
+                    <div style={{
+                        fontSize: 11,
+                        color: theme.text,
+                        opacity: 0.6,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        background: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.05)',
+                        padding: '4px 8px',
+                        borderRadius: 4,
+                        fontFamily: 'monospace'
+                    }} title={window.location.href}>
+                        {window.location.href}
+                    </div>
                 </div>
 
                 {/* CONTENT */}

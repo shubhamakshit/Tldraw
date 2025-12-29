@@ -1,20 +1,62 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useEditor } from 'tldraw'
+import throttle from 'lodash.throttle'
 
 export function StatePersistence({ roomId }: { roomId: string }) {
     const editor = useEditor()
     
+    // Create a throttled save function that persists across renders
+    const saveRoomState = useMemo(() => throttle((editorInstance: any, key: string) => {
+        try {
+            const { x, y, z } = editorInstance.getCamera()
+            const instanceState = editorInstance.getInstanceState()
+            
+            const stateToSave = {
+                camera: { x, y, z },
+                pageId: editorInstance.getCurrentPageId(),
+                isGridMode: instanceState.isGridMode,
+                isFocusMode: instanceState.isFocusMode,
+                isDebugMode: instanceState.isDebugMode,
+                isToolLocked: instanceState.isToolLocked,
+                exportBackground: instanceState.exportBackground
+            }
+            
+            localStorage.setItem(key, JSON.stringify(stateToSave))
+        } catch (e) {
+            // Ignore errors
+        }
+    }, 1000), [])
+
     useEffect(() => {
         if (!editor) return
         
-        // 1. Load Global Preferences
+        // 1. Load Global Preferences & Sanitize
         const globalPrefsStr = localStorage.getItem('tldraw_global_prefs')
         if (globalPrefsStr) {
-            try { 
-                const prefs = JSON.parse(globalPrefsStr)
-                editor.user.updateUserPreferences(prefs) 
-            } catch (e) { 
-                console.error('Failed to load preferences:', e) 
+            try {
+                const savedPrefs = JSON.parse(globalPrefsStr)
+                const sanitizedPrefs: any = {}
+
+                // Get the default preferences to know what keys are valid
+                const defaultPrefs = editor.user.getUserPreferences()
+
+                // This is a migration: if the old isDarkMode property is present,
+                // we want to convert it to the new `colorScheme` property.
+                if (typeof savedPrefs.isDarkMode === 'boolean') {
+                    savedPrefs.colorScheme = savedPrefs.isDarkMode ? 'dark' : 'light'
+                    delete savedPrefs.isDarkMode
+                }
+
+                // Only copy over the keys that are present in the default preferences
+                for (const key in defaultPrefs) {
+                    if (key in savedPrefs) {
+                        sanitizedPrefs[key] = savedPrefs[key]
+                    }
+                }
+
+                editor.user.updateUserPreferences(sanitizedPrefs)
+            } catch (e) {
+                console.error('Failed to load and apply preferences:', e)
             }
         }
         
@@ -53,8 +95,6 @@ export function StatePersistence({ roomId }: { roomId: string }) {
 
             } catch (e) { 
                 console.error('Failed to load room state:', e) 
-                // Optional: Clear bad state so it doesn't crash next time
-                // localStorage.removeItem(roomStateKey) 
             }
         }
         
@@ -64,33 +104,15 @@ export function StatePersistence({ roomId }: { roomId: string }) {
         })
         
         const cleanupRoom = editor.store.listen(() => {
-            // We debounce this slightly or just save on every change (tldraw store is fast)
-            // But we must be careful to check if editor is still mounted/valid inside callbacks if needed
-            try {
-                const { x, y, z } = editor.getCamera()
-                const instanceState = editor.getInstanceState()
-                
-                const stateToSave = {
-                    camera: { x, y, z },
-                    pageId: editor.getCurrentPageId(),
-                    isGridMode: instanceState.isGridMode,
-                    isFocusMode: instanceState.isFocusMode,
-                    isDebugMode: instanceState.isDebugMode,
-                    isToolLocked: instanceState.isToolLocked,
-                    exportBackground: instanceState.exportBackground
-                }
-                
-                localStorage.setItem(roomStateKey, JSON.stringify(stateToSave))
-            } catch (e) {
-                // Ignore errors during save (e.g. quota exceeded)
-            }
+            saveRoomState(editor, roomStateKey)
         })
         
         return () => {
             cleanupUser()
             cleanupRoom()
+            saveRoomState.cancel()
         }
-    }, [editor, roomId])
+    }, [editor, roomId, saveRoomState])
     
     return null
 }

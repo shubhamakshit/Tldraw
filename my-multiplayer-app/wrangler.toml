@@ -6,10 +6,6 @@ compatibility_flags = ["nodejs_compat"]
 upload_source_maps = true
 preview_urls = true
 
-[[routes]]
-pattern = "multiplayer.templates.tldraw.dev"
-custom_domain = true
-
 [observability]
 enabled = true
 
@@ -26,10 +22,18 @@ bindings = [
 # Durable objects require migrations to create/modify/delete them
 [[migrations]]
 tag = "v1"
-new_classes = ["TldrawDurableObject"]
+new_sqlite_classes = ["TldrawDurableObject"]
 
 # We store rooms and asset uploads in an R2 bucket
 [[r2_buckets]]
 binding = 'TLDRAW_BUCKET'
-bucket_name = 'multiplayer-template'
-preview_bucket_name = 'multiplayer-template-preview'
+bucket_name = 'tldraw-shubh'
+preview_bucket_name = 'tldraw-shubh'
+
+[env.preview]
+durable_objects.bindings = [
+    { name = "TLDRAW_DURABLE_OBJECT", class_name = "TldrawDurableObject" },
+]
+r2_buckets = [
+    { binding = 'TLDRAW_BUCKET', bucket_name = 'tldraw-shubh', preview_bucket_name = 'tldraw-shubh' }
+]

@@ -1,6 +1,6 @@
 # tldraw sync server
 
-This is a production-ready backend for [tldraw sync](https://tldraw.dev/docs/sync).
+This is a cuurently-not-production-ready backend for [tldraw sync](https://tldraw.dev/docs/sync).
 
 - Your client-side tldraw-based app can be served from anywhere you want.
 - This backend uses [Cloudflare Workers](https://developers.cloudflare.com/workers/), and will need
@@ -19,7 +19,52 @@ This is a production-ready backend for [tldraw sync](https://tldraw.dev/docs/syn
   making sure that every user gets connected to that instance. We've found that with this approach,
   each room is able to handle about 50 simultaneous collaborators.
 
-## Overview
+## Configuration & Environments
+
+This project is configured to easily switch between local development and production environments for both the web and Android applications.
+
+### 1. Web Configuration (`client/config.ts`)
+
+The application uses the `VITE_APP_ENV` and `VITE_PREVIEW_URL` environment variables to determine which backend to connect to.
+
+- **Local Development:** Defaults to `192.168.0.169:5173`.
+- **Remote/Production:** Defaults to `tshonq.duckdns.org:5173`.
+- **Custom Preview:** Use `VITE_PREVIEW_URL` to point your local frontend to a specific deployed worker (e.g., `https://my-app.workers.dev`).
+
+### 2. Android Configuration (`capacitor.config.ts`)
+
+The Capacitor app also switches URLs based on the `CAPACITOR_SERVER_IP_ENV` environment variable.
+
+### 3. Quick Commands
+
+#### Local Development (Local Network)
+Use these when you want your phone and computer to connect to the server running on your local machine.
+
+- **Start Web + Worker:** `npm run dev` (sets `VITE_APP_ENV=local`)
+- **Build Android for Local:**
+  ```bash
+  npm run build:local
+  npm run capacitor:sync:local
+  npm run capacitor:open:local
+  ```
+
+#### Production / Remote
+Use these when you want the app to connect to your live domain or deployed Cloudflare Worker.
+
+- **Build Web for Remote:** `npm run build`
+- **Build Android for Remote:**
+  ```bash
+  npm run build
+  npm run capacitor:sync:remote
+  npm run capacitor:open:remote
+  ```
+- **Deploy Backend to Cloudflare Preview:** `npm run deploy:preview`
+
+## Troubleshooting
+
+If the application crashes with a `ValidationError` related to "Unexpected property", the app includes a **Nuclear Clean** mechanism that wipes `localStorage` and `IndexedDB` on startup to clear stale or corrupted state from previous versions.
+
+## Development
 
 [![architecture](./arch.png)](https://www.tldraw.com/ro/Yb_QHJFP9syPZq1YrV3YR?v=-255,-148,2025,1265&p=page)
 

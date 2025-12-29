@@ -4,9 +4,15 @@
 	"version": "0.0.0",
 	"type": "module",
 	"scripts": {
-		"dev": "vite",
-		"build": "tsc && vite build",
-		"preview": "vite preview"
+		"dev": "cross-env VITE_APP_ENV=local vite",
+		"build": "node -e \"console.log(process.env.VITE_APP_ENV === 'local' ? 'Building for LOCAL (192.168.0.169)...' : 'Building for REMOTE (tshonq.duckdns.org)...')\" && tsc && vite build",
+		"build:local": "cross-env VITE_APP_ENV=local npm run build",
+		"preview": "vite preview",
+		"capacitor:sync:local": "cross-env CAPACITOR_SERVER_IP_ENV=local npx capacitor sync android",
+		"capacitor:open:local": "cross-env CAPACITOR_SERVER_IP_ENV=local npx capacitor open android",
+		"capacitor:sync:remote": "cross-env CAPACITOR_SERVER_IP_ENV=remote npx capacitor sync android",
+		"capacitor:open:remote": "cross-env CAPACITOR_SERVER_IP_ENV=remote npx capacitor open android",
+		"deploy:preview": "npm run build && wrangler deploy --env preview"
 	},
 	"dependencies": {
 		"@capacitor/android": "^8.0.0",
@@ -33,6 +39,7 @@
 		"@types/react-dom": "^18.3.5",
 		"@vitejs/plugin-react-swc": "^3.10.2",
 		"concurrently": "^9.1.2",
+		"cross-env": "^10.1.0",
 		"typescript": "^5.8.3",
 		"vite": "^7.0.1",
 		"wrangler": "^4.37.1"
