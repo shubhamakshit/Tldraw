@@ -176,6 +176,18 @@
         .multi-delete-bar { display: none; justify-content: space-between; align-items: center; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); padding: 10px; border-radius: 8px; margin-top: 10px; }
         .multi-delete-bar.show { display: flex; }
 
+        /* Users Panel Styles */
+        .user-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+        .user-item { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; color: var(--text-main); background: rgba(255,255,255,0.03); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); }
+        .user-item.self { border-color: var(--primary); }
+        .user-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+        /* Remote Cursors */
+        .cursor-layer { position: absolute; inset: 0; pointer-events: none; z-index: 10; overflow: hidden; }
+        .remote-cursor { position: absolute; display: flex; flex-direction: column; align-items: flex-start; transition: transform 0.1s linear; pointer-events: none; z-index: 100; }
+        .cursor-pointer { width: 14px; height: 14px; border: 2px solid white; border-radius: 50% 50% 50% 0; background: var(--accent); transform: rotate(-15deg); box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+        .cursor-label { background: var(--accent); color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; margin-top: 4px; white-space: nowrap; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+
         /* Hide Input Number Spinner */
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
@@ -470,6 +482,14 @@
                         <input type="range" id="strictRange" min="1" max="100" value="15" class="slider">
                     </div>
                 </div>
+
+                <!-- Users Section -->
+                <div class="control-section">
+                    <h4><i class="bi bi-people-fill"></i> Active Users</h4>
+                    <div id="userList" class="user-list">
+                        <div style="color:#666; font-size:0.8rem; text-align:center; padding:10px;">Connecting presence...</div>
+                    </div>
+                </div>
             </div>
 
             <!-- Pages Panel -->
@@ -608,7 +628,8 @@
         </aside>
 
         <main class="viewport" id="viewport">
-            <canvas id="canvas"></canvas>
+            <div id="cursorLayer" class="cursor-layer"></div>
+                <canvas id="canvas"></canvas>
             <!-- Navigation Island -->
             <div style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); background:rgba(30,30,35,0.9); padding:8px 16px; border-radius:50px; border:1px solid #444; display:flex; gap:10px; align-items:center; box-shadow:0 5px 20px rgba(0,0,0,0.5);">
                 <button class="btn btn-icon" style="border-radius:50%" onclick="App.loadPage(App.state.idx-1)"><i class="bi bi-chevron-left"></i></button>
@@ -755,6 +776,7 @@
                     projects.set(projectId, new LiveObject({
                         metadata: new LiveObject({
                             name: App.state.projectName || "Untitled",
+                            baseFileName: App.state.baseFileName || null,
                             idx: 0,
                             pageCount: 0,
                             pageLocked: false,
@@ -774,8 +796,91 @@
                     this.room.subscribe(projects.get(projectId), () => {
                         this.syncProjectData();
                         if (window.App.renderDebug) window.App.renderDebug();
-                    }, { isDeep: true })
+                    }, { isDeep: true }),
+                    // Subscribe to Presence (Others)
+                    this.room.subscribe("others", () => {
+                        this.renderUsers();
+                        this.renderCursors();
+                    })
                 ];
+                
+                // Initialize presence for self
+                this.room.updatePresence({ 
+                    userId: this.userId,
+                    userName: "User " + this.userId.slice(-4),
+                    cursor: null,
+                    pageIdx: App.state.idx
+                });
+                
+                this.renderUsers();
+            },
+
+            updateCursor(pt) {
+                if (!this.room) return;
+                this.room.updatePresence({
+                    cursor: pt,
+                    pageIdx: App.state.idx
+                });
+            },
+
+            renderCursors() {
+                const container = document.getElementById('cursorLayer');
+                if (!container) return;
+                
+                // Clear old cursors
+                container.innerHTML = '';
+                
+                const others = this.room.getOthers();
+                const rect = document.getElementById('canvas').getBoundingClientRect();
+                const viewRect = document.querySelector('.viewport').getBoundingClientRect();
+
+                others.forEach(user => {
+                    const presence = user.presence;
+                    if (!presence || !presence.cursor || presence.pageIdx !== App.state.idx) return;
+
+                    const div = document.createElement('div');
+                    div.className = 'remote-cursor';
+                    
+                    // Map canvas coordinates to screen coordinates
+                    const x = (presence.cursor.x * (rect.width / App.state.viewW)) + rect.left - viewRect.left;
+                    const y = (presence.cursor.y * (rect.height / App.state.viewH)) + rect.top - viewRect.top;
+
+                    div.style.left = `${x}px`;
+                    div.style.top = `${y}px`;
+                    div.style.borderColor = 'var(--accent)';
+                    
+                    div.innerHTML = `
+                        <div class="cursor-pointer"></div>
+                        <div class="cursor-label">${presence.userName || 'User'}</div>
+                    `;
+                    container.appendChild(div);
+                });
+            },
+
+            renderUsers() {
+                const el = document.getElementById('userList');
+                if (!el) return;
+                
+                const others = this.room.getOthers();
+                let html = `
+                    <div class="user-item self">
+                        <div class="user-dot" style="background:var(--primary)"></div>
+                        <span>You (${this.userId.slice(-4)})</span>
+                    </div>
+                `;
+                
+                others.forEach(user => {
+                    const info = user.presence;
+                    if (!info || !info.userId) return;
+                    html += `
+                        <div class="user-item">
+                            <div class="user-dot" style="background:var(--accent)"></div>
+                            <span>Collaborator (${info.userId.slice(-4)})</span>
+                        </div>
+                    `;
+                });
+                
+                el.innerHTML = html;
             },
 
             getProject() {
@@ -812,6 +917,7 @@
                 console.log(`Liveblocks Sync: Remote PageCount=${metadata.pageCount}, Local PageCount=${App.state.images.length}`);
                 
                 App.state.projectName = metadata.name;
+                App.state.baseFileName = metadata.baseFileName || null;
                 App.state.pageLocked = metadata.pageLocked;
                 App.state.ownerId = metadata.ownerId;
                 document.getElementById('headerTitle').innerText = metadata.name;
@@ -912,7 +1018,7 @@
                 textSize: 40,
                 shapeType: 'rectangle', shapeBorder: '#3b82f6', shapeFill: 'transparent', shapeWidth: 3,
                 selection: [], dlSelection: [], isLivePreview: false, guideLines: [], activeShapeRatio: false, previewOn: false,
-                bookmarks: [], activeSideTab: 'tools', projectName: "Untitled",
+                bookmarks: [], activeSideTab: 'tools', projectName: "Untitled", baseFileName: null,
                 clipboardBox: [],
                 ownerId: null, pageLocked: false,
                 selectedSessions: new Set(), isMultiSelect: false
@@ -1190,6 +1296,7 @@
                 if (window.LiveSync && !LiveSync.isInitializing) {
                     LiveSync.updateMetadata({
                         name: this.state.projectName,
+                        baseFileName: this.state.baseFileName,
                         idx: this.state.idx,
                         pageCount: this.state.images.length,
                         pageLocked: this.state.pageLocked,
@@ -1510,6 +1617,12 @@
 
                 window.onpointermove = e => {
                     const pt = getPt(e);
+                    
+                    // Update Remote Cursor
+                    if (window.LiveSync && !LiveSync.isInitializing) {
+                        LiveSync.updateCursor(pt);
+                    }
+
                     if(isMovingSelection) { this.dragOffset = {x:pt.x-dragStart.x, y:pt.y-dragStart.y}; this.render(); return; }
                     if(!this.isDragging) return;
                     if(this.state.tool==='lasso') { lassoPath.push(pt); this.renderLasso(c.getContext('2d'), lassoPath); }
@@ -1578,6 +1691,9 @@
                         ctx.beginPath(); ctx.moveTo(this.currentStroke[this.currentStroke.length-2].x, this.currentStroke[this.currentStroke.length-2].y); ctx.lineTo(pt.x,pt.y); ctx.stroke(); ctx.restore();
                     }
                 };
+
+                window.addEventListener('resize', () => LiveSync.renderCursors());
+                document.querySelector('.viewport').addEventListener('scroll', () => LiveSync.renderCursors());
 
                 window.onpointerup = e => {
                     if(isMovingSelection) { 
@@ -2306,6 +2422,7 @@
                 let pName = (nameInput && nameInput.value.trim()) || files[0].name.replace(/\.[^/.]+$/, "");
                 if(!pName) pName = "Untitled";
                 this.state.projectName = pName;
+                this.state.baseFileName = files[0].name;
                 document.getElementById('headerTitle').innerText = pName;
                 
                 // Ensure ownerId is set before saving
@@ -2314,11 +2431,12 @@
                 const session = await this.dbGet('sessions', this.state.sessionId);
                 if(session) {
                     session.name = pName;
+                    session.baseFileName = this.state.baseFileName;
                     session.ownerId = this.state.ownerId;
                     await this.dbPut('sessions', session);
                 } else {
                     // Fallback create
-                    await this.dbPut('sessions', { id: this.state.sessionId, name: pName, pageCount: 0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: this.state.ownerId });
+                    await this.dbPut('sessions', { id: this.state.sessionId, name: pName, baseFileName: this.state.baseFileName, pageCount: 0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: this.state.ownerId });
                 }
 
                 const processQueue = Array.from(files);
