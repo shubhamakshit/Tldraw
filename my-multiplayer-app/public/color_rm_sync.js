@@ -35,18 +35,25 @@ const SYNC = {
         } else {
             console.log('ColorRM Sync: Joining room:', this.roomId)
             
-            // 2. Try to fetch the base file from the server
-            try {
-                const res = await fetch(`/api/color_rm/base_file/${this.roomId}`);
-                if (res.ok) {
-                    console.log('ColorRM Sync: Found base file on server. Importing...');
-                    const blob = await res.blob();
-                    await App.importBaseFile(blob);
-                } else {
-                    console.log('ColorRM Sync: No base file found on server (might be the first user).');
+            // 2. Check local DB first to avoid re-downloading/processing
+            const sessionExists = await App.dbGet('sessions', this.roomId);
+            
+            if (sessionExists) {
+                 console.log('ColorRM Sync: Session exists locally. Skipping base file download.');
+            } else {
+                // 3. Try to fetch the base file from the server
+                try {
+                    const res = await fetch(`/api/color_rm/base_file/${this.roomId}`);
+                    if (res.ok) {
+                        console.log('ColorRM Sync: Found base file on server. Importing...');
+                        const blob = await res.blob();
+                        await App.importBaseFile(blob);
+                    } else {
+                        console.log('ColorRM Sync: No base file found on server (might be the first user).');
+                    }
+                } catch (e) {
+                    console.error('ColorRM Sync: Error fetching base file:', e);
                 }
-            } catch (e) {
-                console.error('ColorRM Sync: Error fetching base file:', e);
             }
         }
 

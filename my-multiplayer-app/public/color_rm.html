@@ -311,6 +311,7 @@
     <header>
         <div style="display:flex; align-items:center; gap:10px;">
             <a href="/" class="btn btn-icon" title="Back to Hub" style="text-decoration:none; color:white;"><i class="bi bi-house-door-fill"></i></a>
+            <button class="btn btn-icon" title="Share Session" onclick="App.shareSession()"><i class="bi bi-share-fill"></i></button>
             <span style="font-weight:700" id="headerTitle">ColorRM Pro</span>
         </div>
         <div style="display:flex; gap:8px;">
@@ -820,6 +821,23 @@
                 let isMovingSelection = false; let isResizing = false; let isRotating = false; let resizeHandle = null;
                 let initialHistoryState = []; let lassoPath = [];
 
+                // --- S-Pen Button Logic ---
+                let previousTool = 'pen';
+                window.addEventListener('spen-button-down', () => {
+                    if (this.state.tool !== 'eraser') {
+                        previousTool = this.state.tool;
+                        this.setTool('eraser');
+                        console.log('S-Pen: Switched to Eraser');
+                    }
+                });
+                window.addEventListener('spen-button-up', () => {
+                    if (this.state.tool === 'eraser') {
+                        this.setTool(previousTool);
+                        console.log('S-Pen: Reverted to', previousTool);
+                    }
+                });
+                // --------------------------
+
                 const getPt = e => { const r = c.getBoundingClientRect(); return { x: (e.clientX - r.left)*(c.width/r.width), y: (e.clientY - r.top)*(c.height/r.height) }; };
                 const getSelectionBounds = () => {
                     if(this.state.selection.length===0) return null;
@@ -1290,26 +1308,100 @@
                 this.drawHeaderFooter(ctx, A4W, A4H);
                 pages.push(currentCanvas);
                 
-                // Download Logic
-                if(pages.length === 1) {
-                    const a = document.createElement('a');
-                    a.download = `${this.state.projectName}_Sheet.png`;
-                    a.href = pages[0].toDataURL();
-                    a.click();
-                } else {
-                    UI.toggleLoader(true, "Zipping...");
-                    const zip = new JSZip();
-                    for(let i=0; i<pages.length; i++) {
-                        const blob = await new Promise(r => pages[i].toBlob(r));
-                        zip.file(`${this.state.projectName}_Sheet_${i+1}.png`, blob);
+                // Export Logic (Native Share or Download)
+                try {
+                    if(pages.length === 1) {
+                        const blob = await new Promise(r => pages[0].toBlob(r, 'image/png'));
+                        const filename = `${this.state.projectName}_Sheet.png`;
+                        
+                        if (App.saveBlobNative(blob, filename)) {
+                            // Handled by Android
+                        } else {
+                            const file = new File([blob], filename, { type: 'image/png' });
+                            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                                await navigator.share({
+                                    files: [file],
+                                    title: 'Export Sheet',
+                                    text: 'Here is the exported sheet.'
+                                });
+                            } else {
+                                const a = document.createElement('a');
+                                a.download = filename;
+                                a.href = URL.createObjectURL(blob);
+                                a.click();
+                            }
+                        }
+                    } else {
+                        UI.toggleLoader(true, "Zipping...");
+                        const zip = new JSZip();
+                        for(let i=0; i<pages.length; i++) {
+                            const blob = await new Promise(r => pages[i].toBlob(r));
+                            zip.file(`${this.state.projectName}_Sheet_${i+1}.png`, blob);
+                        }
+                        const content = await zip.generateAsync({type:"blob"});
+                        const filename = `${this.state.projectName}_Sheets.zip`;
+                        
+                        if (App.saveBlobNative(content, filename)) {
+                            // Handled by Android
+                        } else {
+                            const file = new File([content], filename, { type: 'application/zip' });
+                            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                                await navigator.share({
+                                    files: [file],
+                                    title: 'Export Sheets',
+                                    text: 'Here are the exported sheets.'
+                                });
+                            } else {
+                                const a = document.createElement('a');
+                                a.href = URL.createObjectURL(content);
+                                a.download = filename;
+                                a.click();
+                            }
+                        }
                     }
-                    const content = await zip.generateAsync({type:"blob"});
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(content);
-                    a.download = `${this.state.projectName}_Sheets.zip`;
-                    a.click();
+                } catch (e) {
+                    console.error("Export failed:", e);
+                    alert("Export failed: " + e.message);
                 }
                 UI.toggleLoader(false);
+            },
+            
+            async shareSession() {
+                const url = window.location.href;
+                try {
+                    if (navigator.share) {
+                        await navigator.share({
+                            title: 'Join my ColorRM Session',
+                            text: 'Collaborate with me!',
+                            url: url
+                        });
+                    } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(url);
+                        UI.showToast("Link copied to clipboard!");
+                    } else {
+                        throw new Error("Clipboard API unavailable");
+                    }
+                } catch (err) {
+                    console.error('Share failed:', err);
+                    // Fallback to execCommand
+                    try {
+                        const input = document.createElement('textarea');
+                        input.value = url;
+                        // Prevent scrolling to bottom
+                        input.style.position = "fixed";
+                        input.style.left = "0";
+                        input.style.top = "0";
+                        input.style.opacity = "0";
+                        document.body.appendChild(input);
+                        input.focus();
+                        input.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(input);
+                        UI.showToast("Link copied to clipboard!");
+                    } catch (e) {
+                        prompt("Copy this link:", url);
+                    }
+                }
             },
             
             drawHeaderFooter(ctx, w, h) {
@@ -1428,7 +1520,7 @@
                             if(st.shapeType==='rectangle') cx.rect(x,y,w,h); else if(st.shapeType==='circle') cx.ellipse(x+w/2, y+h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI); else if(st.shapeType==='line') { cx.moveTo(x,y); cx.lineTo(x+w,y+h); } else if(st.shapeType==='arrow') { const head=15; const ang=Math.atan2(h,w); cx.moveTo(x,y); cx.lineTo(x+w,y+h); cx.lineTo(x+w - head*Math.cos(ang-0.5), y+h - head*Math.sin(ang-0.5)); cx.moveTo(x+w,y+h); cx.lineTo(x+w - head*Math.cos(ang+0.5), y+h - head*Math.sin(ang+0.5)); }
                             if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) cx.fill(); cx.stroke();
                         } else {
-                            cx.lineCap='round'; cx.lineJoin='round'; cx.lineWidth=st.size; cx.strokeStyle = st.tool==='eraser' ? '#000' : st.color; if(st.tool==='eraser') ctx.globalCompositeOperation='destination-out';
+                            cx.lineCap='round'; cx.lineJoin='round'; cx.lineWidth=st.size; cx.strokeStyle = st.tool==='eraser' ? '#000' : st.color; if(st.tool==='eraser') cx.globalCompositeOperation='destination-out';
                             cx.beginPath(); if(st.pts.length) cx.moveTo(st.pts[0].x, st.pts[0].y); for(let j=1; j<st.pts.length; j++) cx.lineTo(st.pts[j].x, st.pts[j].y); cx.stroke();
                         }
                         cx.restore();
@@ -1479,7 +1571,30 @@
                 }
                 
                 const fName = (this.state.projectName || "Export").replace(/[^a-z0-9]/gi, '_');
-                pdfDoc.save(`${fName}.pdf`);
+                
+                try {
+                    const blob = pdfDoc.output('blob');
+                    
+                    if (App.saveBlobNative(blob, `${fName}.pdf`)) {
+                        // Handled by Android
+                    } else {
+                        const file = new File([blob], `${fName}.pdf`, { type: 'application/pdf' });
+
+                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                            await navigator.share({
+                                files: [file],
+                                title: 'Export PDF',
+                                text: 'Here is your exported PDF.'
+                            });
+                        } else {
+                            pdfDoc.save(`${fName}.pdf`);
+                        }
+                    }
+                } catch (e) {
+                    console.error("PDF Export failed:", e);
+                    pdfDoc.save(`${fName}.pdf`);
+                }
+                
                 UI.toggleLoader(false);
             },
 
@@ -1717,8 +1832,27 @@
 
             async dbPut(s, v) { return new Promise(r=>{const t=this.db.transaction(s,'readwrite'); t.objectStore(s).put(v); t.oncomplete=()=>r()}); },
             async dbGet(s, k) { return new Promise(r=>{const q=this.db.transaction(s,'readonly').objectStore(s).get(k);q.onsuccess=()=>r(q.result)}); },
+            saveBlobNative(blob, filename) {
+                if (window.AndroidNative) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        const base64 = reader.result.split(',')[1];
+                        window.AndroidNative.saveBlob(base64, filename, blob.type);
+                        UI.showToast("Saved to Downloads");
+                    };
+                    reader.readAsDataURL(blob);
+                    return true;
+                }
+                return false;
+            },
             async saveCurrentImg() { if(this.state.sessionId) await this.dbPut('pages', this.state.images[this.state.idx]); },
-            async saveImage() { const a=document.createElement('a'); a.download='Page.png'; a.href=document.getElementById('canvas').toDataURL(); a.click(); },
+            async saveImage() { 
+                const cvs = document.getElementById('canvas');
+                cvs.toBlob(blob => {
+                    if (this.saveBlobNative(blob, 'Page.png')) return;
+                    const a=document.createElement('a'); a.download='Page.png'; a.href=URL.createObjectURL(blob); a.click(); 
+                });
+            },
             
             addColor(hex) {
                 const i = parseInt(hex.slice(1), 16);

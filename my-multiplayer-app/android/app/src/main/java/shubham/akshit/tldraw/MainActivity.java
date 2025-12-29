@@ -9,6 +9,15 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
+import android.util.Base64;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import android.os.Environment;
+import android.content.Intent;
+import android.net.Uri;
+import androidx.core.content.FileProvider;
 
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -27,6 +36,53 @@ public class MainActivity extends BridgeActivity {
 
         // Enable edge-to-edge display
         hideSystemUI();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        setupNativeInterface();
+    }
+
+    private void setupNativeInterface() {
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().addJavascriptInterface(new Object() {
+                @JavascriptInterface
+                public void saveBlob(String base64Data, String filename, String mimeType) {
+                    try {
+                        byte[] fileData = Base64.decode(base64Data, Base64.DEFAULT);
+                        File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                        File file = new File(path, filename);
+                        
+                        // Avoid overwrite
+                        int i = 1;
+                        String name = filename;
+                        int dot = filename.lastIndexOf('.');
+                        String ext = dot > -1 ? filename.substring(dot) : "";
+                        String base = dot > -1 ? filename.substring(0, dot) : filename;
+                        
+                        while (file.exists()) {
+                            file = new File(path, base + "_" + i + ext);
+                            i++;
+                        }
+
+                        FileOutputStream os = new FileOutputStream(file);
+                        os.write(fileData);
+                        os.close();
+
+                        // Notify system & Open
+                        Intent intent = new Intent(Intent.ACTION_VIEW);
+                        Uri uri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".fileprovider", file);
+                        intent.setDataAndType(uri, mimeType);
+                        intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(Intent.createChooser(intent, "Open with..."));
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            }, "AndroidNative");
+        }
     }
 
     @Override
