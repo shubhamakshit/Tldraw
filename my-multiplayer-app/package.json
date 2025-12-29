@@ -8,6 +8,7 @@
 		"auto-dev": "node cmd/dev_auto_update.mjs",
 		"build": "node -e \"console.log(process.env.VITE_APP_ENV === 'local' ? 'Building for LOCAL (192.168.0.169)...' : 'Building for REMOTE (tshonq.duckdns.org)...')\" && concurrently \"tsc\" \"vite build\"",
 		"build:local": "cross-env VITE_APP_ENV=local npm run build",
+		"build:remote": "cross-env VITE_APP_ENV=remote npm run build",
 		"preview": "vite preview",
 		"capacitor:sync:local": "cross-env CAPACITOR_SERVER_IP_ENV=local npx capacitor sync android",
 		"capacitor:open:local": "cross-env CAPACITOR_SERVER_IP_ENV=local npx capacitor open android",

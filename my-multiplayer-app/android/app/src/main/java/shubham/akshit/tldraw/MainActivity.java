@@ -23,19 +23,103 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.widget.EditText;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.widget.Toast;
+
 import com.getcapacitor.BridgeActivity;
+
+import android.view.KeyEvent;
 
 public class MainActivity extends BridgeActivity {
 
     private boolean wasButtonPressed = false;
     private boolean isTouchActive = false;
+    
+    private boolean isVolUpPressed = false;
+    private boolean isVolDownPressed = false;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // 1. DYNAMIC SERVER URL OVERRIDE
+        SharedPreferences prefs = getSharedPreferences("CapacitorPrefs", Context.MODE_PRIVATE);
+        String customUrl = prefs.getString("server_url", null);
+        
+        if (customUrl != null && !customUrl.isEmpty()) {
+            // Tell Capacitor to use this URL instead of the one in config
+            getIntent().putExtra("url", customUrl);
+        }
+
         super.onCreate(savedInstanceState);
+
+        // Welcome Toast with active URL
+        String urlUsed = (customUrl != null && !customUrl.isEmpty()) ? customUrl : "Default Config";
+        Toast.makeText(this, "Collaborative Suite Pro • " + urlUsed, Toast.LENGTH_LONG).show();
 
         // Enable edge-to-edge display
         hideSystemUI();
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            isVolUpPressed = true;
+        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            isVolDownPressed = true;
+        }
+
+        if (isVolUpPressed && isVolDownPressed) {
+            showUrlConfigDialog();
+            return true; // Consume event
+        }
+
+        return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            isVolUpPressed = false;
+        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            isVolDownPressed = false;
+        }
+        return super.onKeyUp(keyCode, event);
+    }
+
+    private void showUrlConfigDialog() {
+        SharedPreferences prefs = getSharedPreferences("CapacitorPrefs", Context.MODE_PRIVATE);
+        String currentUrl = prefs.getString("server_url", "");
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Configure Server URL");
+        builder.setMessage("Enter the backend URL (leave empty to use default config)");
+
+        final EditText input = new EditText(this);
+        input.setHint("http://192.168.x.x:5173");
+        input.setText(currentUrl);
+        builder.setView(input);
+
+        builder.setPositiveButton("Save & Restart", (dialog, which) -> {
+            String newUrl = input.getText().toString().trim();
+            prefs.edit().putString("server_url", newUrl).apply();
+            
+            Toast.makeText(this, "URL Saved. Restarting app...", Toast.LENGTH_LONG).show();
+            
+            // Restart the activity to apply the new URL
+            recreate();
+        });
+
+        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+        builder.setNeutralButton("Reset Default", (dialog, which) -> {
+            prefs.edit().remove("server_url").apply();
+            Toast.makeText(this, "Reset to default config. Restarting...", Toast.LENGTH_LONG).show();
+            recreate();
+        });
+
+        builder.show();
     }
 
     @Override
