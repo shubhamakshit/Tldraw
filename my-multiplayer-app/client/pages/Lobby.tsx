@@ -85,6 +85,17 @@ export function Lobby() {
                 Create New Board
             </button>
 
+            {/* APP SWITCHER */}
+            <div style={{ marginTop: '10px', display: 'flex', gap: '10px' }}>
+                <a href="/color_rm.html" style={{ 
+                    padding: '10px 20px', fontSize: '16px', 
+                    backgroundColor: '#8b5cf6', color: 'white', 
+                    textDecoration: 'none', borderRadius: '5px' 
+                }}>
+                    🎨 Open ColorRM Pro
+                </a>
+            </div>
+
             {/* 3. RECENT BOARDS MANAGER */}
             {recentRooms.length > 0 && (
                 <div style={{ marginTop: '20px', width: '300px' }}>

@@ -57,6 +57,15 @@ export function Room() {
     const components = useMemo<TLComponents>(() => ({
         MainMenu: () => (
             <DefaultMainMenu>
+                <TldrawUiMenuGroup id="navigation">
+                     <TldrawUiMenuItem
+                        id="go-home"
+                        label="Go to Home"
+                        icon="home" // Ensure 'home' icon is available or use a generic one if not
+                        readonlyOk
+                        onSelect={() => navigate('/')}
+                    />
+                </TldrawUiMenuGroup>
                 <TldrawUiMenuGroup id="share">
                     <TldrawUiMenuItem
                         id="share-link"
@@ -69,7 +78,7 @@ export function Room() {
                 <DefaultMainMenuContent />
             </DefaultMainMenu>
         )
-    }), [roomId])
+    }), [roomId, navigate])
 
     return (
         <div style={{ position: 'fixed', inset: 0 }}>

@@ -14,6 +14,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
+    <script src="./color_rm_sync.js"></script>
 
     <style>
         :root {
@@ -309,6 +310,7 @@
 
     <header>
         <div style="display:flex; align-items:center; gap:10px;">
+            <a href="/" class="btn btn-icon" title="Back to Hub" style="text-decoration:none; color:white;"><i class="bi bi-house-door-fill"></i></a>
             <span style="font-weight:700" id="headerTitle">ColorRM Pro</span>
         </div>
         <div style="display:flex; gap:8px;">
@@ -503,6 +505,11 @@
             </div>
 
             <div class="sidebar-footer">
+                <div id="presenterControls" style="display:none; margin-bottom: 8px;">
+                    <button id="lockBtn" class="btn" style="width:100%; justify-content:center;" onclick="App.togglePageLock()">
+                        <i class="bi bi-unlock"></i> Presenter Lock: OFF
+                    </button>
+                </div>
                 <button class="btn" onclick="App.saveImage()">Save Image</button>
                 <button class="btn btn-primary" onclick="UI.showExportModal()">Export...</button>
             </div>
@@ -576,17 +583,19 @@
             state: {
                 sessionId: null, images: [], idx: 0,
                 colors: [], strict: 15, tool: 'none', bg: 'transparent',
-                penColor: '#ef4444', penSize: 3, eraserSize: 20, eraserType: 'standard',
+                penColor: '#ef4444', penSize: 3, eraserSize: 20, eraserType: 'stroke', // Default to stroke eraser
                 textSize: 40,
                 shapeType: 'rectangle', shapeBorder: '#3b82f6', shapeFill: 'transparent', shapeWidth: 3,
                 selection: [], dlSelection: [], isLivePreview: false, guideLines: [], activeShapeRatio: false, previewOn: false,
                 bookmarks: [], activeSideTab: 'tools', projectName: "Untitled",
-                clipboardBox: [] 
+                clipboardBox: [],
+                ownerId: null, pageLocked: false
             },
+
             cache: { currentImg: null, lab: null },
             
             async init() {
-                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                // 1. Initialize Database FIRST
                 this.db = await new Promise(r => {
                     const req = indexedDB.open('ColorRM_SOTA_V12', 1);
                     req.onupgradeneeded = e => {
@@ -597,15 +606,40 @@
                     req.onsuccess = e => r(e.target.result);
                 });
 
+                // 2. Setup all local UI and event listeners
                 this.setupUI();
                 this.setupDrawing();
-                this.loadSessionList();
                 this.makeDraggable();
                 this.setupShortcuts();
+
+                // 3. Start the sync client LAST
+                await SYNC.init(); 
+
+                // If not joining a room, show the dashboard
+                if (!SYNC.roomId) {
+                    this.loadSessionList();
+                } else {
+                    // If we are in a room, we might still want to open the session locally
+                    // to initialize the App.state properly.
+                    await this.openSession(SYNC.roomId);
+                }
+
+                // Monkey-patch the save functions to send updates
+                const originalSave = this.saveSessionState.bind(this)
+                this.saveSessionState = async (...args) => {
+                    await originalSave(...args)
+                    SYNC.sendStateUpdate()
+                }
+                const originalSaveImg = this.saveCurrentImg.bind(this)
+                this.saveCurrentImg = async (...args) => {
+                    await originalSaveImg(...args)
+                    SYNC.sendStateUpdate()
+                }
             },
 
             async saveSessionState() {
                 if(!this.state.sessionId) return;
+                console.log("Saving session state... sending update");
                 const s = await this.dbGet('sessions', this.state.sessionId);
                 if(s) {
                     s.lastMod = Date.now();
@@ -771,6 +805,15 @@
             },
 
             setupDrawing() {
+                // Import and initialize S-Pen engine here
+                import('./spen_engine.js').then(({ initializeSPen }) => {
+                    const canvas = document.getElementById('canvas')
+                    if (canvas) {
+                        console.log('Initializing S-Pen Engine for ColorRM...')
+                        initializeSPen(canvas)
+                    }
+                })
+
                 const c = document.getElementById('canvas');
                 let startPt = null; let isDragging = false;
                 let dragStart = null; let startBounds = null; let startRotation = 0;
@@ -860,6 +903,50 @@
                         }
                     }
                     else if(['pen','eraser'].includes(this.state.tool)) {
+                        // --- Stroke Eraser Logic ---
+                        if (this.state.tool === 'eraser' && this.state.eraserType === 'stroke') {
+                            const img = this.state.images[this.state.idx];
+                            const eraserR = this.state.eraserSize / 2;
+                            let changed = false;
+                            
+                            // Iterate backwards to delete top-most first
+                            for (let i = img.history.length - 1; i >= 0; i--) {
+                                const st = img.history[i];
+                                if (st.locked) continue;
+                                
+                                let hit = false;
+                                if (st.tool === 'pen' || st.tool === 'eraser') { // Erase strokes
+                                    // Check distance to any point in the stroke
+                                    // Optimization: Check bounding box first? For now, brute force points is ok for <10k points
+                                    for (const p of st.pts) {
+                                        if (Math.hypot(p.x - pt.x, p.y - pt.y) < eraserR + st.size) {
+                                            hit = true; break;
+                                        }
+                                    }
+                                } else if (st.tool === 'shape' || st.tool === 'text') {
+                                    // Simple box check for shapes/text
+                                    if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                        pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
+                                        hit = true;
+                                    }
+                                }
+                                
+                                if (hit) {
+                                    img.history.splice(i, 1);
+                                    changed = true;
+                                    // Only delete one per move event to avoid wiping everything instantly? 
+                                    // No, usual behavior is "eraser deletes everything it touches"
+                                }
+                            }
+                            
+                            if (changed) {
+                                this.saveCurrentImg();
+                                this.render();
+                            }
+                            return; // Don't draw standard eraser trail
+                        }
+                        // ---------------------------
+
                         this.currentStroke.push(pt); const ctx=c.getContext('2d');
                         ctx.save(); ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize;
                         ctx.strokeStyle=this.state.tool==='eraser'?(this.state.bg==='transparent'?'#000':this.state.bg):this.state.penColor;
@@ -900,6 +987,7 @@
                         this.render();
                     } else if(['pen','eraser'].includes(this.state.tool)) {
                         this.state.images[this.state.idx].history.push({tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize});
+                        console.log(`Stroke added. History length: ${this.state.images[this.state.idx].history.length}`);
                         this.saveCurrentImg(); this.render();
                     }
                 };
@@ -1396,18 +1484,41 @@
             },
 
             async loadSessionPages(id) {
-                const q = this.db.transaction('pages').objectStore('pages').index('sessionId').getAll(id);
-                q.onsuccess = () => {
-                    this.state.images = q.result.sort((a,b)=>a.pageIndex-b.pageIndex);
-                    document.getElementById('pageTotal').innerText = '/ ' + this.state.images.length;
-                    if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
-                    if(this.state.images.length > 0 && !this.cache.currentImg) this.loadPage(0);
-                };
+                return new Promise((resolve, reject) => {
+                    const q = this.db.transaction('pages').objectStore('pages').index('sessionId').getAll(id);
+                    q.onsuccess = () => {
+                        this.state.images = q.result.sort((a,b)=>a.pageIndex-b.pageIndex);
+                        console.log(`Loaded ${this.state.images.length} pages from DB.`);
+                        document.getElementById('pageTotal').innerText = '/ ' + this.state.images.length;
+                        if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
+                        if(this.state.images.length > 0 && !this.cache.currentImg) this.loadPage(0);
+                        resolve();
+                    };
+                    q.onerror = (e) => reject(e);
+                });
             },
 
-            async handleImport(e) {
+            async importBaseFile(blob) {
+                // Simulates a file input event to reuse existing handleImport logic
+                const file = new File([blob], "base_document", { type: blob.type });
+                await this.handleImport({ target: { files: [file] } }, true); // Pass true to skip upload
+            },
+
+            async handleImport(e, skipUpload = false) {
                 const files = e.target.files;
                 if(!files.length) return;
+                
+                // --- Sync to Server ---
+                if (!skipUpload && SYNC.roomId) {
+                    console.log('ColorRM Sync: Uploading base file to server...');
+                    fetch(`/api/color_rm/upload/${SYNC.roomId}`, {
+                        method: 'POST',
+                        body: files[0],
+                        headers: { 'Content-Type': files[0].type }
+                    }).catch(err => console.error('Failed to upload base file:', err));
+                }
+                // -----------------------
+
                 UI.hideDashboard(); UI.toggleLoader(true, "Initializing...");
                 
                 const nameInput = document.getElementById('newProjectName');
@@ -1416,7 +1527,12 @@
                 if(!pName) pName = "Untitled";
                 this.state.projectName = pName;
 
-                if(!this.state.sessionId) await this.createNewProject();
+                if(!this.state.sessionId) {
+                    // If we are syncing (skipUpload=true) and have a room ID, use it as the session ID.
+                    // Also don't open the picker since we already have the file.
+                    const newId = (skipUpload && SYNC.roomId) ? SYNC.roomId : null;
+                    await this.createNewProject(false, newId);
+                }
                 
                 const session = await this.dbGet('sessions', this.state.sessionId);
                 if(session.name === "Untitled" && pName !== "Untitled") {
@@ -1429,54 +1545,80 @@
                 let idx = this.state.images.length;
                 const BATCH_SIZE = 5;
 
-                const processNext = async () => {
-                    if(processQueue.length === 0) {
-                        session.pageCount = idx;
-                        await this.dbPut('sessions', session);
-                        await this.loadSessionPages(this.state.sessionId);
-                        UI.toggleLoader(false);
-                        return;
-                    }
+                // Wrap processing in a promise to await completion
+                await new Promise((resolve) => {
+                    const processNext = async () => {
+                        if(processQueue.length === 0) {
+                            session.pageCount = idx;
+                            await this.dbPut('sessions', session);
+                            await this.loadSessionPages(this.state.sessionId);
+                            UI.toggleLoader(false);
+                            resolve(); // Resolve when done
+                            return;
+                        }
 
-                    const f = processQueue.shift();
-                    if(f.type.includes('pdf')) {
-                         try {
-                             const d = await f.arrayBuffer();
-                             const pdf = await pdfjsLib.getDocument(d).promise;
-                             for(let i=1; i<=pdf.numPages; i+=BATCH_SIZE) {
-                                 const promises = [];
-                                 for(let j=0; j<BATCH_SIZE && (i+j)<=pdf.numPages; j++) {
-                                     const pNum = i+j;
-                                     promises.push(pdf.getPage(pNum).then(async page => {
-                                         const v = page.getViewport({scale:1.5});
-                                         const cvs = document.createElement('canvas'); cvs.width=v.width; cvs.height=v.height;
-                                         await page.render({canvasContext:cvs.getContext('2d'), viewport:v}).promise;
-                                         const b = await new Promise(r=>cvs.toBlob(r, 'image/jpeg', 0.8));
-                                         await this.dbPut('pages', { id:`${this.state.sessionId}_${idx+j}`, sessionId:this.state.sessionId, pageIndex:idx+j, blob:b, history:[] });
-                                     }));
+                        const f = processQueue.shift();
+                        if(f.type.includes('pdf')) {
+                             try {
+                                 const d = await f.arrayBuffer();
+                                 const pdf = await pdfjsLib.getDocument(d).promise;
+                                 for(let i=1; i<=pdf.numPages; i+=BATCH_SIZE) {
+                                     const promises = [];
+                                     for(let j=0; j<BATCH_SIZE && (i+j)<=pdf.numPages; j++) {
+                                         const pNum = i+j;
+                                         promises.push(pdf.getPage(pNum).then(async page => {
+                                             const v = page.getViewport({scale:1.5});
+                                             const cvs = document.createElement('canvas'); cvs.width=v.width; cvs.height=v.height;
+                                             await page.render({canvasContext:cvs.getContext('2d'), viewport:v}).promise;
+                                             const b = await new Promise(r=>cvs.toBlob(r, 'image/jpeg', 0.8));
+                                             await this.dbPut('pages', { id:`${this.state.sessionId}_${idx+j}`, sessionId:this.state.sessionId, pageIndex:idx+j, blob:b, history:[] });
+                                         }));
+                                     }
+                                     await Promise.all(promises);
+                                     idx += Math.min(BATCH_SIZE, pdf.numPages-i+1);
+                                     UI.updateProgress(((i/pdf.numPages)*100), `PDF Page ${i}/${pdf.numPages}`);
+                                     await new Promise(r => setTimeout(r, 0)); 
                                  }
-                                 await Promise.all(promises);
-                                 idx += Math.min(BATCH_SIZE, pdf.numPages-i+1);
-                                 UI.updateProgress(((i/pdf.numPages)*100), `PDF Page ${i}/${pdf.numPages}`);
-                                 await new Promise(r => setTimeout(r, 0)); 
-                             }
-                         } catch(e) { console.error(e); alert("Failed to load PDF"); }
-                    } else {
-                        await this.dbPut('pages', { id:`${this.state.sessionId}_${idx}`, sessionId:this.state.sessionId, pageIndex:idx, blob:f, history:[] });
-                        idx++;
-                    }
+                             } catch(e) { console.error(e); alert("Failed to load PDF"); }
+                        } else {
+                            await this.dbPut('pages', { id:`${this.state.sessionId}_${idx}`, sessionId:this.state.sessionId, pageIndex:idx, blob:f, history:[] });
+                            idx++;
+                        }
+                        processNext();
+                    };
                     processNext();
-                };
-                processNext();
+                });
             },
 
-            async createNewProject() {
-                const id = Date.now();
+            async createNewProject(openPicker = true, forceId = null) {
+                const id = forceId || Date.now();
                 const name = document.getElementById('newProjectName').value || "Untitled";
-                await this.dbPut('sessions', { id, name, pageCount:0, lastMod: id, idx:0, bookmarks: [], clipboardBox: [] });
+                // Set ownerId to current session on creation
+                this.state.ownerId = SYNC.sessionId; 
+                await this.dbPut('sessions', { id, name, pageCount:0, lastMod: id, idx:0, bookmarks: [], clipboardBox: [], ownerId: SYNC.sessionId });
                 this.state.sessionId = id;
-                document.getElementById('fileIn').click();
+                if(openPicker) document.getElementById('fileIn').click();
             },
+
+            togglePageLock() {
+                if (this.state.ownerId !== SYNC.sessionId) return;
+                this.state.pageLocked = !this.state.pageLocked;
+                this.updateLockUI();
+                this.saveSessionState();
+            },
+
+            updateLockUI() {
+                const btn = document.getElementById('lockBtn');
+                const ctrl = document.getElementById('presenterControls');
+                if (this.state.ownerId === SYNC.sessionId) {
+                    ctrl.style.display = 'block';
+                    btn.className = this.state.pageLocked ? "btn btn-primary" : "btn";
+                    btn.innerHTML = this.state.pageLocked ? '<i class="bi bi-lock-fill"></i> Presenter Lock: ON' : '<i class="bi bi-unlock"></i> Presenter Lock: OFF';
+                } else {
+                    ctrl.style.display = 'none';
+                }
+            },
+
             async loadSessionList() {
                 const tx = this.db.transaction('sessions', 'readonly');
                 const req = tx.objectStore('sessions').getAll();
@@ -1488,6 +1630,7 @@
                     });
                 };
             },
+            
             async openSession(id) {
                 this.state.sessionId = id;
                 const session = await this.dbGet('sessions', id);
@@ -1499,55 +1642,77 @@
                     if(!this.state.clipboardBox) this.state.clipboardBox = [];
                     this.renderBookmarks();
                 }
-                const q = this.db.transaction('pages').objectStore('pages').index('sessionId').getAll(id);
-                q.onsuccess = () => {
-                    this.state.images = q.result.sort((a,b)=>a.pageIndex-b.pageIndex);
-                    UI.hideDashboard(); 
-                    const targetIdx = (session && session.idx !== undefined) ? session.idx : 0;
-                    if(this.state.images.length>0) this.loadPage(targetIdx);
-                    if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
-                    if(this.state.activeSideTab === 'box') this.renderBox();
-                }
+                
+                return new Promise((resolve) => {
+                    const q = this.db.transaction('pages').objectStore('pages').index('sessionId').getAll(id);
+                    q.onsuccess = () => {
+                        this.state.images = q.result.sort((a,b)=>a.pageIndex-b.pageIndex);
+                        UI.hideDashboard(); 
+                        this.updateLockUI(); // Update UI after state is merged
+                        const targetIdx = (session && session.idx !== undefined) ? session.idx : 0;
+                        if(this.state.images.length>0) {
+                            this.loadPage(targetIdx).then(resolve);
+                        } else {
+                            resolve();
+                        }
+                        if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
+                        if(this.state.activeSideTab === 'box') this.renderBox();
+                    }
+                    q.onerror = () => resolve();
+                });
             },
-            async loadPage(i) {
+
+            async loadPage(i, broadcast = true) {
                 if(i<0 || i>=this.state.images.length) return;
+                
+                // --- Presenter Lock Logic ---
+                if (broadcast && this.state.pageLocked && this.state.ownerId !== SYNC.sessionId) {
+                    UI.showToast("Page is locked by presenter.");
+                    return;
+                }
+                // ----------------------------
+
+                const item = this.state.images[i];
+                if (!item || !item.blob) {
+                    console.warn(`Page ${i} missing blob data. Skipping loadPage.`);
+                    return;
+                }
+
                 this.state.idx = i;
                 document.getElementById('pageInput').value = i + 1;
                 document.getElementById('pageTotal').innerText = '/ ' + this.state.images.length;
                 
                 this.renderBookmarks(); 
 
-                const item = this.state.images[i];
                 if(!item.history) item.history = [];
-                const img = new Image(); img.src = URL.createObjectURL(item.blob);
-                await new Promise(r => img.onload = r);
-                this.cache.currentImg = img;
-                
-                const c = document.getElementById('canvas');
-                const max = 2000;
-                let w=img.width, h=img.height;
-                if(w>max || h>max) { const r = Math.min(max/w, max/h); w*=r; h*=r; }
-                c.width=w; c.height=h; this.state.viewW=w; this.state.viewH=h;
+                const img = new Image(); 
+                img.src = URL.createObjectURL(item.blob);
+                return new Promise((resolve) => {
+                    img.onload = () => {
+                        this.cache.currentImg = img;
+                        
+                        const c = document.getElementById('canvas');
+                        const max = 2000;
+                        let w=img.width, h=img.height;
+                        if(w>max || h>max) { const r = Math.min(max/w, max/h); w*=r; h*=r; }
+                        c.width=w; c.height=h; this.state.viewW=w; this.state.viewH=h;
 
-                const ctx = c.getContext('2d', {willReadFrequently:true});
-                ctx.drawImage(img,0,0,w,h);
-                const d = ctx.getImageData(0,0,w,h).data;
-                this.cache.lab = new Float32Array(w*h*3);
-                for(let k=0,j=0; k<d.length; k+=4,j+=3) {
-                    const [l,a,b] = rgbToLab(d[k],d[k+1],d[k+2]);
-                    this.cache.lab[j]=l; this.cache.lab[j+1]=a; this.cache.lab[j+2]=b;
-                }
-                
-                if(this.state.sessionId) {
-                    const sess = await this.dbGet('sessions', this.state.sessionId);
-                    if(sess) { sess.idx = i; this.dbPut('sessions', sess); }
-                }
-                this.render();
-                
-                if(this.state.activeSideTab === 'pages') {
-                    const els = document.querySelectorAll('.sb-page-item');
-                    els.forEach((el, idx) => el.classList.toggle('active', idx === i));
-                }
+                        const ctx = c.getContext('2d', {willReadFrequently:true});
+                        ctx.drawImage(img,0,0,w,h);
+                        const d = ctx.getImageData(0,0,w,h).data;
+                        this.cache.lab = new Float32Array(w*h*3);
+                        for(let k=0,j=0; k<d.length; k+=4,j+=3) {
+                            const [l,a,b] = rgbToLab(d[k],d[k+1],d[k+2]);
+                            this.cache.lab[j]=l; this.cache.lab[j+1]=a; this.cache.lab[j+2]=b;
+                        }
+                        
+                        this.render();
+                        if (broadcast) {
+                            this.saveSessionState(); // Trigger sync so others follow page change
+                        }
+                        resolve();
+                    };
+                });
             },
 
             async dbPut(s, v) { return new Promise(r=>{const t=this.db.transaction(s,'readwrite'); t.objectStore(s).put(v); t.oncomplete=()=>r()}); },

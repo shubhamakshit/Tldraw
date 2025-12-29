@@ -4,6 +4,7 @@
 declare namespace Cloudflare {
 	interface Env {
 		TLDRAW_DURABLE_OBJECT: DurableObjectNamespace<import('./worker/worker').TldrawDurableObject>
+		COLORM_DURABLE_OBJECT: DurableObjectNamespace<import('./worker/ColorRmDurableObject').ColorRmDurableObject>
 		TLDRAW_BUCKET: R2Bucket
 	}
 }
