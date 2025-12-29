@@ -75,6 +75,36 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
         }
     })
 
+    // Maintainer: List Rooms
+    .get('/api/maintainer/rooms', async (request, env) => {
+        try {
+            // 1. Get Tldraw Rooms (Prefix: rooms/)
+            const tldrawList = await env.TLDRAW_BUCKET.list({ prefix: 'rooms/', include: ['customMetadata'] });
+            const tldrawRooms = tldrawList.objects.map(obj => ({
+                id: obj.key.replace('rooms/', ''),
+                name: obj.customMetadata?.name || 'Untitled Board',
+                lastUsed: obj.uploaded
+            }));
+
+            // 2. Get ColorRM Rooms (Prefix: color_rm/base_files/)
+            const colorRmList = await env.TLDRAW_BUCKET.list({ prefix: 'color_rm/base_files/', include: ['customMetadata'] });
+            const colorRmRooms = colorRmList.objects.map(obj => ({
+                id: obj.key.replace('color_rm/base_files/', ''),
+                name: obj.customMetadata?.name || 'ColorRM Project',
+                lastUsed: obj.uploaded
+            }));
+
+            return new Response(JSON.stringify({
+                tldraw: tldrawRooms,
+                color_rm: colorRmRooms
+            }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
     // Maintainer: Delete R2 Object
     .delete('/api/maintainer/r2/:key', async (request, env) => {
         try {

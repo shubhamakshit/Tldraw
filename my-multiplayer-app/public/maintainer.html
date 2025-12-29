@@ -323,18 +323,32 @@
             <!-- REMOTE OBJECTS VIEW -->
             <div id="view-remote" class="view-pane animate">
                 <h1 class="section-title">Durable Objects</h1>
-                <p style="color:var(--muted); margin-bottom:32px;">Surgically clear state for specific rooms on the server.</p>
+                <p style="color:var(--muted); margin-bottom:32px;">Surgically clear state for specific rooms on the server. Data is fetched from R2 record prefixes.</p>
                 
-                <div class="grid">
+                <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));">
                     <div class="card">
-                        <span class="card-label">Tldraw Room</span>
-                        <input type="text" id="do-tldraw-id" class="input" placeholder="Room ID (e.g. test-room-...)">
-                        <button class="btn btn-danger" style="margin-top:16px;" onclick="nukeDO('tldraw')">Nuke Room Storage</button>
+                        <span class="card-label">Tldraw Rooms</span>
+                        <div class="list" id="room-list-tldraw" style="max-height: 300px; overflow: auto; gap: 4px;">
+                            <div style="color:var(--muted); text-align:center; padding:20px;">Loading rooms...</div>
+                        </div>
                     </div>
                     <div class="card">
-                        <span class="card-label">ColorRM Room</span>
-                        <input type="text" id="do-colorrm-id" class="input" placeholder="Room ID (e.g. color_rm_...)">
-                        <button class="btn btn-danger" style="margin-top:16px;" onclick="nukeDO('color_rm')">Nuke Room Storage</button>
+                        <span class="card-label">ColorRM Rooms</span>
+                        <div class="list" id="room-list-colorrm" style="max-height: 300px; overflow: auto; gap: 4px;">
+                            <div style="color:var(--muted); text-align:center; padding:20px;">Loading rooms...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top: 24px; max-width: 500px;">
+                    <span class="card-label">Manual Entry</span>
+                    <div style="display:flex; gap:12px;">
+                        <select id="do-manual-type" class="input" style="width:120px;">
+                            <option value="tldraw">Tldraw</option>
+                            <option value="color_rm">ColorRM</option>
+                        </select>
+                        <input type="text" id="do-manual-id" class="input" placeholder="Room ID">
+                        <button class="btn btn-danger" onclick="nukeDOManual()">Nuke</button>
                     </div>
                 </div>
             </div>
@@ -362,9 +376,66 @@
             if(viewId === 'localstorage') loadLS();
             if(viewId === 'server') loadR2();
             if(viewId === 'indexeddb') scanDBs();
+            if(viewId === 'remote') loadRooms();
         };
 
         // --- LOADERS ---
+
+        const loadRooms = async () => {
+            const tList = document.getElementById('room-list-tldraw');
+            const cList = document.getElementById('room-list-colorrm');
+            tList.innerHTML = '<div style="color:var(--muted); text-align:center; padding:20px;">Fetching...</div>';
+            cList.innerHTML = '<div style="color:var(--muted); text-align:center; padding:20px;">Fetching...</div>';
+
+            try {
+                const res = await fetch('/api/maintainer/rooms');
+                const data = await res.json();
+                
+                const render = (container, list, type) => {
+                    container.innerHTML = '';
+                    if (list.length === 0) {
+                        container.innerHTML = '<div style="color:var(--muted); text-align:center; padding:20px;">No rooms found.</div>';
+                        return;
+                    }
+                    
+                    const table = document.createElement('table');
+                    table.className = 'data-table';
+                    table.style.marginTop = '0';
+                    table.innerHTML = `
+                        <thead>
+                            <tr>
+                                <th>Name / ID</th>
+                                <th>Last Activity</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    `;
+                    const tbody = table.querySelector('tbody');
+
+                    list.sort((a,b) => new Date(b.lastUsed) - new Date(a.lastUsed)).forEach(room => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>
+                                <div style="font-weight:700; color:white;">${room.name}</div>
+                                <div style="font-size:0.65rem; color:var(--muted); font-family:monospace;">${room.id}</div>
+                            </td>
+                            <td style="font-size:0.75rem; color:var(--muted);">${new Date(room.lastUsed).toLocaleString()}</td>
+                            <td>
+                                <button class="btn btn-danger btn-sm" onclick="nukeDO('${type}', '${room.id}')">NUKE</button>
+                            </td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                    container.appendChild(table);
+                };
+
+                render(tList, data.tldraw, 'tldraw');
+                render(cList, data.color_rm, 'color_rm');
+            } catch (e) {
+                tList.innerHTML = cList.innerHTML = `<div style="color:var(--error); text-align:center; padding:20px;">${e.message}</div>`;
+            }
+        };
 
         const loadOverview = async () => {
             // Quota
@@ -500,14 +571,21 @@
             }
         };
 
-        const nukeDO = async (type) => {
-            const id = document.getElementById(`do-${type}-id`).value.trim();
+        const nukeDO = async (type, id) => {
             if(!id) return alert("Enter a Room ID");
             if(confirm(`NUKE ALL STORAGE FOR ${type.toUpperCase()} ROOM: ${id}?`)) {
                 const res = await fetch(`/api/maintainer/nuke-do/${type}/${id}`, { method: 'POST' });
-                if(res.ok) alert("Remote storage cleared.");
-                else alert("Nuke failed.");
+                if(res.ok) {
+                    alert("Remote storage cleared.");
+                    loadRooms();
+                } else alert("Nuke failed.");
             }
+        };
+
+        const nukeDOManual = () => {
+            const type = document.getElementById('do-manual-type').value;
+            const id = document.getElementById('do-manual-id').value.trim();
+            nukeDO(type, id);
         };
 
         const nukeDB = (name) => {

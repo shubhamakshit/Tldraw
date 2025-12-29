@@ -141,6 +141,10 @@ export class TldrawDurableObject extends DurableObject {
 
 		// convert the room to JSON and upload it to R2
 		const snapshot = JSON.stringify(room.getCurrentSnapshot())
-		await this.r2.put(`rooms/${this.roomId}`, snapshot)
+        const name = await this.ctx.storage.get('meta_name') as string || 'Untitled Board'
+        
+		await this.r2.put(`rooms/${this.roomId}`, snapshot, {
+            customMetadata: { name }
+        })
 	}, 10_000)
 }
