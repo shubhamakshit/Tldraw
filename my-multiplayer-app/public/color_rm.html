@@ -1706,12 +1706,32 @@
             },
 
             async createNewProject(openPicker = true, forceId = null) {
-                const id = forceId || Date.now();
+                let id = forceId;
+                
+                // Intelligent ID selection:
+                // If no forceId, check if we can reuse the current Sync ID.
+                // We reuse if the current local state is effectively empty/new.
+                if (!id) {
+                    const isFresh = (!this.state.images || this.state.images.length === 0) && this.state.projectName === "Untitled";
+                    if (isFresh && SYNC.roomId) {
+                        console.log("ColorRM: Preserving current Room ID for new project:", SYNC.roomId);
+                        id = SYNC.roomId;
+                    } else {
+                        id = `color_rm_${Date.now()}`;
+                    }
+                }
+
                 const name = document.getElementById('newProjectName').value || "Untitled";
                 // Set ownerId to current session on creation
                 this.state.ownerId = SYNC.sessionId; 
-                await this.dbPut('sessions', { id, name, pageCount:0, lastMod: id, idx:0, bookmarks: [], clipboardBox: [], ownerId: SYNC.sessionId });
+                await this.dbPut('sessions', { id, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: SYNC.sessionId });
                 this.state.sessionId = id;
+                
+                // Ensure Sync is pointing to this new ID
+                if (window.SYNC && SYNC.roomId !== id) {
+                    SYNC.switchRoom(id);
+                }
+
                 if(openPicker) document.getElementById('fileIn').click();
             },
 

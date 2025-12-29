@@ -162,6 +162,19 @@ const SYNC = {
         }
     },
 
+    switchRoom(newId) {
+        if (this.roomId === newId) return;
+        console.log(`ColorRM Sync: Switching room from ${this.roomId} to ${newId}`);
+        this.roomId = newId;
+        window.location.hash = `/color_rm/${newId}`;
+        if (this.socket) {
+            this.socket.close();
+        }
+        // Re-init connection
+        this.isInitializing = true;
+        this.connect();
+    },
+
     async sendStateUpdate() {
         if (this.isRemoteChange) return;
 
