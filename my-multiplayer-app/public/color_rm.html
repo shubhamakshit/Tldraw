@@ -1118,34 +1118,33 @@
 
                 UI.toggleLoader(true, "Deleting...");
                 
-                for (const id of this.state.selectedSessions) {
-                    // 1. Delete Pages (Blobs)
-                    const pagesTx = this.db.transaction('pages', 'readwrite');
-                    const pagesStore = pagesTx.objectStore('pages');
-                    const index = pagesStore.index('sessionId');
-                    const pagesReq = index.getAll(id);
-                    
-                    await new Promise(r => {
-                        pagesReq.onsuccess = async () => {
-                            for (const pg of pagesReq.result) {
-                                pagesStore.delete(pg.id);
-                            }
-                            r();
+                const deletePromises = Array.from(this.state.selectedSessions).map(async (id) => {
+                    return new Promise((resolve) => {
+                        // 1. Delete Pages
+                        const pagesTx = this.db.transaction('pages', 'readwrite');
+                        const pagesStore = pagesTx.objectStore('pages');
+                        const index = pagesStore.index('sessionId');
+                        const pagesReq = index.getAll(id);
+                        
+                        pagesReq.onsuccess = () => {
+                            pagesReq.result.forEach(pg => pagesStore.delete(pg.id));
+                            
+                            // 2. Delete Session Metadata
+                            const sessTx = this.db.transaction('sessions', 'readwrite');
+                            sessTx.objectStore('sessions').delete(id);
+                            sessTx.oncomplete = () => resolve();
                         };
                     });
+                });
 
-                    // 2. Delete Session Metadata
-                    await this.dbPut('sessions', { deleteId: id }); // Trigger tx
-                    const sessTx = this.db.transaction('sessions', 'readwrite');
-                    sessTx.objectStore('sessions').delete(id);
-                }
+                await Promise.all(deletePromises);
 
+                const deletedActive = this.state.selectedSessions.has(this.state.sessionId);
                 this.state.isMultiSelect = false;
                 this.state.selectedSessions.clear();
                 
-                // If active project was deleted, refresh app
-                if (this.state.selectedSessions.has(this.state.sessionId)) {
-                    location.hash = '';
+                if (deletedActive) {
+                    window.location.hash = '';
                     location.reload();
                 } else {
                     await this.loadSessionList();
