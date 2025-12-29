@@ -19,6 +19,17 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		const room = env.TLDRAW_DURABLE_OBJECT.get(id)
 		return room.fetch(request.url, { headers: request.headers, body: request.body })
 	})
+    // Metadata requests are also routed to the Durable Object
+    .get('/api/meta/:roomId', (request, env) => {
+        const id = env.TLDRAW_DURABLE_OBJECT.idFromName(request.params.roomId)
+        const room = env.TLDRAW_DURABLE_OBJECT.get(id)
+        return room.fetch(request.url, { headers: request.headers, body: request.body })
+    })
+    .post('/api/meta/:roomId', (request, env) => {
+        const id = env.TLDRAW_DURABLE_OBJECT.idFromName(request.params.roomId)
+        const room = env.TLDRAW_DURABLE_OBJECT.get(id)
+        return room.fetch(request.url, { method: request.method, headers: request.headers, body: request.body })
+    })
 
 	// assets can be uploaded to the bucket under /uploads:
 	.post('/api/uploads/:uploadId', handleAssetUpload)

@@ -53,6 +53,24 @@ export class TldrawDurableObject extends DurableObject {
 			}
 			return this.handleConnect(request)
 		})
+        // Get room metadata (name)
+        .get('/api/meta/:roomId', async () => {
+            const name = await this.ctx.storage.get('meta_name') as string | undefined
+            return { name: name || 'Untitled Board' }
+        })
+        // Update room metadata (name)
+        .post('/api/meta/:roomId', async (request) => {
+            try {
+                const body = await request.json() as { name?: string }
+                if (body.name) {
+                    await this.ctx.storage.put('meta_name', body.name)
+                    return { name: body.name }
+                }
+                return error(400, 'Missing name')
+            } catch (e) {
+                return error(400, 'Invalid JSON')
+            }
+        })
 
 	// `fetch` is the entry point for all requests to the Durable Object
 	fetch(request: Request): Response | Promise<Response> {

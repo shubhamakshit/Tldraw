@@ -26,15 +26,25 @@ export function ExportMenu({ roomId, theme }: ExportMenuProps) {
     }
 
     const handleShareLink = async () => {
+        const url = `${SERVER_URL}/#/${roomId}`
         try {
+            // Try native share or Web Share API first
             await Share.share({
                 title: 'Join my Whiteboard',
                 text: 'Collaborate with me on this board:',
-                url: `${SERVER_URL}/#/${roomId}`,
+                url: url,
                 dialogTitle: 'Share Board Link',
             })
         } catch (error) {
-            console.error('Error sharing link:', error)
+            // Fallback to clipboard if Share API fails (common on desktop)
+            console.log('Share API not available, falling back to clipboard', error)
+            try {
+                await navigator.clipboard.writeText(url)
+                alert('Link copied to clipboard!')
+            } catch (clipboardError) {
+                console.error('Failed to copy to clipboard:', clipboardError)
+                prompt('Copy this link:', url)
+            }
         }
     }
 
@@ -49,33 +59,68 @@ export function ExportMenu({ roomId, theme }: ExportMenuProps) {
                 return
             }
 
-            // 2. Use editor.toImage() 
-            // This is the standard API in recent tldraw versions to get a Blob directly
-            const result = await editor.toImage(shapeIds, {
+            // 2. Calculate Bounds to prevent OOM
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            shapeIds.forEach(id => {
+                const bounds = editor.getShapePageBounds(id)
+                if (bounds) {
+                    minX = Math.min(minX, bounds.x)
+                    minY = Math.min(minY, bounds.y)
+                    maxX = Math.max(maxX, bounds.x + bounds.w)
+                    maxY = Math.max(maxY, bounds.y + bounds.h)
+                }
+            })
+
+            const width = maxX - minX
+            const height = maxY - minY
+            
+            // Limit max dimension to ~3000px to avoid Android texture/memory limits
+            const MAX_DIMENSION = 3000
+            let scale = 2
+            if (width * scale > MAX_DIMENSION || height * scale > MAX_DIMENSION) {
+                scale = Math.min(MAX_DIMENSION / width, MAX_DIMENSION / height)
+                console.log(`Large board detected. Reducing scale to ${scale.toFixed(2)} to prevent crash.`)
+            }
+
+            // 3. Generate Image with safe scale
+            let result = await editor.toImage(shapeIds, {
                 format: 'png',
-                background: true, // Include background
-                scale: 2,         // High DPI for mobile
-                padding: 32,      // Padding around shapes
+                background: true,
+                scale: scale,
+                padding: 32,
             })
 
             if (!result || !result.blob) {
                 throw new Error('Failed to generate image blob')
             }
 
-            // 3. Convert Blob to Base64 for Capacitor
-            const base64Data = await blobToBase64(result.blob)
-            const pureBase64 = base64Data.split(',')[1] // Remove 'data:image/png;base64,' prefix
+            // 4. Check file size. If huge (>2MB), convert to JPEG to ensure shareability
+            if (result.blob.size > 2 * 1024 * 1024) {
+                console.log('Image too large (>2MB), switching to JPEG for compression')
+                result = await editor.toImage(shapeIds, {
+                    format: 'jpeg',
+                    quality: 0.8,
+                    background: true,
+                    scale: scale,
+                    padding: 32,
+                })
+            }
+
+            // 5. Convert Blob to Base64 for Capacitor
+            const base64Data = await blobToBase64(result.blob!)
+            const pureBase64 = base64Data.split(',')[1] 
             
-            const fileName = `board-${roomId}-${Date.now()}.png`
+            const ext = result.blob!.type === 'image/jpeg' ? 'jpg' : 'png'
+            const fileName = `board-${roomId}-${Date.now()}.${ext}`
             
-            // 4. Save to Capacitor Filesystem (Cache directory)
+            // 6. Save to Capacitor Filesystem
             const savedFile = await Filesystem.writeFile({
                 path: fileName,
                 data: pureBase64,
                 directory: Directory.Cache
             })
 
-            // 5. Share the file URI using native share sheet
+            // 7. Share
             await Share.share({
                 title: 'Export Board',
                 files: [savedFile.uri],
@@ -83,7 +128,7 @@ export function ExportMenu({ roomId, theme }: ExportMenuProps) {
 
         } catch (error) {
             console.error('Export failed:', error)
-            alert('Failed to export image')
+            alert('Failed to export image: ' + (error as any).message)
         } finally {
             setLoading(false)
         }

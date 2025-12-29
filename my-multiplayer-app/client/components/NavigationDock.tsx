@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
+import { getRooms } from '../pages/storageUtils' // Added getRooms import
 
 import { useEditor } from 'tldraw' // Added useEditor import
 import { colors } from '../constants/theme' // Corrected path
-import { FolderIcon, SettingsIcon, ShareIcon, CloseIcon } from './Icons'
+import { FolderIcon, SettingsIcon, CloseIcon } from './Icons' // Added ShareIcon
 import { RoomList } from './RoomList'
 import { SettingsMenu } from './SettingsMenu'
-import { ExportMenu } from './ExportMenu'
 
-type Tab = 'none' | 'files' | 'settings' | 'export'
+type Tab = 'none' | 'files' | 'settings'
 
 interface NavButtonProps {
     children: React.ReactNode
@@ -50,6 +50,7 @@ export function NavigationDock({ roomId }: { roomId: string }) {
     const editor = useEditor()
     const [activeTab, setActiveTab] = useState<Tab>('none')
     const [isDark, setIsDark] = useState(false)
+    const [roomName, setRoomName] = useState('')
 
     // Check dark mode
     useEffect(() => {
@@ -62,6 +63,24 @@ export function NavigationDock({ roomId }: { roomId: string }) {
         const interval = setInterval(checkDark, 1000)
         return () => clearInterval(interval)
     }, [editor])
+
+    // Monitor Room Name
+    useEffect(() => {
+        const updateName = () => {
+            const rooms = getRooms()
+            const room = rooms.find(r => r.id === roomId)
+            setRoomName(room?.name || 'Untitled Board')
+        }
+        updateName()
+        window.addEventListener('tldraw-room-update', updateName)
+        // Also listen for storage events in case it changes in another tab
+        window.addEventListener('storage', updateName)
+        
+        return () => {
+            window.removeEventListener('tldraw-room-update', updateName)
+            window.removeEventListener('storage', updateName)
+        }
+    }, [roomId])
 
     const theme = {
         bg: isDark ? colors.panelBgDark : colors.panelBg,
@@ -77,7 +96,6 @@ export function NavigationDock({ roomId }: { roomId: string }) {
         switch(activeTab) {
             case 'files': return 'My Boards'
             case 'settings': return 'Settings'
-            case 'export': return 'Share'
             default: return ''
         }
     }
@@ -101,15 +119,6 @@ export function NavigationDock({ roomId }: { roomId: string }) {
                     theme={theme}
                 >
                     <FolderIcon />
-                </NavButton>
-
-                <NavButton 
-                    active={activeTab === 'export'}
-                    onClick={() => setActiveTab(activeTab === 'export' ? 'none' : 'export')}
-                    title="Share & Export"
-                    theme={theme}
-                >
-                    <ShareIcon />
                 </NavButton>
 
                 <NavButton 
@@ -168,18 +177,15 @@ export function NavigationDock({ roomId }: { roomId: string }) {
                     </div>
                     
                     <div style={{
-                        fontSize: 11,
+                        fontSize: 14, // Increased font size slightly
+                        fontWeight: 500,
                         color: theme.text,
-                        opacity: 0.6,
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        background: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.05)',
-                        padding: '4px 8px',
-                        borderRadius: 4,
-                        fontFamily: 'monospace'
-                    }} title={window.location.href}>
-                        {window.location.href}
+                        padding: '0 4px',
+                    }} title={roomName}>
+                        {roomName}
                     </div>
                 </div>
 
@@ -196,13 +202,6 @@ export function NavigationDock({ roomId }: { roomId: string }) {
                     <SettingsMenu 
                         roomId={roomId}
                         isDark={isDark}
-                        theme={theme}
-                    />
-                )}
-
-                {activeTab === 'export' && (
-                    <ExportMenu 
-                        roomId={roomId}
                         theme={theme}
                     />
                 )}

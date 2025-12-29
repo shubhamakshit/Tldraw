@@ -4,6 +4,8 @@ import { uniqueId } from 'tldraw' // uniqueId from tldraw
 import { RoomMetadata, getRooms, saveRoom, updateRoomName, deleteRoom } from '../pages/storageUtils'
 import { colors } from '../constants/theme' // Corrected path
 import { PlusIcon, FileIcon, CloseIcon } from './Icons'
+import { SERVER_URL } from '../config' // Added import
+import { customConfirm } from '../utils/uiUtils' // Added customConfirm
 
 interface FileItemProps {
     room: RoomMetadata
@@ -152,10 +154,17 @@ export function RoomList({ currentRoomId, theme, onClose }: { currentRoomId: str
     const handleRename = (id: string, newName: string) => {
         const updated = updateRoomName(id, newName)
         setRooms(updated.sort((a, b) => b.lastVisited - a.lastVisited))
+
+        // Sync to server
+        fetch(`${SERVER_URL}/api/meta/${id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName })
+        }).catch(err => console.error('Failed to sync room name:', err))
     }
 
-    const handleDelete = (id: string) => {
-        if (confirm('Delete this board?')) {
+    const handleDelete = async (id: string) => {
+        if (await customConfirm('Delete this board?')) {
             const updated = deleteRoom(id)
             setRooms(updated)
             if (id === currentRoomId) navigate('/')
