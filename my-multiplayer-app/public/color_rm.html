@@ -2450,6 +2450,25 @@
             },
 
             togglePageLock() {
+                if (this.state.ownerId !== LiveSync.userId) return;
+                this.state.pageLocked = !this.state.pageLocked;
+                this.updateLockUI();
+                this.saveSessionState();
+            },
+
+            updateLockUI() {
+                const btn = document.getElementById('lockBtn');
+                const ctrl = document.getElementById('presenterControls');
+                if (this.state.ownerId === LiveSync.userId) {
+                    if (ctrl) ctrl.style.display = 'block';
+                    if (btn) {
+                        btn.className = this.state.pageLocked ? "btn btn-primary" : "btn";
+                        btn.innerHTML = this.state.pageLocked ? '<i class="bi bi-lock-fill"></i> Presenter Lock: ON' : '<i class="bi bi-unlock"></i> Presenter Lock: OFF';
+                    }
+                } else {
+                    if (ctrl) ctrl.style.display = 'none';
+                }
+            },
             
             async openSession(id) {
                 this.state.sessionId = id;
