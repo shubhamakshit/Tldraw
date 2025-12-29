@@ -881,7 +881,7 @@
                     if(this.state.tool === 'text') {
                         UI.showInput("Add Text", "Type something...", (text) => {
                             const img = this.state.images[this.state.idx]; const fs = this.state.textSize;
-                            img.history.push({ id: Date.now() + Math.random(), tool: 'text', text: text, x: pt.x, y: pt.y, size: fs, color: this.state.penColor, rotation: 0, w: fs*text.length*0.6, h: fs });
+                            img.history.push({ id: Date.now() + Math.random(), lastMod: Date.now(), tool: 'text', text: text, x: pt.x, y: pt.y, size: fs, color: this.state.penColor, rotation: 0, w: fs*text.length*0.6, h: fs });
                             this.saveCurrentImg(); this.setTool('none'); this.state.selection = [img.history.length-1]; syncSidebarToSelection(); this.render();
                         }); return;
                     }
@@ -950,10 +950,10 @@
                                 }
                                 
                                 if (hit) {
-                                    img.history.splice(i, 1);
+                                    // Soft Delete
+                                    st.deleted = true;
+                                    st.lastMod = Date.now();
                                     changed = true;
-                                    // Only delete one per move event to avoid wiping everything instantly? 
-                                    // No, usual behavior is "eraser deletes everything it touches"
                                 }
                             }
                             
@@ -994,7 +994,7 @@
                     } else if(this.state.tool==='shape') {
                         let w=pt.x-startPt.x, h=pt.y-startPt.y;
                         if(Math.abs(w)>2) {
-                            this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), tool:'shape', shapeType:this.state.shapeType, x:startPt.x, y:startPt.y, w:w, h:h, border:this.state.shapeBorder, fill:this.state.shapeFill, width:this.state.shapeWidth, rotation:0});
+                            this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), lastMod: Date.now(), tool:'shape', shapeType:this.state.shapeType, x:startPt.x, y:startPt.y, w:w, h:h, border:this.state.shapeBorder, fill:this.state.shapeFill, width:this.state.shapeWidth, rotation:0});
                             this.saveCurrentImg(); this.state.selection=[this.state.images[this.state.idx].history.length-1]; this.setTool('lasso'); syncSidebarToSelection();
                         }
                     } else if(this.state.tool==='capture') {
@@ -1004,7 +1004,7 @@
                         if(w > 5 && h > 5) this.addToBox(startPt.x, startPt.y, w, h);
                         this.render();
                     } else if(['pen','eraser'].includes(this.state.tool)) {
-                        this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize});
+                        this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), lastMod: Date.now(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize});
                         console.log(`Stroke added. History length: ${this.state.images[this.state.idx].history.length}`);
                         this.saveCurrentImg(); this.render();
                     }
@@ -1753,6 +1753,16 @@
                 // Ensure Sync is pointing to this new ID
                 if (window.SYNC && SYNC.roomId !== id) {
                     SYNC.switchRoom(id);
+
+                    // Re-upload base file to new room if content exists
+                    if (this.state.images && this.state.images.length > 0 && this.state.images[0].blob) {
+                        console.log('ColorRM Sync: Re-uploading base file for new Room ID:', id);
+                        fetch(`/api/color_rm/upload/${id}`, {
+                            method: 'POST',
+                            body: this.state.images[0].blob,
+                            headers: { 'Content-Type': this.state.images[0].blob.type }
+                        }).catch(err => console.error('Failed to re-upload base file:', err));
+                    }
                 }
 
                 if(openPicker) document.getElementById('fileIn').click();
@@ -1960,6 +1970,7 @@
 
                 const hist = this.state.images[this.state.idx].history;
                 hist.forEach((st, idx) => {
+                    if (st.deleted) return;
                     let dx=0, dy=0;
                     if(this.state.selection.includes(idx) && this.dragOffset) {
                         dx = this.dragOffset.x; dy = this.dragOffset.y;
@@ -2078,7 +2089,13 @@
             },
             deleteSelected() {
                 const img = this.state.images[this.state.idx];
-                this.state.selection.sort((a,b)=>b-a).forEach(i => img.history.splice(i,1));
+                this.state.selection.forEach(i => {
+                    const item = img.history[i];
+                    if (item) {
+                        item.deleted = true;
+                        item.lastMod = Date.now();
+                    }
+                });
                 this.state.selection = [];
                 document.getElementById('contextToolbar').style.display = 'none';
                 this.saveCurrentImg(); this.render();
@@ -2089,6 +2106,8 @@
                 this.state.selection.forEach(i => {
                     const item = JSON.parse(JSON.stringify(img.history[i]));
                     item.id = Date.now() + Math.random(); // NEW ID
+                    item.lastMod = Date.now();
+                    item.deleted = false; // Reset deleted just in case
                     if(!cut) {
                         if(item.pts) item.pts.forEach(p=>{p.x+=20; p.y+=20});
                         else { item.x+=20; item.y+=20; }

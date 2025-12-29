@@ -97,41 +97,45 @@ const SYNC = {
 
                                 if (App.state.images[idx]) {
                                     const localHistory = App.state.images[idx].history || [];
-                                    // Use a Map for fast lookup, checking both ID and structure for legacy items
-                                    const localIds = new Set(localHistory.map(h => h.id).filter(Boolean));
+                                    const localMap = new Map();
+                                    localHistory.forEach(item => {
+                                        if (item.id) localMap.set(item.id, item);
+                                    });
                                     
                                     let newItemsCount = 0;
-                                    const newHistory = [...localHistory]; // Clone
+                                    let updatedItemsCount = 0;
 
-                                    remoteHistory.forEach(item => {
-                                        // Strategy:
-                                        // 1. If item has ID and it's NOT in local -> Add it
-                                        // 2. If item has NO ID (very old legacy) -> Skip or add? 
-                                        //    We force added IDs in loadSessionPages, so mostly should have IDs.
-                                        //    If remote is fresh legacy, it might lack ID. 
-                                        //    Safe bet: Only add if ID is present and new.
-                                        
-                                        if (item.id && !localIds.has(item.id)) {
-                                            newHistory.push(item);
-                                            localIds.add(item.id);
+                                    remoteHistory.forEach(remoteItem => {
+                                        if (!remoteItem.id) {
+                                            // Legacy fallback: Only add if history is empty
+                                            if (localHistory.length === 0) localHistory.push(remoteItem);
+                                            return;
+                                        }
+
+                                        const localItem = localMap.get(remoteItem.id);
+
+                                        if (!localItem) {
+                                            // New Item
+                                            localHistory.push(remoteItem);
+                                            localMap.set(remoteItem.id, remoteItem);
                                             newItemsCount++;
-                                        } 
-                                        // Fallback: If local is empty, just take remote (initial load)
-                                        else if (localHistory.length === 0) {
-                                             newHistory.push(item);
-                                             if (item.id) localIds.add(item.id);
-                                             newItemsCount++;
+                                        } else {
+                                            // Update existing item (Last-Write-Wins)
+                                            const remoteTime = remoteItem.lastMod || 0;
+                                            const localTime = localItem.lastMod || 0;
+
+                                            if (remoteTime > localTime) {
+                                                Object.assign(localItem, remoteItem);
+                                                updatedItemsCount++;
+                                            }
                                         }
                                     });
                                     
-                                    if (newItemsCount > 0 || (localHistory.length === 0 && remoteHistory.length > 0)) {
-                                        console.log(`ColorRM Sync: Merged ${newItemsCount} new strokes from remote for Page ${idx}`);
-                                        // Sort to ensure consistent order if timestamps available? 
-                                        // Nah, append order is usually fine for drawing.
-                                        App.state.images[idx].history = newHistory;
+                                    if (newItemsCount > 0 || updatedItemsCount > 0) {
+                                        console.log(`ColorRM Sync: Page ${idx} - Added ${newItemsCount}, Updated ${updatedItemsCount}`);
+                                        // App.render() is called at end of this block globally, so no need to call here
                                     }
                                 } else {
-                                    // Page doesn't exist locally yet? (Could happen during partial load)
                                     console.warn(`ColorRM Sync: Received history for non-existent page ${idx}`);
                                 }
                             });
