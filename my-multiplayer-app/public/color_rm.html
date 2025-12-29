@@ -166,6 +166,16 @@
         .opt-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
         .opt-input { background: rgba(0,0,0,0.3); border: 1px solid #444; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; }
 
+        /* Multi-select Dashboard Styles */
+        .session-list.active-multi .session-item { padding-left: 40px; }
+        .session-item { position: relative; padding: 12px; border-bottom: 1px solid #333; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.2s; }
+        .session-item:hover { background: rgba(255,255,255,0.03); }
+        .session-item.selected { background: rgba(59, 130, 246, 0.1); }
+        .session-checkbox { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; cursor: pointer; display: none; }
+        .active-multi .session-checkbox { display: block; }
+        .multi-delete-bar { display: none; justify-content: space-between; align-items: center; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); padding: 10px; border-radius: 8px; margin-top: 10px; }
+        .multi-delete-bar.show { display: flex; }
+
         /* Hide Input Number Spinner */
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
@@ -233,9 +243,21 @@
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <h4 style="color:var(--text-muted); font-size:0.7rem; text-transform:uppercase; margin:0;">Recent Projects</h4>
-                <button class="btn btn-sm" onclick="window.App.reuploadBaseFile()" title="Repair Server File"><i class="bi bi-cloud-upload"></i> Re-upload Base</button>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-sm" onclick="window.App.reuploadBaseFile()" title="Repair Server File"><i class="bi bi-cloud-upload"></i> Restore</button>
+                    <button id="dashEditBtn" class="btn btn-sm" onclick="window.App.toggleMultiSelect()"><i class="bi bi-pencil-square"></i> Edit</button>
+                </div>
             </div>
-            <div id="sessionList" style="flex:1; overflow:auto; min-height:200px; border-top:1px solid var(--border);"></div>
+            
+            <div id="sessionList" class="session-list" style="flex:1; overflow:auto; min-height:200px; border-top:1px solid var(--border);"></div>
+
+            <div id="multiDeleteBar" class="multi-delete-bar">
+                <span id="multiDeleteCount" style="font-size:0.8rem; color:#ef4444; font-weight:600;">0 selected</span>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-sm" onclick="window.App.selectAllSessions()" style="background:none; border-color:#444;">All</button>
+                    <button class="btn btn-sm" onclick="window.App.deleteSelectedSessions()" style="background:#ef4444; border-color:#ef4444; color:white;">Delete</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -548,10 +570,16 @@
                     <h4>Canvas Stats</h4>
                     <div style="font-size:0.75rem; color:#888; display:grid; gap:8px;">
                         <div>Current Page: <span id="debugPageIdx" style="color:white;"></span></div>
-                        <div>Total Pages: <span id="debugPageCount" style="color:white;"></span></div>
-                        <div>History Items (Current): <span id="debugHistoryCount" style="color:white;"></span></div>
-                        <div>Selection: <span id="debugSelectionCount" style="color:white;"></span></div>
+                        <div>Local Total: <span id="debugPageCount" style="color:white;"></span></div>
+                        <div>Remote Total: <span id="debugRemoteCount" style="color:var(--primary);"></span></div>
+                        <div>Remote Owner: <span id="debugRemoteOwner" style="font-family:monospace; font-size:0.6rem;"></span></div>
+                        <div>History Items: <span id="debugHistoryCount" style="color:white;"></span></div>
                     </div>
+                </div>
+
+                <div class="control-section">
+                    <h4>Storage Key Check</h4>
+                    <div id="debugKeyCheck" style="font-size:0.7rem; color:#aaa; display:grid; gap:4px;"></div>
                 </div>
 
                 <div class="control-section">
@@ -781,6 +809,8 @@
                 if (!project || this.isInitializing) return;
 
                 const metadata = project.get("metadata").toObject();
+                console.log(`Liveblocks Sync: Remote PageCount=${metadata.pageCount}, Local PageCount=${App.state.images.length}`);
+                
                 App.state.projectName = metadata.name;
                 App.state.pageLocked = metadata.pageLocked;
                 App.state.ownerId = metadata.ownerId;
@@ -790,7 +820,9 @@
                     App.loadPage(metadata.idx, false);
                 }
                 
+                // AUTO-RETRY base file fetch if remote has pages but we don't
                 if (metadata.pageCount > 0 && App.state.images.length === 0) {
+                    console.log("Liveblocks: Remote has content but local is empty. Triggering fetch...");
                     App.retryBaseFetch();
                 }
 
@@ -882,7 +914,8 @@
                 selection: [], dlSelection: [], isLivePreview: false, guideLines: [], activeShapeRatio: false, previewOn: false,
                 bookmarks: [], activeSideTab: 'tools', projectName: "Untitled",
                 clipboardBox: [],
-                ownerId: null, pageLocked: false
+                ownerId: null, pageLocked: false,
+                selectedSessions: new Set(), isMultiSelect: false
             },
 
             cache: { currentImg: null, lab: null },
@@ -990,24 +1023,134 @@
             async loadSessionList() {
                 document.getElementById('dashUserId').innerText = LiveSync.userId;
                 document.getElementById('dashProjId').innerText = this.state.sessionId;
+                this.state.selectedSessions = new Set(); // Reset selection
 
                 const tx = this.db.transaction('sessions', 'readonly');
                 const req = tx.objectStore('sessions').getAll();
                 req.onsuccess = () => {
                     const l = document.getElementById('sessionList'); l.innerHTML = '';
-                    if(!req.result || req.result.length === 0) l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
+                    if(!req.result || req.result.length === 0) {
+                        l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
+                        document.getElementById('dashEditBtn').style.display = 'none';
+                        return;
+                    }
+                    document.getElementById('dashEditBtn').style.display = 'block';
                     req.result.sort((a,b) => b.lastMod - a.lastMod).forEach(s => {
                         const isMine = s.ownerId === LiveSync.userId;
                         const badge = isMine ? '<span class="owner-badge">Owner</span>' : `<span class="other-badge">Shared</span>`;
-                        l.innerHTML += `<div style="padding:12px; border-bottom:1px solid #333; cursor:pointer; display:flex; justify-content:space-between; align-items:center;" onclick="window.App.switchProject('${s.ownerId}', '${s.id}')">
+                        
+                        const item = document.createElement('div');
+                        item.className = 'session-item';
+                        item.id = `sess_${s.id}`;
+                        item.onclick = (e) => {
+                            if (this.state.isMultiSelect) {
+                                e.stopPropagation();
+                                this.toggleSessionSelection(s.id);
+                            } else {
+                                this.switchProject(s.ownerId, s.id);
+                            }
+                        };
+
+                        item.innerHTML = `
+                            <input type="checkbox" class="session-checkbox" onclick="event.stopPropagation()" onchange="window.App.toggleSessionSelection('${s.id}')">
                             <div>
                                 <div style="font-weight:600; color:white;">${s.name} ${badge}</div>
                                 <div style="font-size:0.7rem; color:#666; font-family:monospace;">${s.id}</div>
                             </div>
                             <div style="font-size:0.7rem; color:#888;">${s.pageCount} pgs</div>
-                        </div>`;
+                        `;
+                        l.appendChild(item);
                     });
+                    this.updateMultiSelectUI();
                 };
+            },
+
+            toggleMultiSelect() {
+                this.state.isMultiSelect = !this.state.isMultiSelect;
+                const list = document.getElementById('sessionList');
+                const bar = document.getElementById('multiDeleteBar');
+                const btn = document.getElementById('dashEditBtn');
+
+                list.classList.toggle('active-multi', this.state.isMultiSelect);
+                bar.classList.toggle('show', this.state.isMultiSelect);
+                btn.innerHTML = this.state.isMultiSelect ? '<i class="bi bi-x-circle"></i> Cancel' : '<i class="bi bi-pencil-square"></i> Edit';
+                
+                if (!this.state.isMultiSelect) {
+                    this.state.selectedSessions.clear();
+                    this.updateMultiSelectUI();
+                }
+            },
+
+            toggleSessionSelection(id) {
+                if (this.state.selectedSessions.has(id)) this.state.selectedSessions.delete(id);
+                else this.state.selectedSessions.add(id);
+                this.updateMultiSelectUI();
+            },
+
+            selectAllSessions() {
+                const tx = this.db.transaction('sessions', 'readonly');
+                const req = tx.objectStore('sessions').getAll();
+                req.onsuccess = () => {
+                    req.result.forEach(s => this.state.selectedSessions.add(s.id));
+                    this.updateMultiSelectUI();
+                };
+            },
+
+            updateMultiSelectUI() {
+                const count = this.state.selectedSessions.size;
+                document.getElementById('multiDeleteCount').innerText = `${count} selected`;
+                
+                // Update Checkboxes and classes
+                const items = document.querySelectorAll('.session-item');
+                items.forEach(el => {
+                    const id = el.id.replace('sess_', '');
+                    const isSelected = this.state.selectedSessions.has(id);
+                    el.classList.toggle('selected', isSelected);
+                    const cb = el.querySelector('.session-checkbox');
+                    if (cb) cb.checked = isSelected;
+                });
+            },
+
+            async deleteSelectedSessions() {
+                const count = this.state.selectedSessions.size;
+                if (count === 0) return;
+                if (!confirm(`Permanently delete ${count} project(s) and ALL their drawing data? This cannot be undone.`)) return;
+
+                UI.toggleLoader(true, "Deleting...");
+                
+                for (const id of this.state.selectedSessions) {
+                    // 1. Delete Pages (Blobs)
+                    const pagesTx = this.db.transaction('pages', 'readwrite');
+                    const pagesStore = pagesTx.objectStore('pages');
+                    const index = pagesStore.index('sessionId');
+                    const pagesReq = index.getAll(id);
+                    
+                    await new Promise(r => {
+                        pagesReq.onsuccess = async () => {
+                            for (const pg of pagesReq.result) {
+                                pagesStore.delete(pg.id);
+                            }
+                            r();
+                        };
+                    });
+
+                    // 2. Delete Session Metadata
+                    await this.dbPut('sessions', { deleteId: id }); // Trigger tx
+                    const sessTx = this.db.transaction('sessions', 'readwrite');
+                    sessTx.objectStore('sessions').delete(id);
+                }
+
+                this.state.isMultiSelect = false;
+                this.state.selectedSessions.clear();
+                
+                // If active project was deleted, refresh app
+                if (this.state.selectedSessions.has(this.state.sessionId)) {
+                    location.hash = '';
+                    location.reload();
+                } else {
+                    await this.loadSessionList();
+                    UI.toggleLoader(false);
+                }
             },
 
             async switchProject(ownerId, projectId) {
@@ -1194,7 +1337,7 @@
             renderDebug() {
                 if (this.state.activeSideTab !== 'debug') return;
                 
-                document.getElementById('debugRoomId').innerText = this.state.sessionId || "None";
+                document.getElementById('debugRoomId').innerText = `room_${LiveSync.ownerId}`;
                 document.getElementById('debugUserId').innerText = LiveSync.userId || "None";
                 document.getElementById('debugStatus').innerText = LiveSync.room ? LiveSync.room.getStorageStatus() : "Disconnected";
                 document.getElementById('debugStatus').style.color = (LiveSync.room && LiveSync.room.getStorageStatus() === 'synchronized') ? 'var(--success)' : 'var(--primary)';
@@ -1204,13 +1347,25 @@
                 
                 const currentImg = this.state.images[this.state.idx];
                 document.getElementById('debugHistoryCount').innerText = currentImg ? (currentImg.history || []).length : 0;
-                document.getElementById('debugSelectionCount').innerText = this.state.selection.length;
 
                 // LiveMap Trace (Refactored for User-Owned Room Model)
                 const mapEl = document.getElementById('debugLiveMap');
+                const keyEl = document.getElementById('debugKeyCheck');
+                
                 if (LiveSync.root && LiveSync.projectId) {
-                    const project = LiveSync.getProject();
+                    const projects = LiveSync.root.get("projects");
+                    const project = projects.get(LiveSync.projectId);
+                    
+                    keyEl.innerHTML = `
+                        <div>In Root.projects: <span style="color:${projects.has(LiveSync.projectId) ? 'var(--success)' : '#ef4444'}">${projects.has(LiveSync.projectId)}</span></div>
+                        <div>Local projId: <span style="color:var(--primary)">${LiveSync.projectId}</span></div>
+                    `;
+
                     if (project) {
+                        const meta = project.get("metadata").toObject();
+                        document.getElementById('debugRemoteCount').innerText = meta.pageCount;
+                        document.getElementById('debugRemoteOwner').innerText = meta.ownerId;
+
                         const ph = project.get("pagesHistory");
                         if (ph) {
                             let html = `<b>Project: ${LiveSync.projectId}</b><br>`;
@@ -1219,8 +1374,6 @@
                                 html += `• pg ${key}: ${val.length} items<br>`;
                             });
                             mapEl.innerHTML = html;
-                        } else {
-                            mapEl.innerHTML = "pagesHistory not found in project.";
                         }
                     } else {
                         mapEl.innerHTML = "Waiting for project data...";
