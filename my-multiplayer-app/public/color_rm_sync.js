@@ -86,24 +86,53 @@ const SYNC = {
                          if (this.roomId) await App.openSession(this.roomId);
                     }
 
-                    // 1. Apply History Map to Images
+                    // 1. Apply History Map to Images (Merge Strategy)
                     if (message.state.history_map) {
                         const pagesWithHistory = Object.keys(message.state.history_map);
-                        console.log(`ColorRM Sync: Server Sent History for ${pagesWithHistory.length} pages.`);
                         
                         if (App.state.images) {
                             pagesWithHistory.forEach(pageIdx => {
                                 const idx = parseInt(pageIdx);
-                                const history = message.state.history_map[pageIdx];
-                                
-                                console.log(`ColorRM Sync: Received ${history.length} strokes for Page ${idx}`);
+                                const remoteHistory = message.state.history_map[pageIdx];
 
                                 if (App.state.images[idx]) {
-                                    const oldLen = (App.state.images[idx].history || []).length;
-                                    console.log(`ColorRM Sync: Page ${idx} - Updating strokes. Local: ${oldLen} -> Server: ${history.length}`);
-                                    App.state.images[idx].history = history;
+                                    const localHistory = App.state.images[idx].history || [];
+                                    // Use a Map for fast lookup, checking both ID and structure for legacy items
+                                    const localIds = new Set(localHistory.map(h => h.id).filter(Boolean));
+                                    
+                                    let newItemsCount = 0;
+                                    const newHistory = [...localHistory]; // Clone
+
+                                    remoteHistory.forEach(item => {
+                                        // Strategy:
+                                        // 1. If item has ID and it's NOT in local -> Add it
+                                        // 2. If item has NO ID (very old legacy) -> Skip or add? 
+                                        //    We force added IDs in loadSessionPages, so mostly should have IDs.
+                                        //    If remote is fresh legacy, it might lack ID. 
+                                        //    Safe bet: Only add if ID is present and new.
+                                        
+                                        if (item.id && !localIds.has(item.id)) {
+                                            newHistory.push(item);
+                                            localIds.add(item.id);
+                                            newItemsCount++;
+                                        } 
+                                        // Fallback: If local is empty, just take remote (initial load)
+                                        else if (localHistory.length === 0) {
+                                             newHistory.push(item);
+                                             if (item.id) localIds.add(item.id);
+                                             newItemsCount++;
+                                        }
+                                    });
+                                    
+                                    if (newItemsCount > 0 || (localHistory.length === 0 && remoteHistory.length > 0)) {
+                                        console.log(`ColorRM Sync: Merged ${newItemsCount} new strokes from remote for Page ${idx}`);
+                                        // Sort to ensure consistent order if timestamps available? 
+                                        // Nah, append order is usually fine for drawing.
+                                        App.state.images[idx].history = newHistory;
+                                    }
                                 } else {
-                                    console.error(`ColorRM Sync: Critical Error - Page ${idx} not found locally.`);
+                                    // Page doesn't exist locally yet? (Could happen during partial load)
+                                    console.warn(`ColorRM Sync: Received history for non-existent page ${idx}`);
                                 }
                             });
                         }

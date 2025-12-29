@@ -1616,6 +1616,16 @@
                     const q = this.db.transaction('pages').objectStore('pages').index('sessionId').getAll(id);
                     q.onsuccess = () => {
                         this.state.images = q.result.sort((a,b)=>a.pageIndex-b.pageIndex);
+                        
+                        // Retroactively assign IDs to legacy items
+                        this.state.images.forEach(img => {
+                            if (img.history) {
+                                img.history.forEach(item => {
+                                    if (!item.id) item.id = Date.now() + '_' + Math.random();
+                                });
+                            }
+                        });
+
                         console.log(`Loaded ${this.state.images.length} pages from DB.`);
                         document.getElementById('pageTotal').innerText = '/ ' + this.state.images.length;
                         if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
@@ -2078,6 +2088,7 @@
                 const newIds = [];
                 this.state.selection.forEach(i => {
                     const item = JSON.parse(JSON.stringify(img.history[i]));
+                    item.id = Date.now() + Math.random(); // NEW ID
                     if(!cut) {
                         if(item.pts) item.pts.forEach(p=>{p.x+=20; p.y+=20});
                         else { item.x+=20; item.y+=20; }
