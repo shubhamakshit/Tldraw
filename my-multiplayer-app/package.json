@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "concurrently \"cross-env VITE_APP_ENV=local vite\" \"tsc --watch\"",
+		"auto-dev": "node cmd/dev_auto_update.mjs",
 		"build": "node -e \"console.log(process.env.VITE_APP_ENV === 'local' ? 'Building for LOCAL (192.168.0.169)...' : 'Building for REMOTE (tshonq.duckdns.org)...')\" && concurrently \"tsc\" \"vite build\"",
 		"build:local": "cross-env VITE_APP_ENV=local npm run build",
 		"preview": "vite preview",

@@ -94,6 +94,9 @@
         .shape-btn.active { background: var(--primary); color: white; }
 
         /* Layout */
+        /* Hide Liveblocks Badge */
+        #liveblocks-badge { display: none !important; pointer-events: none !important; visibility: hidden !important; }
+
         header { height: 50px; background: var(--bg-panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; z-index: 50; flex-shrink: 0; }
         .workspace { display: flex; flex: 1; overflow: hidden; position: relative; }
         .sidebar { width: 320px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 40; height: 100%; }
