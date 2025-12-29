@@ -907,8 +907,8 @@
                     div.className = 'remote-cursor';
                     
                     // Map canvas coordinates to screen coordinates
-                    const x = (presence.cursor.x * this.state.zoom + this.state.pan.x) * (rect.width / App.state.viewW) + rect.left - viewRect.left;
-                    const y = (presence.cursor.y * this.state.zoom + this.state.pan.y) * (rect.height / App.state.viewH) + rect.top - viewRect.top;
+                    const x = (presence.cursor.x * App.state.zoom + App.state.pan.x) * (rect.width / App.state.viewW) + rect.left - viewRect.left;
+                    const y = (presence.cursor.y * App.state.zoom + App.state.pan.y) * (rect.height / App.state.viewH) + rect.top - viewRect.top;
 
                     div.style.left = `${x}px`;
                     div.style.top = `${y}px`;
