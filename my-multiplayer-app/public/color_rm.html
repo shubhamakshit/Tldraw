@@ -590,44 +590,78 @@
                 </div>
             </div>
 
-            <!-- Debug Panel -->
+            <!-- Trace Panel -->
             <div class="sidebar-content" id="panelDebug" style="display:none">
                 <div class="control-section">
-                    <h4>Session Info</h4>
-                    <div style="font-size:0.75rem; color:#888; display:grid; gap:8px;">
-                        <div>Room ID: <span id="debugRoomId" style="color:var(--primary); font-family:monospace; word-break:break-all;"></span></div>
-                        <div>User ID: <span id="debugUserId" style="color:var(--accent); font-family:monospace; word-break:break-all;"></span></div>
-                        <div>Status: <span id="debugStatus" style="font-weight:600;"></span></div>
+                    <h4>Session Trace</h4>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                        <div style="background:#0a0a0a; border:1px solid #222; padding:10px; border-radius:4px;">
+                            <span style="font-size:0.6rem; color:#888; text-transform:uppercase; font-weight:700; display:block; margin-bottom:4px;">Sync Status</span>
+                            <span id="debugStatus" style="font-size:0.8rem; font-weight:800; color:#fff;">--</span>
+                        </div>
+                        <div style="background:#0a0a0a; border:1px solid #222; padding:10px; border-radius:4px;">
+                            <span style="font-size:0.6rem; color:#888; text-transform:uppercase; font-weight:700; display:block; margin-bottom:4px;">Current Page</span>
+                            <span id="debugPageIdx" style="font-size:0.8rem; font-weight:800; color:#fff;">--</span>
+                        </div>
+                    </div>
+                    
+                    <div style="background:#0a0a0a; border:1px solid #222; padding:12px; border-radius:4px; margin-top:8px;">
+                        <span style="font-size:0.6rem; color:#888; text-transform:uppercase; font-weight:700; display:block; margin-bottom:6px;">Room Identity</span>
+                        <div id="debugRoomId" style="font-size:0.7rem; font-family:monospace; color:#fff; word-break:break-all; line-height:1.4;">--</div>
+                    </div>
+
+                    <div style="background:#0a0a0a; border:1px solid #222; padding:12px; border-radius:4px; margin-top:8px;">
+                        <span style="font-size:0.6rem; color:#888; text-transform:uppercase; font-weight:700; display:block; margin-bottom:6px;">User Reference</span>
+                        <div id="debugUserId" style="font-size:0.7rem; font-family:monospace; color:#fff; word-break:break-all;">--</div>
                     </div>
                 </div>
 
                 <div class="control-section">
-                    <h4>Canvas Stats</h4>
-                    <div style="font-size:0.75rem; color:#888; display:grid; gap:8px;">
-                        <div>Current Page: <span id="debugPageIdx" style="color:white;"></span></div>
-                        <div>Local Total: <span id="debugPageCount" style="color:white;"></span></div>
-                        <div>Remote Total: <span id="debugRemoteCount" style="color:var(--primary);"></span></div>
-                        <div>Remote Owner: <span id="debugRemoteOwner" style="font-family:monospace; font-size:0.6rem;"></span></div>
-                        <div>History Items: <span id="debugHistoryCount" style="color:white;"></span></div>
+                    <h4>Object Manifest</h4>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                        <div style="background:#0a0a0a; border:1px solid #222; padding:10px; border-radius:4px;">
+                            <span style="font-size:0.6rem; color:#888; text-transform:uppercase; font-weight:700; display:block; margin-bottom:4px;">Local Total</span>
+                            <span id="debugPageCount" style="font-size:0.8rem; font-weight:800; color:#fff;">--</span>
+                        </div>
+                        <div style="background:#0a0a0a; border:1px solid #222; padding:10px; border-radius:4px;">
+                            <span style="font-size:0.6rem; color:#888; text-transform:uppercase; font-weight:700; display:block; margin-bottom:4px;">History Items</span>
+                            <span id="debugHistoryCount" style="font-size:0.8rem; font-weight:800; color:#fff;">--</span>
+                        </div>
+                    </div>
+                    
+                    <div style="background:#0a0a0a; border:1px solid #222; padding:12px; border-radius:4px; margin-top:8px;">
+                        <span style="font-size:0.6rem; color:#888; text-transform:uppercase; font-weight:700; display:block; margin-bottom:6px;">Remote Persistence</span>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.7rem; color:#888;">Remote Count:</span>
+                            <span id="debugRemoteCount" style="font-size:0.75rem; font-weight:800; color:#fff;">--</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+                            <span style="font-size:0.7rem; color:#888;">Owner ID:</span>
+                            <span id="debugRemoteOwner" style="font-size:0.6rem; font-family:monospace; color:#fff;">--</span>
+                        </div>
                     </div>
                 </div>
 
                 <div class="control-section">
-                    <h4>Storage Key Check</h4>
-                    <div id="debugKeyCheck" style="font-size:0.7rem; color:#aaa; display:grid; gap:4px;"></div>
-                </div>
-
-                <div class="control-section">
-                    <h4>Storage Sync</h4>
-                    <div id="debugLiveMap" style="font-size:0.7rem; font-family:monospace; color:#666; max-height:200px; overflow:auto;">
-                        Initializing storage trace...
+                    <h4>Storage Integrity</h4>
+                    <div id="debugKeyCheck" style="font-size:0.65rem; color:#fff; display:grid; gap:6px; background:#000; border:1px solid #222; padding:12px; border-radius:4px;">
+                        --
                     </div>
                 </div>
 
                 <div class="control-section">
-                    <button class="btn btn-sm" style="width:100%; justify-content:center;" onclick="window.App.render()">Force Redraw</button>
-                    <button class="btn btn-sm" style="width:100%; justify-content:center; margin-top:8px;" onclick="window.LiveSync.syncHistory(); window.App.render();">Sync History Now</button>
-                    <button class="btn btn-sm" style="width:100%; justify-content:center; margin-top:8px; border-color:#ef4444; color:#ef4444" onclick="location.reload()">Hard Reload</button>
+                    <h4>Live Map Trace</h4>
+                    <div id="debugLiveMap" style="font-size:0.65rem; font-family:monospace; color:#00ff00; max-height:180px; overflow:auto; background:#000; border:1px solid #222; padding:12px; border-radius:4px; line-height:1.5;">
+                        Initializing trace...
+                    </div>
+                </div>
+
+                <div class="control-section" style="margin-top:auto;">
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                        <button class="btn btn-outline" style="justify-content:center; font-size:0.7rem; padding:10px;" onclick="window.App.render()">Redraw</button>
+                        <button class="btn btn-outline" style="justify-content:center; font-size:0.7rem; padding:10px;" onclick="window.LiveSync.syncHistory(); window.App.render();">Sync Now</button>
+                    </div>
+                    <button class="btn btn-danger" style="width:100%; justify-content:center; margin-top:8px; font-size:0.7rem; padding:10px;" onclick="location.reload()">Force Hard Reload</button>
                 </div>
             </div>
 
