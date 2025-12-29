@@ -71,6 +71,13 @@ export class TldrawDurableObject extends DurableObject {
                 return error(400, 'Invalid JSON')
             }
         })
+        .post('/internal/nuke', async () => {
+            await this.ctx.storage.deleteAll();
+            // Force reload on next connect
+            this.roomPromise = null;
+            this.roomId = null;
+            return new Response(JSON.stringify({ success: true }));
+        })
 
 	// `fetch` is the entry point for all requests to the Durable Object
 	fetch(request: Request): Response | Promise<Response> {

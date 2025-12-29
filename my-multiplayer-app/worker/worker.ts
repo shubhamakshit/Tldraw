@@ -17,12 +17,8 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	},
 })
     .get('/api/hello', () => new Response('Hello from Worker!'))
-    .get('/_storage-info', async (request, env) => {
-        const list = await env.TLDRAW_BUCKET.list();
-        return new Response(JSON.stringify(list.objects, null, 2), { headers: { 'Content-Type': 'application/json' } });
-    })
-	// requests to /connect are routed to the Durable Object, and handle realtime websocket syncing
-	.get('/api/connect/:roomId', (request, env) => {
+    // requests to /connect are routed to the Durable Object, and handle realtime websocket syncing
+    .get('/api/connect/:roomId', (request, env) => {
 		const id = env.TLDRAW_DURABLE_OBJECT.idFromName(request.params.roomId)
 		const room = env.TLDRAW_DURABLE_OBJECT.get(id)
 		return room.fetch(request.url, { headers: request.headers, body: request.body })
@@ -45,24 +41,65 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return room.fetch(request.url, { headers: request.headers, body: request.body })
 	})
 
-    // Storage Info Route
-    .get('/api/storage-info', async (request, env) => {
-        console.log("Worker: Received request for /api/storage-info");
+    // Maintainer Stats Route
+    .get('/api/maintainer/stats', async (request, env) => {
         try {
             const list = await env.TLDRAW_BUCKET.list();
-            const objects = list.objects.map(obj => ({
-                key: obj.key,
-                size: obj.size,
-                uploaded: obj.uploaded
-            }));
-            
+            let totalSize = 0;
+            const objects = list.objects.map(obj => {
+                totalSize += obj.size;
+                return {
+                    key: obj.key,
+                    size: obj.size,
+                    uploaded: obj.uploaded
+                };
+            });
+
             return new Response(JSON.stringify({
-                bucket: env.TLDRAW_BUCKET.constructor.name,
-                total_objects: objects.length,
-                objects: objects
-            }, null, 2), {
+                status: "ok",
+                r2: {
+                    bucket_name: "TLDRAW_BUCKET",
+                    object_count: objects.length,
+                    total_size_bytes: totalSize,
+                    objects: objects.slice(0, 100)
+                },
+                environment: {
+                    platform: "Cloudflare Workers",
+                    uptime: performance.now()
+                }
+            }), {
                 headers: { 'Content-Type': 'application/json' }
             });
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    // Maintainer: Delete R2 Object
+    .delete('/api/maintainer/r2/:key', async (request, env) => {
+        try {
+            const key = decodeURIComponent(request.params.key);
+            await env.TLDRAW_BUCKET.delete(key);
+            return new Response(JSON.stringify({ success: true }));
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    // Maintainer: Nuke DO Storage
+    .post('/api/maintainer/nuke-do/:type/:roomId', async (request, env) => {
+        try {
+            const { type, roomId } = request.params;
+            let doNamespace;
+            if (type === 'tldraw') doNamespace = env.TLDRAW_DURABLE_OBJECT;
+            else if (type === 'color_rm') doNamespace = env.COLORM_DURABLE_OBJECT;
+            else throw new Error("Invalid DO type");
+
+            const id = doNamespace.idFromName(roomId);
+            const stub = doNamespace.get(id);
+            
+            // We'll send a special internal header/request to the DO to tell it to nuke itself
+            return stub.fetch('http://do/internal/nuke', { method: 'POST' });
         } catch (e: any) {
             return new Response(JSON.stringify({ error: e.message }), { status: 500 });
         }
@@ -108,29 +145,6 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	// New routes for color_rm base file sync
 	.post('/api/color_rm/upload/:roomId', handleColorRmUpload)
 	.get('/api/color_rm/base_file/:roomId', handleColorRmDownload)
-
-    // Storage Info Route
-    .get('/api/storage-info', async (request, env) => {
-        console.log("Worker: Received request for /api/storage-info");
-        try {
-            const list = await env.TLDRAW_BUCKET.list();
-            const objects = list.objects.map(obj => ({
-                key: obj.key,
-                size: obj.size,
-                uploaded: obj.uploaded
-            }));
-            
-            return new Response(JSON.stringify({
-                bucket: env.TLDRAW_BUCKET.constructor.name,
-                total_objects: objects.length,
-                objects: objects
-            }, null, 2), {
-                headers: { 'Content-Type': 'application/json' }
-            });
-        } catch (e: any) {
-            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
-        }
-    })
 
 	// assets can be uploaded to the bucket under /uploads:
 	.post('/api/uploads/:uploadId', handleAssetUpload)

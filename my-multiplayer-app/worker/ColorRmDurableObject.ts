@@ -32,6 +32,12 @@ export class ColorRmDurableObject extends DurableObject {
             }
             return this.handleConnect(request)
         })
+        .post('/internal/nuke', async () => {
+            await this.ctx.storage.deleteAll();
+            this.state = null;
+            this.roomId = null;
+            return new Response(JSON.stringify({ success: true }));
+        })
 
     fetch(request: Request): Response | Promise<Response> {
         return this.router.fetch(request)

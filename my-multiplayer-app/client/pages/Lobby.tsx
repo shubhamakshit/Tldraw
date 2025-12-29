@@ -200,6 +200,7 @@ export function Lobby() {
             }}>
                 <div>Built with tldraw & Cloudflare</div>
                 <div style={{ display: 'flex', gap: '24px' }}>
+                    <a href="/maintainer.html" style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Maintainer Dashboard</a>
                     <span>v2.4.0</span>
                     <a href="#" style={{ color: 'inherit', textDecoration: 'none' }}>Documentation</a>
                     <a href="#" style={{ color: 'inherit', textDecoration: 'none' }}>GitHub</a>
