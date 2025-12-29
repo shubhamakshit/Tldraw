@@ -2,6 +2,7 @@ import { handleUnfurlRequest } from 'cloudflare-workers-unfurl'
 import { AutoRouter, error, IRequest } from 'itty-router'
 import { handleAssetDownload, handleAssetUpload } from './assetUploads'
 import { handleColorRmDownload, handleColorRmUpload } from './colorRmAssets'
+import { Liveblocks } from '@liveblocks/node'
 
 // make sure our sync durable object is made available to cloudflare
 export { TldrawDurableObject } from './TldrawDurableObject'
@@ -37,6 +38,43 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		const id = env.COLORM_DURABLE_OBJECT.idFromName(request.params.roomId)
 		const room = env.COLORM_DURABLE_OBJECT.get(id)
 		return room.fetch(request.url, { headers: request.headers, body: request.body })
+	})
+
+    // Liveblocks Auth
+	.post('/api/liveblocks-auth', async (request, env) => {
+		if (!env.LIVEBLOCKS_SECRET_KEY) {
+			return new Response('Missing LIVEBLOCKS_SECRET_KEY', { status: 500 })
+		}
+		
+		const liveblocks = new Liveblocks({
+			secret: env.LIVEBLOCKS_SECRET_KEY,
+		})
+
+		// Generate random user for anonymous access
+		const userId = `user_${Math.random().toString(36).substring(2, 9)}`;
+        const userInfo = {
+            name: "Anonymous",
+            color: "#" + Math.floor(Math.random()*16777215).toString(16)
+        };
+
+		const session = liveblocks.prepareSession(
+			userId,
+			{ userInfo }
+		)
+
+        // Parse body to get room ID
+        let room;
+        try {
+            const body = await request.json() as any;
+            room = body.room;
+        } catch(e) {}
+
+        if (room) {
+            session.allow(room, session.FULL_ACCESS);
+        }
+
+		const { status, body } = await session.authorize()
+		return new Response(body, { status })
 	})
 
 	// New routes for color_rm base file sync

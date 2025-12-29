@@ -60,6 +60,28 @@ export class ColorRmDurableObject extends DurableObject {
             try {
                 const message = JSON.parse(event.data as string)
 
+                if (message.type === 'delta-update') {
+                    // 1. Broadcast immediately for low latency
+                    this.broadcast(event.data as string, session.sessionId)
+
+                    // 2. Update internal state so new users get it
+                    if (this.state) {
+                        const delta = message.delta
+                        if (delta.type === 'add-stroke') {
+                            const { pageIdx, item } = delta
+                            if (!this.state.history_map) this.state.history_map = {}
+                            if (!this.state.history_map[pageIdx]) this.state.history_map[pageIdx] = []
+                            
+                            // Dedupe check
+                            const exists = this.state.history_map[pageIdx].some((h: any) => h.id === item.id)
+                            if (!exists) {
+                                this.state.history_map[pageIdx].push(item)
+                                await this.ctx.storage.put('state', this.state)
+                            }
+                        }
+                    }
+                }
+
                 if (message.type === 'state-update') {
                     // Update internal state, but EXCLUDE images array
                     // because images are handled via the base file upload/download.

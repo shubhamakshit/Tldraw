@@ -80,9 +80,129 @@ const SYNC = {
                 this.isRemoteChange = true
                 if (window.UI) UI.setSyncStatus('syncing');
 
+                if (message.type === 'delta-update') {
+                    const delta = message.delta;
+                    if (delta.type === 'add-stroke') {
+                        const { pageIdx, item } = delta;
+                        if (App.state.images && App.state.images[pageIdx]) {
+                            let localHistory = App.state.images[pageIdx].history;
+                            if (!localHistory) {
+                                localHistory = [];
+                                App.state.images[pageIdx].history = localHistory;
+                            }
+                            
+                            // Simple dedupe check
+                            const exists = localHistory.some(h => h.id === item.id);
+                            if (!exists) {
+                                localHistory.push(item);
+                                if (pageIdx === App.state.idx) App.render();
+                            }
+                        }
+                    }
+                }
+
                 if (message.type === 'full-sync' || message.type === 'state-update') {
-                    // ... (existing logic) ...
+                    console.log(`ColorRM Sync: Received ${message.type}.`);
                     
+                    // 1. RETRY BASE FILE FETCH if missing (Fix for 404 race condition)
+                    if (!App.state.images || App.state.images.length === 0) {
+                         console.warn("ColorRM Sync: Images missing. Retrying base file fetch...");
+                         try {
+                             const res = await fetch(`/api/color_rm/base_file/${this.roomId}`);
+                             if (res.ok) {
+                                 const blob = await res.blob();
+                                 await App.importBaseFile(blob); 
+                                 console.log("ColorRM Sync: Base file retry successful.");
+                             } else {
+                                 console.warn("ColorRM Sync: Base file retry failed (Status: " + res.status + ")");
+                             }
+                         } catch(e) { 
+                             console.error("ColorRM Sync: Base file retry error:", e);
+                         }
+                    }
+
+                    // 2. If still missing, try local DB (fallback)
+                    if (!App.state.images || App.state.images.length === 0) {
+                         console.warn("ColorRM Sync: App.state.images still empty! Attempting local DB...");
+                         if (this.roomId) await App.openSession(this.roomId);
+                    }
+
+                    // 3. Apply History Map to Images (Merge Strategy)
+                    if (message.state.history_map) {
+                        const pagesWithHistory = Object.keys(message.state.history_map);
+                        
+                        if (App.state.images) {
+                            pagesWithHistory.forEach(pageIdx => {
+                                const idx = parseInt(pageIdx);
+                                const remoteHistory = message.state.history_map[pageIdx];
+
+                                if (App.state.images[idx]) {
+                                    let localHistory = App.state.images[idx].history;
+                                    if (!localHistory) {
+                                        localHistory = [];
+                                        App.state.images[idx].history = localHistory;
+                                    }
+
+                                    const localMap = new Map();
+                                    localHistory.forEach(item => {
+                                        if (item.id) localMap.set(item.id, item);
+                                    });
+                                    
+                                    let newItemsCount = 0;
+                                    let updatedItemsCount = 0;
+
+                                    remoteHistory.forEach(remoteItem => {
+                                        if (!remoteItem.id) {
+                                            if (localHistory.length === 0) localHistory.push(remoteItem);
+                                            return;
+                                        }
+
+                                        const localItem = localMap.get(remoteItem.id);
+
+                                        if (!localItem) {
+                                            localHistory.push(remoteItem);
+                                            localMap.set(remoteItem.id, remoteItem);
+                                            newItemsCount++;
+                                        } else {
+                                            const remoteTime = remoteItem.lastMod || 0;
+                                            const localTime = localItem.lastMod || 0;
+
+                                            if (remoteTime > localTime) {
+                                                Object.assign(localItem, remoteItem);
+                                                updatedItemsCount++;
+                                            }
+                                        }
+                                    });
+                                    
+                                    if (newItemsCount > 0 || updatedItemsCount > 0) {
+                                        console.log(`ColorRM Sync: Page ${idx} - Added ${newItemsCount}, Updated ${updatedItemsCount}`);
+                                    }
+                                } else {
+                                    console.warn(`ColorRM Sync: Received history for non-existent page ${idx}`);
+                                }
+                            });
+                        }
+                    }
+
+                    // 4. Merge other properties
+                    const { history_map, images, ...otherState } = message.state;
+                    const oldIdx = App.state.idx;
+                    Object.assign(App.state, otherState);
+                    
+                    UI.hideDashboard();
+                    App.renderSwatches();
+                    App.renderBookmarks();
+                    App.updateLockUI();
+                    
+                    // Sync Page Navigation
+                    if (message.type === 'full-sync' || (message.state.idx !== undefined && message.state.idx !== oldIdx)) {
+                         if (App.state.images && App.state.images.length > 0) {
+                            App.loadPage(App.state.idx || 0, false);
+                        }
+                    } else {
+                        App.render();
+                    }
+
                     if (message.type === 'full-sync') {
                         this.isInitializing = false;
                         console.log("ColorRM Sync: %cInitialization Complete. Sync ENABLED.", "color: green; font-weight: bold;");
@@ -125,6 +245,15 @@ const SYNC = {
         // Re-init connection
         this.isInitializing = true;
         this.connect();
+    },
+
+    sendDelta(delta) {
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+            this.socket.send(JSON.stringify({
+                type: 'delta-update',
+                delta: delta
+            }));
+        }
     },
 
     async sendStateUpdate() {

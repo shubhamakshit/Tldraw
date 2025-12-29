@@ -21,6 +21,7 @@
 		"@capacitor/core": "^8.0.0",
 		"@capacitor/filesystem": "^8.0.0",
 		"@capacitor/share": "^8.0.0",
+		"@liveblocks/node": "^3.12.1",
 		"@tldraw/sync": "^4.2.1",
 		"@tldraw/sync-core": "^4.2.1",
 		"@tldraw/tlschema": "^4.2.1",

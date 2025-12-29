@@ -14,7 +14,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
-    <script src="./color_rm_sync.js"></script>
 
     <style>
         :root {
@@ -312,7 +311,8 @@
     <header>
         <div style="display:flex; align-items:center; gap:10px;">
             <a href="/" class="btn btn-icon" title="Back to Hub" style="text-decoration:none; color:white;"><i class="bi bi-house-door-fill"></i></a>
-            <button class="btn btn-icon" title="Share Session" onclick="App.shareSession()"><i class="bi bi-share-fill"></i></button>
+            <button class="btn btn-icon" title="New Project" onclick="window.App.createNewProject()"><i class="bi bi-plus-lg"></i></button>
+            <button class="btn btn-icon" title="Share Session" onclick="window.App.shareSession()"><i class="bi bi-share-fill"></i></button>
             <span style="font-weight:700" id="headerTitle">ColorRM Pro</span>
             <div id="syncStatus" style="font-size:0.75rem; color:#aaa; margin-left:10px; display:flex; align-items:center; gap:5px;"></div>
         </div>
@@ -328,9 +328,10 @@
         <aside class="sidebar">
             <!-- Sidebar Tabs -->
             <div class="sb-tabs">
-                <div class="sb-tab active" id="tabTools" onclick="App.switchSideTab('tools')">Tools</div>
-                <div class="sb-tab" id="tabPages" onclick="App.switchSideTab('pages')">Pages</div>
-                <div class="sb-tab" id="tabBox" onclick="App.switchSideTab('box')">Box</div>
+                <div class="sb-tab active" id="tabTools" onclick="window.App.switchSideTab('tools')">Tools</div>
+                <div class="sb-tab" id="tabPages" onclick="window.App.switchSideTab('pages')">Pages</div>
+                <div class="sb-tab" id="tabBox" onclick="window.App.switchSideTab('box')">Box</div>
+                <div class="sb-tab" id="tabDebug" onclick="window.App.switchSideTab('debug')">Debug</div>
             </div>
 
             <div class="sidebar-content" id="panelTools">
@@ -431,79 +432,40 @@
 
             <!-- Box / Clipboard Panel -->
             <div class="sidebar-content" id="panelBox" style="display:none">
-                <div class="control-section">
-                    <button class="btn btn-primary" style="width:100%; justify-content:center; margin-bottom:10px;" onclick="App.captureFullPage()">Add Full Page</button>
-                    <div style="display:flex; gap:5px; margin-bottom:10px;">
-                        <input type="text" id="boxRangeInput" placeholder="Range (e.g. 1-3)" class="opt-input" style="flex:1">
-                        <button class="btn btn-sm" onclick="App.addRangeToBox()">Add</button>
-                    </div>
+                <!-- ... existing box content ... -->
+            </div>
 
-                    <p style="font-size:0.8rem; color:#aaa; margin-top:0;">Items in Box: <span id="boxCount">0</span></p>
-                    <div id="boxList" class="box-grid"></div>
-                    <button class="btn btn-sm" style="margin-top:10px; width:100%; border-color:#ef4444; color:#ef4444" onclick="App.clearBox()">Clear Box</button>
+            <!-- Debug Panel -->
+            <div class="sidebar-content" id="panelDebug" style="display:none">
+                <div class="control-section">
+                    <h4>Session Info</h4>
+                    <div style="font-size:0.75rem; color:#888; display:grid; gap:8px;">
+                        <div>Room ID: <span id="debugRoomId" style="color:var(--primary); font-family:monospace; word-break:break-all;"></span></div>
+                        <div>User ID: <span id="debugUserId" style="color:var(--accent); font-family:monospace; word-break:break-all;"></span></div>
+                        <div>Status: <span id="debugStatus" style="font-weight:600;"></span></div>
+                    </div>
                 </div>
-                
+
                 <div class="control-section">
-                    <h4>Export Sheet</h4>
-                     <p style="font-size:0.8rem; color:#aaa; margin:0 0 10px 0;">Header Tags: <span class="tag-pill" onclick="App.addBoxTag('{date}','header')">{date}</span> <span class="tag-pill" onclick="App.addBoxTag('{count}','header')">{count}</span></p>
+                    <h4>Canvas Stats</h4>
+                    <div style="font-size:0.75rem; color:#888; display:grid; gap:8px;">
+                        <div>Current Page: <span id="debugPageIdx" style="color:white;"></span></div>
+                        <div>Total Pages: <span id="debugPageCount" style="color:white;"></span></div>
+                        <div>History Items (Current): <span id="debugHistoryCount" style="color:white;"></span></div>
+                        <div>Selection: <span id="debugSelectionCount" style="color:white;"></span></div>
+                    </div>
+                </div>
 
-                    <div style="margin-bottom:10px;">
-                        <span style="font-size:0.8rem; color:#aaa">Columns</span>
-                        <select id="boxCols" class="opt-input" style="width:100%; margin-top:4px;">
-                            <option value="1">1 Column</option>
-                            <option value="2" selected>2 Columns</option>
-                            <option value="3">3 Columns</option>
-                            <option value="4">4 Columns</option>
-                        </select>
+                <div class="control-section">
+                    <h4>Storage Sync</h4>
+                    <div id="debugLiveMap" style="font-size:0.7rem; font-family:monospace; color:#666; max-height:200px; overflow:auto;">
+                        Initializing storage trace...
                     </div>
-                    
-                    <!-- Practice Space Toggle -->
-                    <div style="margin-bottom:10px; background:rgba(255,255,255,0.05); padding:8px; border-radius:6px;">
-                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-                            <span style="font-size:0.8rem; font-weight:600;">Add Practice Space</span>
-                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxPracticeOn"><span class="slider-switch"></span></label>
-                         </div>
-                         <div style="display:flex; align-items:center; gap:10px;">
-                            <span style="font-size:0.8rem; color:#aaa">Color</span>
-                            <select id="boxPracticeColor" class="opt-input" style="flex:1">
-                                <option value="white">White</option>
-                                <option value="black">Black</option>
-                            </select>
-                         </div>
-                    </div>
+                </div>
 
-                    <!-- Captions Toggle -->
-                    <div style="margin-bottom:10px;">
-                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-                            <span style="font-size:0.8rem; color:#aaa">Show Captions</span>
-                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxLabelsOn"><span class="slider-switch"></span></label>
-                         </div>
-                         <div style="margin-bottom:5px;">
-                            <span style="font-size:0.8rem; color:#aaa">Position</span>
-                            <select id="boxLabelsPos" class="opt-input" style="width:100%; margin-top:2px;">
-                                <option value="bottom" selected>Bottom</option>
-                                <option value="top">Top</option>
-                            </select>
-                         </div>
-                         <input type="text" id="boxLabelTxt" class="opt-input" placeholder="#{seq} • Page {page}" value="#{seq} • Page {page}" style="width:100%">
-                         <div style="font-size:0.7rem; color:#666; margin-top:3px;">Tags: {seq}, {page}</div>
-                    </div>
-
-                     <div style="margin-bottom:10px;">
-                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-                            <span style="font-size:0.8rem; color:#aaa">Header</span>
-                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxHeaderOn"><span class="slider-switch"></span></label>
-                         </div>
-                         <input type="text" id="boxHeaderTxt" class="opt-input" placeholder="Sheet Header" style="width:100%">
-                    </div>
-                     <div style="margin-bottom:10px;">
-                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-                            <span style="font-size:0.8rem; color:#aaa">Footer</span>
-                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxFooterOn"><span class="slider-switch"></span></label>
-                         </div>
-                         <input type="text" id="boxFooterTxt" class="opt-input" placeholder="Sheet Footer" style="width:100%">
-                    </div>
-                    <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="App.generateBoxImage()">Export Sheet</button>
+                <div class="control-section">
+                    <button class="btn btn-sm" style="width:100%; justify-content:center;" onclick="window.App.render()">Force Redraw</button>
+                    <button class="btn btn-sm" style="width:100%; justify-content:center; margin-top:8px; border-color:#ef4444; color:#ef4444" onclick="location.reload()">Hard Reload</button>
                 </div>
             </div>
 
@@ -537,11 +499,18 @@
         </main>
     </div>
 
-    <script>
+    <script type="module">
+        import { createClient, LiveObject, LiveMap, LiveList } from 'https://cdn.jsdelivr.net/npm/@liveblocks/client@3.12.1/+esm';
+
+        // Pre-initialize globals to avoid ReferenceError
+        window.UI = {};
+        window.App = {};
+        window.LiveSync = {};
+
         const UI = {
-            showDashboard: () => { document.getElementById('dashboardModal').style.display='flex'; App.loadSessionList(); },
+            showDashboard: () => { document.getElementById('dashboardModal').style.display='flex'; window.App.loadSessionList(); },
             hideDashboard: () => document.getElementById('dashboardModal').style.display='none',
-            showExportModal: () => { document.getElementById('exportModal').style.display='flex'; App.renderDlGrid(); },
+            showExportModal: () => { document.getElementById('exportModal').style.display='flex'; window.App.renderDlGrid(); },
             toggleLoader: (show, text) => { 
                 document.getElementById('loader').style.display = show ? 'grid' : 'none';
                 if(text) document.getElementById('loadText').innerText = text;
@@ -576,7 +545,7 @@
                 
                 if (status === 'saved') {
                     el.innerHTML = '<i class="bi bi-check-circle-fill" style="color:var(--success)"></i> Saved';
-                    setTimeout(() => el.innerHTML = '', 3000);
+                    setTimeout(() => { if(el.innerText.includes('Saved')) el.innerHTML = ''; }, 3000);
                 } else if (status === 'syncing') {
                     el.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Syncing...';
                 } else if (status === 'offline') {
@@ -585,6 +554,180 @@
                     el.innerHTML = '<span style="color:#3b82f6; font-weight:600">New Session</span>';
                     setTimeout(() => el.innerHTML = '', 5000);
                 }
+            }
+        };
+
+        const LiveSync = {
+            client: null,
+            room: null,
+            userId: localStorage.getItem('color_rm_user_id'),
+            unsubscribes: [],
+            isInitializing: true,
+
+            async init(roomId) {
+                if (!this.userId) {
+                    this.userId = `user_${Math.random().toString(36).substring(2, 9)}`;
+                    localStorage.setItem('color_rm_user_id', this.userId);
+                }
+                if (this.room) this.leave();
+                
+                // Update URL to reflect current room
+                window.location.hash = `/color_rm/${roomId}`;
+                
+                UI.setSyncStatus('syncing');
+                console.log("Liveblocks: Connecting to room", roomId);
+
+                if (!this.client) {
+                    this.client = createClient({
+                        authEndpoint: "/api/liveblocks-auth",
+                    });
+                }
+
+                const { room, leave } = this.client.enterRoom(roomId, {
+                    initialStorage: {
+                        metadata: new LiveObject({
+                            name: "Untitled",
+                            idx: 0,
+                            pageCount: 0,
+                            pageLocked: false,
+                            ownerId: null
+                        }),
+                        pagesHistory: new LiveMap(),
+                        bookmarks: new LiveList([]),
+                        colors: new LiveList([])
+                    }
+                });
+
+                this.room = room;
+                this.leave = leave;
+
+                // Subscribe to connection status changes
+                room.subscribe("status", (status) => {
+                    if (status === "connected") UI.setSyncStatus('saved');
+                    else if (status === "disconnected") UI.setSyncStatus('offline');
+                    window.App.renderDebug();
+                });
+
+                // Wait for storage to load
+                const { root } = await room.getStorage();
+                this.root = root;
+
+                // Sync Initial Data from Storage to App.state
+                this.syncStorageToLocal();
+
+                // Subscribe to storage changes (Remote -> Local)
+                this.unsubscribes.push(
+                    room.subscribe(root.get("metadata"), () => { this.syncMetadata(); window.App.renderDebug(); }),
+                    room.subscribe(root.get("pagesHistory"), () => { this.syncHistory(); window.App.renderDebug(); }, { isDeep: true }),
+                    room.subscribe(root.get("bookmarks"), () => { this.syncBookmarks(); window.App.renderDebug(); }),
+                    room.subscribe(root.get("colors"), () => { this.syncColors(); window.App.renderDebug(); })
+                );
+
+                this.isInitializing = false;
+                console.log("Liveblocks: Ready.");
+            },
+
+            syncStorageToLocal() {
+                const metadata = this.root.get("metadata").toObject();
+                App.state.projectName = metadata.name;
+                App.state.idx = metadata.idx;
+                App.state.pageLocked = metadata.pageLocked;
+                App.state.ownerId = metadata.ownerId;
+                document.getElementById('headerTitle').innerText = metadata.name;
+
+                // Bookmarks
+                App.state.bookmarks = this.root.get("bookmarks").toArray();
+                App.renderBookmarks();
+
+                // Colors
+                App.state.colors = this.root.get("colors").toArray();
+                App.renderSwatches();
+
+                // History is synced per page load or on change
+                App.loadPage(App.state.idx, false);
+            },
+
+            syncMetadata() {
+                const metadata = this.root.get("metadata").toObject();
+                App.state.projectName = metadata.name;
+                App.state.pageLocked = metadata.pageLocked;
+                App.state.ownerId = metadata.ownerId;
+                document.getElementById('headerTitle').innerText = metadata.name;
+                
+                if (App.state.idx !== metadata.idx) {
+                    App.loadPage(metadata.idx, false);
+                }
+                
+                // AUTO-RETRY base file fetch if remote has pages but we don't
+                if (metadata.pageCount > 0 && App.state.images.length === 0) {
+                    console.log("Liveblocks: Remote has content. Attempting base file fetch...");
+                    App.retryBaseFetch();
+                }
+
+                App.updateLockUI();
+            },
+
+            syncHistory() {
+                if (this.isInitializing || !this.root) return;
+                
+                const pagesHistory = this.root.get("pagesHistory");
+                let hasChanges = false;
+
+                App.state.images.forEach((img, idx) => {
+                    const remoteHistory = pagesHistory.get(idx.toString());
+                    if (remoteHistory) {
+                        const newHistory = remoteHistory.toArray();
+                        // Simple comparison to avoid unnecessary state updates
+                        if (JSON.stringify(img.history) !== JSON.stringify(newHistory)) {
+                            img.history = newHistory;
+                            hasChanges = true;
+                        }
+                    }
+                });
+
+                if (hasChanges) App.render();
+            },
+
+            syncBookmarks() {
+                App.state.bookmarks = this.root.get("bookmarks").toArray();
+                App.renderBookmarks();
+            },
+
+            syncColors() {
+                App.state.colors = this.root.get("colors").toArray();
+                App.renderSwatches();
+            },
+
+            // --- Local -> Remote Updates ---
+            updateMetadata(updates) {
+                if (!this.root) return;
+                this.root.get("metadata").update(updates);
+            },
+
+            addStroke(pageIdx, stroke) {
+                if (!this.root) return;
+                const pagesHistory = this.root.get("pagesHistory");
+                const key = pageIdx.toString();
+                if (!pagesHistory.has(key)) {
+                    pagesHistory.set(key, new LiveList([]));
+                }
+                pagesHistory.get(key).push(stroke);
+            },
+
+            setHistory(pageIdx, history) {
+                if (!this.root) return;
+                const pagesHistory = this.root.get("pagesHistory");
+                pagesHistory.set(pageIdx.toString(), new LiveList(history || []));
+            },
+
+            updateBookmarks(bookmarks) {
+                if (!this.root) return;
+                this.root.set("bookmarks", new LiveList(bookmarks || []));
+            },
+
+            updateColors(colors) {
+                if (!this.root) return;
+                this.root.set("colors", new LiveList(colors || []));
             }
         };
 
@@ -612,9 +755,9 @@
             },
 
             cache: { currentImg: null, lab: null },
-            
+
             async init() {
-                // 1. Initialize Database FIRST
+                // 1. Initialize Database
                 this.db = await new Promise(r => {
                     const req = indexedDB.open('ColorRM_SOTA_V12', 1);
                     req.onupgradeneeded = e => {
@@ -625,40 +768,63 @@
                     req.onsuccess = e => r(e.target.result);
                 });
 
-                // 2. Setup all local UI and event listeners
+                // 2. Setup UI
                 this.setupUI();
                 this.setupDrawing();
                 this.makeDraggable();
                 this.setupShortcuts();
 
-                // 3. Start the sync client LAST
-                await SYNC.init(); 
-
-                // If not joining a room, show the dashboard
-                if (!SYNC.roomId) {
-                    this.loadSessionList();
-                } else {
-                    // If we are in a room, we might still want to open the session locally
-                    // to initialize the App.state properly.
-                    await this.openSession(SYNC.roomId);
+                // 3. Initialize PDF.js Worker
+                if (window.pdfjsLib) {
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
                 }
 
-                // Monkey-patch the save functions to send updates
-                const originalSave = this.saveSessionState.bind(this)
-                this.saveSessionState = async (...args) => {
-                    await originalSave(...args)
-                    SYNC.sendStateUpdate()
+                // 4. Initialize Liveblocks Room
+                const hash = window.location.hash.substring(1);
+                let roomId = hash.startsWith('/color_rm/') ? hash.substring(10) : (hash.startsWith('/') ? hash.substring(1) : hash);
+                
+                if (!roomId) {
+                    roomId = `color_rm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                    window.location.hash = `/color_rm/${roomId}`;
                 }
-                const originalSaveImg = this.saveCurrentImg.bind(this)
-                this.saveCurrentImg = async (...args) => {
-                    await originalSaveImg(...args)
-                    SYNC.sendStateUpdate()
+
+                this.state.sessionId = roomId;
+                
+                // Load from local DB (Cache)
+                await this.openSession(roomId);
+
+                // Connect to Liveblocks
+                await LiveSync.init(roomId);
+
+                // 5. Sync Base File (Download or Healing Upload)
+                try {
+                    const res = await fetch(`/api/color_rm/base_file/${roomId}`, { method: 'GET' });
+                    if (res.ok) {
+                        if (this.state.images.length === 0) {
+                            console.log("Liveblocks: Downloading base file from server...");
+                            const blob = await res.blob();
+                            await this.importBaseFile(blob);
+                        }
+                    } else if (res.status === 404) {
+                        // SERVER HEALING: If I have it but server doesn't, UPLOAD it.
+                        if (this.state.images.length > 0 && this.state.images[0].blob) {
+                            console.log("Liveblocks: Server missing base file. Healing/Uploading...");
+                            fetch(`/api/color_rm/upload/${roomId}`, {
+                                method: 'POST',
+                                body: this.state.images[0].blob,
+                                headers: { 'Content-Type': this.state.images[0].blob.type }
+                            });
+                        }
+                    }
+                } catch(e) {
+                    console.error("Liveblocks: Sync check error:", e);
                 }
             },
 
             async saveSessionState() {
-                if(!this.state.sessionId) return;
-                console.log("Saving session state... sending update");
+                if(!this.state.sessionId || LiveSync.isInitializing) return;
+                
+                // Save Locally
                 const s = await this.dbGet('sessions', this.state.sessionId);
                 if(s) {
                     s.lastMod = Date.now();
@@ -682,13 +848,44 @@
                     };
                     this.dbPut('sessions', s);
                 }
+
+                // Save Remotely (Metadata)
+                LiveSync.updateMetadata({
+                    name: this.state.projectName,
+                    idx: this.state.idx,
+                    pageCount: this.state.images.length,
+                    pageLocked: this.state.pageLocked,
+                    ownerId: this.state.ownerId
+                });
+            },
+
+            async retryBaseFetch() {
+                if (this.isFetchingBase) return;
+                this.isFetchingBase = true;
+                try {
+                    const res = await fetch(`/api/color_rm/base_file/${this.state.sessionId}`);
+                    if (res.ok) {
+                        const blob = await res.blob();
+                        await this.importBaseFile(blob);
+                        console.log("Liveblocks: Base file fetch successful.");
+                    }
+                } catch(e) {
+                    console.error("Liveblocks: Base file fetch failed:", e);
+                } finally {
+                    this.isFetchingBase = false;
+                }
             },
 
             renderSwatches() {
                 const c = document.getElementById('swatches'); c.innerHTML='';
-                this.state.colors.forEach(col => {
+                this.state.colors.forEach((col, i) => {
                     const d = document.createElement('div'); d.className='swatch'; d.style.background=col.hex;
-                    d.onclick=()=>{d.remove(); this.state.colors=this.state.colors.filter(x=>x.hex!==col.hex); this.render(); this.saveSessionState();};
+                    d.onclick=()=>{
+                        this.state.colors.splice(i, 1);
+                        this.render(); 
+                        this.saveSessionState();
+                        LiveSync.updateColors(this.state.colors);
+                    };
                     c.appendChild(d);
                 });
             },
@@ -787,11 +984,41 @@
                 document.getElementById('tabTools').className = `sb-tab ${tab==='tools'?'active':''}`;
                 document.getElementById('tabPages').className = `sb-tab ${tab==='pages'?'active':''}`;
                 document.getElementById('tabBox').className = `sb-tab ${tab==='box'?'active':''}`;
+                document.getElementById('tabDebug').className = `sb-tab ${tab==='debug'?'active':''}`;
                 document.getElementById('panelTools').style.display = tab==='tools' ? 'block' : 'none';
                 document.getElementById('panelPages').style.display = tab==='pages' ? 'block' : 'none';
                 document.getElementById('panelBox').style.display = tab==='box' ? 'block' : 'none';
+                document.getElementById('panelDebug').style.display = tab==='debug' ? 'block' : 'none';
                 if(tab === 'pages') this.renderPageSidebar();
                 if(tab === 'box') this.renderBox();
+                if(tab === 'debug') this.renderDebug();
+            },
+
+            renderDebug() {
+                if (this.state.activeSideTab !== 'debug') return;
+                
+                document.getElementById('debugRoomId').innerText = this.state.sessionId || "None";
+                document.getElementById('debugUserId').innerText = LiveSync.userId || "None";
+                document.getElementById('debugStatus').innerText = LiveSync.room ? LiveSync.room.getStorageStatus() : "Disconnected";
+                document.getElementById('debugStatus').style.color = (LiveSync.room && LiveSync.room.getStorageStatus() === 'synchronized') ? 'var(--success)' : 'var(--primary)';
+
+                document.getElementById('debugPageIdx').innerText = this.state.idx + 1;
+                document.getElementById('debugPageCount').innerText = this.state.images.length;
+                
+                const currentImg = this.state.images[this.state.idx];
+                document.getElementById('debugHistoryCount').innerText = currentImg ? (currentImg.history || []).length : 0;
+                document.getElementById('debugSelectionCount').innerText = this.state.selection.length;
+
+                // LiveMap Trace
+                const mapEl = document.getElementById('debugLiveMap');
+                if (LiveSync.root) {
+                    const ph = LiveSync.root.get("pagesHistory");
+                    let html = "pagesHistory Map Keys:<br>";
+                    ph.forEach((val, key) => {
+                        html += `• ${key}: ${val.length} items<br>`;
+                    });
+                    mapEl.innerHTML = html;
+                }
             },
 
             renderPageSidebar() {
@@ -834,7 +1061,7 @@
                 })
 
                 const c = document.getElementById('canvas');
-                let startPt = null; let isDragging = false;
+                let startPt = null; this.isDragging = false;
                 let dragStart = null; let startBounds = null; let startRotation = 0;
                 let isMovingSelection = false; let isResizing = false; let isRotating = false; let resizeHandle = null;
                 let initialHistoryState = []; let lassoPath = [];
@@ -916,14 +1143,14 @@
                         }
                     }
                     if(this.state.selection.length) { this.state.selection=[]; document.getElementById('contextToolbar').style.display='none'; this.setTool(this.state.tool); this.render(); if(this.state.tool==='none') return; }
-                    isDragging = true;
+                    this.isDragging = true;
                     if(this.state.tool==='lasso') lassoPath=[pt]; else if(this.state.tool!=='shape' && this.state.tool!=='capture') this.currentStroke=[pt];
                 };
 
                 window.onpointermove = e => {
                     const pt = getPt(e);
                     if(isMovingSelection) { this.dragOffset = {x:pt.x-dragStart.x, y:pt.y-dragStart.y}; this.render(); return; }
-                    if(!isDragging) return;
+                    if(!this.isDragging) return;
                     if(this.state.tool==='lasso') { lassoPath.push(pt); this.renderLasso(c.getContext('2d'), lassoPath); }
                     else if(this.state.tool==='shape' || this.state.tool==='capture') { 
                         let w=pt.x-startPt.x, h=pt.y-startPt.y;
@@ -997,7 +1224,7 @@
                         this.state.selection.forEach(idx => { const st=this.state.images[this.state.idx].history[idx]; if(st.tool==='pen') st.pts.forEach(p=>{p.x+=this.dragOffset.x;p.y+=this.dragOffset.y}); else {st.x+=this.dragOffset.x;st.y+=this.dragOffset.y} }); 
                         this.dragOffset=null; this.saveCurrentImg(); this.render(); return; 
                     }
-                    if(!isDragging) return; isDragging=false;
+                    if(!this.isDragging) return; this.isDragging=false;
                     const pt = getPt(e);
                     if(this.state.tool==='lasso') {
                         let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
@@ -1022,9 +1249,16 @@
                         if(w > 5 && h > 5) this.addToBox(startPt.x, startPt.y, w, h);
                         this.render();
                     } else if(['pen','eraser'].includes(this.state.tool)) {
-                        this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), lastMod: Date.now(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize});
-                        console.log(`Stroke added. History length: ${this.state.images[this.state.idx].history.length}`);
-                        this.saveCurrentImg(); this.render();
+                        const newStroke = {id: Date.now() + Math.random(), lastMod: Date.now(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize, deleted: false};
+                        this.state.images[this.state.idx].history.push(newStroke);
+                        
+                        // Optimized: Save locally but send DELTA instead of full sync
+                        this.saveCurrentImg(true); 
+                        if (window.LiveSync && !LiveSync.isInitializing) {
+                            LiveSync.addStroke(this.state.idx, newStroke);
+                        }
+                        
+                        this.render();
                     }
                 };
             },
@@ -1036,12 +1270,14 @@
                      this.state.bookmarks.push({ id: Date.now(), pageIdx: this.state.idx, name: name });
                      this.renderBookmarks();
                      this.saveSessionState();
+                     LiveSync.updateBookmarks(this.state.bookmarks);
                 });
             },
             removeBookmark(id) {
                 this.state.bookmarks = this.state.bookmarks.filter(b => b.id !== id);
                 this.renderBookmarks();
                 this.saveSessionState();
+                LiveSync.updateBookmarks(this.state.bookmarks);
             },
             renderBookmarks() {
                 const el = document.getElementById('bookmarkList');
@@ -1385,7 +1621,8 @@
             },
             
             async shareSession() {
-                const url = window.location.href;
+                // Ensure we use the active session ID for sharing
+                const url = window.location.origin + window.location.pathname + "#/color_rm/" + this.state.sessionId;
                 
                 // 1. Native Share
                 if (navigator.share) {
@@ -1662,39 +1899,54 @@
 
             async handleImport(e, skipUpload = false) {
                 const files = e.target.files;
-                if(!files.length) return;
+                if(!files || !files.length) return;
+
+                // --- CRITICAL: FORCE UNIQUE ROOM FOR EVERY NEW UPLOAD ---
+                if (!skipUpload) {
+                    const newUniqueId = `color_rm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                    console.log("ColorRM: Forcing new unique room for upload:", newUniqueId);
+                    await this.createNewProject(false, newUniqueId);
+                } else if (!this.state.sessionId) {
+                    // Sync case: only create if missing
+                    const newId = this.state.sessionId || null;
+                    await this.createNewProject(false, newId);
+                }
                 
                 // --- Sync to Server ---
-                if (!skipUpload && SYNC.roomId) {
-                    console.log('ColorRM Sync: Uploading base file to server...');
-                    fetch(`/api/color_rm/upload/${SYNC.roomId}`, {
-                        method: 'POST',
-                        body: files[0],
-                        headers: { 'Content-Type': files[0].type }
-                    }).catch(err => console.error('Failed to upload base file:', err));
+                if (!skipUpload && this.state.sessionId) {
+                    console.log('ColorRM Sync: Uploading base file to server for ID:', this.state.sessionId);
+                    try {
+                        const uploadRes = await fetch(`/api/color_rm/upload/${this.state.sessionId}`, {
+                            method: 'POST',
+                            body: files[0],
+                            headers: { 'Content-Type': files[0].type }
+                        });
+                        if (uploadRes.ok) {
+                            console.log('ColorRM Sync: Base file upload successful.');
+                        } else {
+                            console.error('ColorRM Sync: Base file upload failed with status:', uploadRes.status);
+                        }
+                    } catch (err) {
+                        console.error('ColorRM Sync: Error uploading base file:', err);
+                    }
                 }
                 // -----------------------
 
                 UI.hideDashboard(); UI.toggleLoader(true, "Initializing...");
                 
                 const nameInput = document.getElementById('newProjectName');
-                let pName = nameInput.value.trim();
-                if(!pName && files.length > 0) pName = files[0].name.replace(/\.[^/.]+$/, "");
+                let pName = (nameInput && nameInput.value.trim()) || files[0].name.replace(/\.[^/.]+$/, "");
                 if(!pName) pName = "Untitled";
                 this.state.projectName = pName;
-
-                if(!this.state.sessionId) {
-                    // If we are syncing (skipUpload=true) and have a room ID, use it as the session ID.
-                    // Also don't open the picker since we already have the file.
-                    const newId = (skipUpload && SYNC.roomId) ? SYNC.roomId : null;
-                    await this.createNewProject(false, newId);
-                }
+                document.getElementById('headerTitle').innerText = pName;
                 
                 const session = await this.dbGet('sessions', this.state.sessionId);
-                if(session.name === "Untitled" && pName !== "Untitled") {
+                if(session) {
                     session.name = pName;
                     await this.dbPut('sessions', session);
-                    document.getElementById('headerTitle').innerText = pName;
+                } else {
+                    // Fallback create
+                    await this.dbPut('sessions', { id: this.state.sessionId, name: pName, pageCount: 0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: LiveSync.userId });
                 }
 
                 const processQueue = Array.from(files);
@@ -1705,11 +1957,24 @@
                 await new Promise((resolve) => {
                     const processNext = async () => {
                         if(processQueue.length === 0) {
-                            session.pageCount = idx;
-                            await this.dbPut('sessions', session);
+                            // Update storage with final page count
+                            const session = await this.dbGet('sessions', this.state.sessionId);
+                            if (session) {
+                                session.pageCount = idx;
+                                await this.dbPut('sessions', session);
+                            }
                             await this.loadSessionPages(this.state.sessionId);
+                            
+                            // Signal readiness to Liveblocks
+                            if (window.LiveSync && !LiveSync.isInitializing) {
+                                LiveSync.updateMetadata({
+                                    name: this.state.projectName,
+                                    pageCount: idx
+                                });
+                            }
+
                             UI.toggleLoader(false);
-                            resolve(); // Resolve when done
+                            resolve(); 
                             return;
                         }
 
@@ -1747,49 +2012,36 @@
             },
 
             async createNewProject(openPicker = true, forceId = null) {
-                let id = forceId;
+                // Force new ID for uploads to ensure clean separation (One PDF -> One Room)
+                const id = forceId || `color_rm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 
-                // Intelligent ID selection:
-                // If no forceId, check if we can reuse the current Sync ID.
-                // We reuse if the current local state is effectively empty/new.
-                if (!id) {
-                    const isFresh = (!this.state.images || this.state.images.length === 0) && this.state.projectName === "Untitled";
-                    if (isFresh && SYNC.roomId) {
-                        console.log("ColorRM: Preserving current Room ID for new project:", SYNC.roomId);
-                        id = SYNC.roomId;
-                    } else {
-                        id = `color_rm_${Date.now()}`;
-                    }
-                }
-
+                // Clear local state to prevent appending to old project's images
+                this.state.images = [];
+                this.state.idx = 0;
+                this.state.bookmarks = [];
+                this.state.clipboardBox = [];
+                
                 const name = document.getElementById('newProjectName').value || "Untitled";
+                this.state.projectName = name;
+                document.getElementById('headerTitle').innerText = name;
+
                 // Set ownerId to current session on creation
-                this.state.ownerId = SYNC.sessionId; 
-                await this.dbPut('sessions', { id, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: SYNC.sessionId });
+                this.state.ownerId = LiveSync.userId; 
+                await this.dbPut('sessions', { id, name, pageCount:0, lastMod: Date.now(), idx:0, bookmarks: [], clipboardBox: [], ownerId: LiveSync.userId });
                 this.state.sessionId = id;
                 
                 UI.setSyncStatus('new');
 
                 // Ensure Sync is pointing to this new ID
-                if (window.SYNC && SYNC.roomId !== id) {
-                    SYNC.switchRoom(id);
-
-                    // Re-upload base file to new room if content exists
-                    if (this.state.images && this.state.images.length > 0 && this.state.images[0].blob) {
-                        console.log('ColorRM Sync: Re-uploading base file for new Room ID:', id);
-                        fetch(`/api/color_rm/upload/${id}`, {
-                            method: 'POST',
-                            body: this.state.images[0].blob,
-                            headers: { 'Content-Type': this.state.images[0].blob.type }
-                        }).catch(err => console.error('Failed to re-upload base file:', err));
-                    }
+                if (window.LiveSync && LiveSync.room && LiveSync.room.id !== id) {
+                    LiveSync.init(id);
                 }
 
                 if(openPicker) document.getElementById('fileIn').click();
             },
 
             togglePageLock() {
-                if (this.state.ownerId !== SYNC.sessionId) return;
+                if (this.state.ownerId !== LiveSync.userId) return;
                 this.state.pageLocked = !this.state.pageLocked;
                 this.updateLockUI();
                 this.saveSessionState();
@@ -1798,7 +2050,7 @@
             updateLockUI() {
                 const btn = document.getElementById('lockBtn');
                 const ctrl = document.getElementById('presenterControls');
-                if (this.state.ownerId === SYNC.sessionId) {
+                if (this.state.ownerId === LiveSync.userId) {
                     ctrl.style.display = 'block';
                     btn.className = this.state.pageLocked ? "btn btn-primary" : "btn";
                     btn.innerHTML = this.state.pageLocked ? '<i class="bi bi-lock-fill"></i> Presenter Lock: ON' : '<i class="bi bi-unlock"></i> Presenter Lock: OFF';
@@ -1854,7 +2106,7 @@
                 if(i<0 || i>=this.state.images.length) return;
                 
                 // --- Presenter Lock Logic ---
-                if (broadcast && this.state.pageLocked && this.state.ownerId !== SYNC.sessionId) {
+                if (broadcast && this.state.pageLocked && this.state.ownerId !== LiveSync.userId) {
                     UI.showToast("Page is locked by presenter.");
                     return;
                 }
@@ -1918,7 +2170,14 @@
                 }
                 return false;
             },
-            async saveCurrentImg() { if(this.state.sessionId) await this.dbPut('pages', this.state.images[this.state.idx]); },
+            async saveCurrentImg(skipRemoteSync = false) { 
+                if(this.state.sessionId) {
+                    await this.dbPut('pages', this.state.images[this.state.idx]); 
+                    if (!skipRemoteSync && window.LiveSync && !LiveSync.isInitializing) {
+                        LiveSync.setHistory(this.state.idx, this.state.images[this.state.idx].history);
+                    }
+                }
+            },
             async saveImage() { 
                 const cvs = document.getElementById('canvas');
                 cvs.toBlob(blob => {
@@ -1997,6 +2256,23 @@
                     }
                     this.renderObject(ctx, st, dx, dy);
                 });
+
+                // Draw Active Stroke (Prevent flicker during sync)
+                if (this.isDragging && this.currentStroke && this.currentStroke.length > 1 && ['pen','eraser'].includes(this.state.tool)) {
+                    ctx.save();
+                    ctx.lineCap='round'; ctx.lineJoin='round'; 
+                    ctx.lineWidth = this.state.tool==='eraser' ? this.state.eraserSize : this.state.penSize;
+                    ctx.strokeStyle = this.state.tool==='eraser' ? (this.state.bg==='transparent'?'#000':this.state.bg) : this.state.penColor;
+                    if(this.state.tool==='eraser' && this.state.bg==='transparent') ctx.globalCompositeOperation='destination-out';
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(this.currentStroke[0].x, this.currentStroke[0].y);
+                    for(let i=1; i<this.currentStroke.length; i++) {
+                        ctx.lineTo(this.currentStroke[i].x, this.currentStroke[i].y);
+                    }
+                    ctx.stroke();
+                    ctx.restore();
+                }
 
                 if(this.state.selection.length > 0) this.renderSelectionOverlay(ctx, hist);
                 
@@ -2118,7 +2394,9 @@
                 });
                 this.state.selection = [];
                 document.getElementById('contextToolbar').style.display = 'none';
-                this.saveCurrentImg(); this.render();
+                
+                this.saveCurrentImg(); 
+                this.render();
             },
             copySelected(cut=false) {
                 const img = this.state.images[this.state.idx];
@@ -2138,7 +2416,8 @@
                 if(cut) this.deleteSelected();
                 else {
                     this.state.selection = newIds;
-                    this.saveCurrentImg(); this.render();
+                    this.saveCurrentImg(); 
+                    this.render();
                 }
             },
             lockSelected() {
@@ -2197,6 +2476,11 @@
                 document.getElementById('floatingPicker').style.display='flex'; 
             }
         };
+
+        // Attach to window for HTML events
+        window.App = App;
+        window.UI = UI;
+        window.LiveSync = LiveSync;
 
         App.init();
     </script>
