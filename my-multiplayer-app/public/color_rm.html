@@ -454,7 +454,80 @@
 
             <!-- Box / Clipboard Panel -->
             <div class="sidebar-content" id="panelBox" style="display:none">
-                <!-- ... existing box content ... -->
+                <div class="control-section">
+                    <button class="btn btn-primary" style="width:100%; justify-content:center; margin-bottom:10px;" onclick="window.App.captureFullPage()">Add Full Page</button>
+                    <div style="display:flex; gap:5px; margin-bottom:10px;">
+                        <input type="text" id="boxRangeInput" placeholder="Range (e.g. 1-3)" class="opt-input" style="flex:1">
+                        <button class="btn btn-sm" onclick="window.App.addRangeToBox()">Add</button>
+                    </div>
+
+                    <p style="font-size:0.8rem; color:#aaa; margin-top:0;">Items in Box: <span id="boxCount">0</span></p>
+                    <div id="boxList" class="box-grid"></div>
+                    <button class="btn btn-sm" style="margin-top:10px; width:100%; border-color:#ef4444; color:#ef4444" onclick="window.App.clearBox()">Clear Box</button>
+                </div>
+                
+                <div class="control-section">
+                    <h4>Export Sheet</h4>
+                     <p style="font-size:0.8rem; color:#aaa; margin:0 0 10px 0;">Header Tags: <span class="tag-pill" onclick="window.App.addBoxTag('{date}','header')">{date}</span> <span class="tag-pill" onclick="window.App.addBoxTag('{count}','header')">{count}</span></p>
+
+                    <div style="margin-bottom:10px;">
+                        <span style="font-size:0.8rem; color:#aaa">Columns</span>
+                        <select id="boxCols" class="opt-input" style="width:100%; margin-top:4px;">
+                            <option value="1">1 Column</option>
+                            <option value="2" selected>2 Columns</option>
+                            <option value="3">3 Columns</option>
+                            <option value="4">4 Columns</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Practice Space Toggle -->
+                    <div style="margin-bottom:10px; background:rgba(255,255,255,0.05); padding:8px; border-radius:6px;">
+                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                            <span style="font-size:0.8rem; font-weight:600;">Add Practice Space</span>
+                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxPracticeOn"><span class="slider-switch"></span></label>
+                         </div>
+                         <div style="display:flex; align-items:center; gap:10px;">
+                            <span style="font-size:0.8rem; color:#aaa">Color</span>
+                            <select id="boxPracticeColor" class="opt-input" style="flex:1">
+                                <option value="white">White</option>
+                                <option value="black">Black</option>
+                            </select>
+                         </div>
+                    </div>
+
+                    <!-- Captions Toggle -->
+                    <div style="margin-bottom:10px;">
+                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                            <span style="font-size:0.8rem; color:#aaa">Show Captions</span>
+                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxLabelsOn"><span class="slider-switch"></span></label>
+                         </div>
+                         <div style="margin-bottom:5px;">
+                            <span style="font-size:0.8rem; color:#aaa">Position</span>
+                            <select id="boxLabelsPos" class="opt-input" style="width:100%; margin-top:2px;">
+                                <option value="bottom" selected>Bottom</option>
+                                <option value="top">Top</option>
+                            </select>
+                         </div>
+                         <input type="text" id="boxLabelTxt" class="opt-input" placeholder="#{seq} • Page {page}" value="#{seq} • Page {page}" style="width:100%">
+                         <div style="font-size:0.7rem; color:#666; margin-top:3px;">Tags: {seq}, {page}</div>
+                    </div>
+
+                     <div style="margin-bottom:10px;">
+                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                            <span style="font-size:0.8rem; color:#aaa">Header</span>
+                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxHeaderOn"><span class="slider-switch"></span></label>
+                         </div>
+                         <input type="text" id="boxHeaderTxt" class="opt-input" placeholder="Sheet Header" style="width:100%">
+                    </div>
+                     <div style="margin-bottom:10px;">
+                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                            <span style="font-size:0.8rem; color:#aaa">Footer</span>
+                            <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxFooterOn"><span class="slider-switch"></span></label>
+                         </div>
+                         <input type="text" id="boxFooterTxt" class="opt-input" placeholder="Sheet Footer" style="width:100%">
+                    </div>
+                    <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="window.App.generateBoxImage()">Export Sheet</button>
+                </div>
             </div>
 
             <!-- Debug Panel -->
