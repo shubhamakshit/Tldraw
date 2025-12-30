@@ -491,7 +491,10 @@
                 <div class="control-section">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <h4>Colors to Keep</h4>
-                        <button class="btn btn-sm" id="openColorPicker"><i class="bi bi-plus-lg"></i> Add</button>
+                        <div style="display:flex; gap:4px;">
+                            <button class="btn btn-sm" id="eyedropperBtn" title="Pick color from image"><i class="bi bi-eyedropper"></i></button>
+                            <button class="btn btn-sm" id="openColorPicker"><i class="bi bi-plus-lg"></i> Add</button>
+                        </div>
                     </div>
                     <div id="swatches" class="swatch-grid"></div>
                     <div style="margin-top:10px;">
@@ -1392,10 +1395,11 @@
 
             renderSwatches() {
                 const c = document.getElementById('swatches'); c.innerHTML='';
-                this.state.colors.forEach((col, i) => {
+                this.state.colors.forEach((col) => {
                     const d = document.createElement('div'); d.className='swatch'; d.style.background=col.hex;
                     d.onclick=()=>{
-                        this.state.colors.splice(i, 1);
+                        this.state.colors = this.state.colors.filter(c => c.hex !== col.hex);
+                        this.renderSwatches(); // Re-render swatches after removal
                         this.render(); 
                         this.saveSessionState();
                         LiveSync.updateColors(this.state.colors);
@@ -1433,6 +1437,18 @@
 
                 document.getElementById('fileIn').onchange = (e) => this.handleImport(e);
                 document.getElementById('openColorPicker').onclick = () => this.openPicker('remove');
+                document.getElementById('eyedropperBtn').onclick = () => {
+                    this.state.eyedropperMode = !this.state.eyedropperMode;
+                    const btn = document.getElementById('eyedropperBtn');
+                    if(this.state.eyedropperMode) {
+                        btn.style.background = 'var(--primary)';
+                        btn.style.color = 'white';
+                        UI.showToast('Tap on image to pick color');
+                    } else {
+                        btn.style.background = '';
+                        btn.style.color = '';
+                    }
+                };
                 document.getElementById('closePicker').onclick = () => { 
                     document.getElementById('floatingPicker').style.display='none'; 
                     if(this.state.selection.length) this.saveCurrentImg(); 
@@ -1444,6 +1460,8 @@
                         const i = parseInt(hex.slice(1), 16);
                         this.state.colors.push({hex, lab:rgbToLab((i>>16)&255,(i>>8)&255,i&255)});
                         this.renderSwatches();
+                        this.saveSessionState();
+                        LiveSync.updateColors(this.state.colors);
                     }
                     document.getElementById('floatingPicker').style.display='none';
                     this.render(); this.saveSessionState();
@@ -1679,9 +1697,43 @@
                 };
 
                 c.onpointerdown = e => {
+                    if (e.pointerType === "touch" && !e.isPrimary) return;
                     const pt = getPt(e); startPt = pt;
                     this.lastScreenX = e.clientX;
                     this.lastScreenY = e.clientY;
+                    
+                    // Eyedropper mode: pick color from canvas
+                    if(this.state.eyedropperMode) {
+                        const c = document.getElementById('canvas');
+                        const ctx = c.getContext('2d', {willReadFrequently: true});
+                        const r = c.getBoundingClientRect();
+                        const screenX = (e.clientX - r.left)*(c.width/r.width);
+                        const screenY = (e.clientY - r.top)*(c.height/r.height);
+                        
+                        // Get pixel data at the clicked position
+                        const pixelData = ctx.getImageData(Math.floor(screenX), Math.floor(screenY), 1, 1).data;
+                        const r_val = pixelData[0];
+                        const g_val = pixelData[1];
+                        const b_val = pixelData[2];
+                        const hex = '#' + [r_val, g_val, b_val].map(x => x.toString(16).padStart(2, '0')).join('');
+                        
+                        // Add the color to the list
+                        const labColor = rgbToLab(r_val, g_val, b_val);
+                        this.state.colors.push({hex, lab: labColor});
+                        this.renderSwatches();
+                        this.saveSessionState();
+                        LiveSync.updateColors(this.state.colors);
+                        
+                        // Turn off eyedropper mode
+                        this.state.eyedropperMode = false;
+                        const btn = document.getElementById('eyedropperBtn');
+                        btn.style.background = '';
+                        btn.style.color = '';
+                        
+                        UI.showToast('Color added: ' + hex);
+                        return;
+                    }
+                    
                     if(this.state.tool === 'text') {
                         UI.showInput("Add Text", "Type something...", (text) => {
                             const img = this.state.images[this.state.idx]; const fs = this.state.textSize;
@@ -1707,6 +1759,7 @@
                 };
 
                 window.onpointermove = e => {
+                    if (lastPinchDist !== null) return;
                     const pt = getPt(e);
                     
                     // Update Remote Cursor
@@ -1791,7 +1844,10 @@
                         // ---------------------------
 
                         this.currentStroke.push(pt); const ctx=c.getContext('2d');
-                        ctx.save(); ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize;
+                        ctx.save(); 
+                        ctx.translate(this.state.pan.x, this.state.pan.y);
+                        ctx.scale(this.state.zoom, this.state.zoom);
+                        ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize;
                         ctx.strokeStyle=this.state.tool==='eraser'?(this.state.bg==='transparent'?'#000':this.state.bg):this.state.penColor;
                         if(this.state.tool==='eraser'&&this.state.bg==='transparent') ctx.globalCompositeOperation='destination-out';
                         ctx.beginPath(); ctx.moveTo(this.currentStroke[this.currentStroke.length-2].x, this.currentStroke[this.currentStroke.length-2].y); ctx.lineTo(pt.x,pt.y); ctx.stroke(); ctx.restore();
@@ -1803,6 +1859,8 @@
 
                 // --- Zoom & Pan Logic ---
                 let lastPinchDist = null;
+                let lastMidpoint = null;
+
                 c.addEventListener('wheel', e => {
                     if (e.ctrlKey) {
                         e.preventDefault();
@@ -1832,28 +1890,55 @@
 
                 c.addEventListener('touchstart', e => {
                     if (e.touches.length === 2) {
+                        this.isDragging = false;
+                        this.currentStroke = null;
                         lastPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                        lastMidpoint = {
+                            x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                            y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+                        };
                     }
                 }, { passive: false });
 
                 c.addEventListener('touchmove', e => {
-                    if (e.touches.length === 2 && lastPinchDist !== null) {
+                    if (e.touches.length === 2 && lastPinchDist !== null && lastMidpoint !== null) {
                         e.preventDefault();
                         const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
                         const factor = dist / lastPinchDist;
                         
-                        const r = c.getBoundingClientRect();
-                        const centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left) * (c.width / r.width);
-                        const centerY = ((e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top) * (c.height / r.height);
+                        const curMidpoint = {
+                            x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                            y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+                        };
 
+                        const r = c.getBoundingClientRect();
+                        const centerX = (curMidpoint.x - r.left) * (c.width / r.width);
+                        const centerY = (curMidpoint.y - r.top) * (c.height / r.height);
+
+                        // Update Zoom
                         const newZoom = Math.min(Math.max(this.state.zoom * factor, 0.1), 10);
+                        
+                        // Apply Pan based on midpoint movement (screen space to canvas space)
+                        this.state.pan.x += (curMidpoint.x - lastMidpoint.x) * (c.width / r.width);
+                        this.state.pan.y += (curMidpoint.y - lastMidpoint.y) * (c.height / r.height);
+
+                        // Adjust pan for zoom centering
                         this.state.pan.x = centerX - (centerX - this.state.pan.x) * (newZoom / this.state.zoom);
                         this.state.pan.y = centerY - (centerY - this.state.pan.y) * (newZoom / this.state.zoom);
+
                         this.state.zoom = newZoom;
                         lastPinchDist = dist;
+                        lastMidpoint = curMidpoint;
                         this.render();
                     }
                 }, { passive: false });
+
+                c.addEventListener('touchend', e => {
+                    if (e.touches.length < 2) {
+                        lastPinchDist = null;
+                        lastMidpoint = null;
+                    }
+                });
 
                 c.addEventListener('touchend', e => {
                     if (e.touches.length < 2) lastPinchDist = null;
@@ -2943,32 +3028,54 @@
                 ctx.translate(this.state.pan.x, this.state.pan.y);
                 ctx.scale(this.state.zoom, this.state.zoom);
 
-                ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
-
+                // Check if we need to apply color removal
                 if(this.state.previewOn || (tempHex && this.state.pickerMode==='remove')) {
-                    // Note: Color removal logic might need optimization for zoom, 
-                    // but for now we draw the processed image.
                     let targets = this.state.colors.map(x=>x.lab);
                     if(tempHex) {
                         const i = parseInt(tempHex.slice(1), 16);
                         targets.push(rgbToLab((i>>16)&255, (i>>8)&255, i&255));
                     }
                     if(targets.length > 0) {
-                        const imgD = ctx.getImageData(0,0,this.state.viewW, this.state.viewH);
-                        const d = imgD.data; const lab = this.cache.lab; const sq = this.state.strict**2;
+                        // Create a temporary canvas to process the image BEFORE transformations
+                        const tmpC = document.createElement('canvas');
+                        tmpC.width = this.state.viewW; 
+                        tmpC.height = this.state.viewH;
+                        const tmpCtx = tmpC.getContext('2d', {willReadFrequently: true});
+                        
+                        // Draw the original image to temp canvas
+                        tmpCtx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
+                        
+                        // Get and process the image data
+                        const imgD = tmpCtx.getImageData(0, 0, this.state.viewW, this.state.viewH);
+                        const d = imgD.data; 
+                        const lab = this.cache.lab; 
+                        const sq = this.state.strict**2;
+                        
                         for(let i=0, j=0; i<d.length; i+=4, j+=3) {
                             if(d[i+3]===0) continue;
                             const l=lab[j], a=lab[j+1], b=lab[j+2];
                             let keep = false;
-                            for(let t of targets) if(((l-t[0])**2 + (a-t[1])**2 + (b-t[2])**2) <= sq) { keep = true; break; }
+                            for(let t of targets) {
+                                if(((l-t[0])**2 + (a-t[1])**2 + (b-t[2])**2) <= sq) { 
+                                    keep = true; 
+                                    break; 
+                                }
+                            }
                             if(!keep) d[i+3] = 0; 
                         }
-                        // We need a temporary canvas to put imageData because ctx is scaled
-                        const tmpC = document.createElement('canvas');
-                        tmpC.width = this.state.viewW; tmpC.height = this.state.viewH;
-                        tmpC.getContext('2d').putImageData(imgD, 0, 0);
+                        
+                        // Put processed data back
+                        tmpCtx.putImageData(imgD, 0, 0);
+                        
+                        // Draw the processed image to main canvas (already transformed)
                         ctx.drawImage(tmpC, 0, 0);
+                    } else {
+                        // No colors to keep, just draw original
+                        ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
                     }
+                } else {
+                    // No preview, just draw original
+                    ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
                 }
 
                 const hist = this.state.images[this.state.idx].history;

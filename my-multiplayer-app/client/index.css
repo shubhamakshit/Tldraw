@@ -102,3 +102,33 @@ body {
 	position: relative;
 	flex: 1;
 }
+
+/* Apply custom colors to geo shapes */
+.custom-geo-colors svg [fill]:not([fill="none"]) {
+	fill: var(--custom-fill-color) !important;
+	fill-opacity: var(--custom-fill-opacity) !important;
+}
+
+.custom-geo-colors svg [stroke]:not([stroke="none"]) {
+	stroke: var(--custom-stroke-color) !important;
+	stroke-opacity: var(--custom-stroke-opacity) !important;
+}
+
+/* Hide default tldraw fill/stroke when using RoughJS hatch pattern */
+.tl-hatch-active .tl-shape-svg path,
+.tl-hatch-active .tl-shape-svg rect,
+.tl-hatch-active .tl-shape-svg ellipse,
+.tl-hatch-active .tl-shape-svg circle,
+.tl-hatch-active .tl-shape-svg polygon,
+.tl-hatch-active .tl-shape-svg polyline {
+	fill: transparent !important;
+	stroke: transparent !important;
+}
+
+/* Keep text visible */
+.tl-hatch-active text {
+	fill: inherit !important;
+	stroke: none !important;
+}
+
+

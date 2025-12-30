@@ -42,7 +42,7 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	})
 
     // Maintainer Stats Route
-    .get('/api/maintainer/stats', async (request, env) => {
+    .get('/api/maintainer/stats', async (_request, env) => {
         try {
             const list = await env.TLDRAW_BUCKET.list();
             let totalSize = 0;
@@ -76,7 +76,7 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
     })
 
     // Maintainer: List Rooms
-    .get('/api/maintainer/rooms', async (request, env) => {
+    .get('/api/maintainer/rooms', async (_request, env) => {
         try {
             // 1. Get Tldraw Rooms (Prefix: rooms/)
             const tldrawList = await env.TLDRAW_BUCKET.list({ prefix: 'rooms/', include: ['customMetadata'] });

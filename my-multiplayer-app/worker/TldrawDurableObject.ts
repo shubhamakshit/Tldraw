@@ -2,19 +2,49 @@ import { RoomSnapshot, TLSocketRoom } from '@tldraw/sync-core'
 import {
 	TLRecord,
 	createTLSchema,
-	// defaultBindingSchemas,
 	defaultShapeSchemas,
+	RecordProps,
 } from '@tldraw/tlschema'
+import { T } from '@tldraw/validate'
 import { DurableObject } from 'cloudflare:workers'
 import { AutoRouter, IRequest, error } from 'itty-router'
 import throttle from 'lodash.throttle'
 
-// add custom shapes and bindings here if needed:
-const schema = createTLSchema({
-	shapes: { ...defaultShapeSchemas },
-	// bindings: { ...defaultBindingSchemas },
-})
+// Define equation shape props using the correct v4 API
+const equationShapeProps: RecordProps<any> = {
+	w: T.number,
+	h: T.number,
+	type: T.string,
+	expression: T.string,
+	xExpression: T.string,
+	yExpression: T.string,
+	xMin: T.number,
+	xMax: T.number,
+	tMin: T.number,
+	tMax: T.number,
+	scaleX: T.number,
+	scaleY: T.number,
+	offsetX: T.number,
+	offsetY: T.number,
+	showAxes: T.boolean,
+	showGrid: T.boolean,
+	showNumbers: T.boolean,
+	axisColor: T.string,
+	gridColor: T.string,
+	strokeColor: T.string,
+	fontSize: T.number.optional(),
+	fontFamily: T.string.optional(),
+}
 
+// Create schema with custom equation shape
+const schema = createTLSchema({
+	shapes: { 
+		...defaultShapeSchemas,
+		equation: {
+			props: equationShapeProps,
+		}
+	},
+})
 // each whiteboard room is hosted in a DurableObject:
 // https://developers.cloudflare.com/durable-objects/
 
