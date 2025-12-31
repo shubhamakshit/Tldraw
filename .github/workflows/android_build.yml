@@ -39,7 +39,9 @@ jobs:
 
       - name: Build Web App
         working-directory: "my-multiplayer-app"
-        run: npm run build
+        run: |
+          export CAPACITOR_SERVER_IP_ENV=${{ github.event.inputs.environment }}
+          npm run build
 
       - name: Capacitor Sync
         working-directory: "my-multiplayer-app"
