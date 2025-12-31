@@ -1,4 +1,15 @@
-# 🎨 Tldraw + ColorRM Multiplayer Hub
+---
+title: My Multiplayer App
+emoji: 🎨
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+license: mit
+---
+
+# Tldraw Multiplayer Template
+
 
 A high-performance, production-ready multiplayer whiteboarding and PDF annotation platform. This project combines the power of **tldraw** for infinite canvas collaboration with **ColorRM**, a specialized tool for synchronized PDF markup.
 

@@ -19,7 +19,7 @@ import { useSync } from '@tldraw/sync'
 import { getBookmarkPreview } from '../getBookmarkPreview'
 import { multiplayerAssetStore } from '../multiplayerAssetStore'
 import { WS_URL, SERVER_URL } from '../config'
-import { saveRoom } from '../pages/storageUtils'
+import { saveRoom } from './storageUtils'
 import { StatePersistence } from '../components/StatePersistence'
 import { NavigationDock } from '../components/NavigationDock'
 import { getUiOverrides } from '../overrides'
@@ -40,10 +40,13 @@ const customShapeUtils = [
     EquationShapeUtil
 ]
 
-export function Room() {
+export function RoomPage() {
     const { roomId } = useParams<{ roomId: string }>()
     const navigate = useNavigate()
     
+    console.log(`[Room] Initializing. RoomID: ${roomId}`);
+    console.log(`[Room] Constants -> SERVER_URL: ${SERVER_URL}, WS_URL: ${WS_URL}`);
+
     if (!roomId) {
         navigate('/')
         return null
@@ -51,7 +54,10 @@ export function Room() {
 
     useEffect(() => {
         saveRoom(roomId)
-        fetch(`${SERVER_URL}/api/meta/${roomId}`)
+        const metaUrl = `${SERVER_URL}/api/meta/${roomId}`;
+        console.log(`[Room] Fetching metadata from: ${metaUrl}`);
+        
+        fetch(metaUrl)
             .then(res => res.json())
             .then((data: any) => {
                 if (data.name) {
@@ -62,8 +68,11 @@ export function Room() {
             .catch(err => console.error('Failed to fetch room metadata:', err))
     }, [roomId])
 
+    const syncUri = `${WS_URL}/api/connect/${roomId}`;
+    console.log(`[Room] Syncing with URI: ${syncUri}`);
+
     const store = useSync({
-        uri: `${WS_URL}/api/connect/${roomId}`,
+        uri: syncUri,
         assets: multiplayerAssetStore,
         shapeUtils: customShapeUtils,
     })

@@ -1,17 +1,28 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
+const getServerUrl = () => {
+  const env = process.env.CAPACITOR_SERVER_IP_ENV
+  if (env === 'local') return 'http://192.168.0.169:5173'
+  if (env === 'hf') return 'https://jaimodiji-my-multiplayer-app.hf.space'
+  return 'http://tshonq.duckdns.org:5173'
+}
+
+const getAllowNavigation = () => {
+  const env = process.env.CAPACITOR_SERVER_IP_ENV
+  if (env === 'local') return '192.168.0.169'
+  if (env === 'hf') return 'jaimodiji-my-multiplayer-app.hf.space'
+  return 'tshonq.duckdns.org'
+}
+
 const config: CapacitorConfig = {
   appId: 'shubham.akshit.tldraw',
   appName: 'TlDraw',
   webDir: 'dist/client',
   server: {
-    // 1. ADD THIS LINE: Tells the app to load directly from your Vite server
-    url: process.env.CAPACITOR_SERVER_IP_ENV === 'local' ? 'http://192.168.0.169:5173' : 'http://tshonq.duckdns.org:5173', 
-    
-    // Existing settings
-    androidScheme: 'http', 
+    url: getServerUrl(),
+    androidScheme: 'https', // Recommended for HF
     cleartext: true,
-    allowNavigation: [process.env.CAPACITOR_SERVER_IP_ENV === 'local' ? '192.168.0.169' : 'tshonq.duckdns.org'] 
+    allowNavigation: [getAllowNavigation()]
   },
   android: {
     allowMixedContent: true

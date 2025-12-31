@@ -1,18 +1,24 @@
 // --- SINGLE SOURCE OF TRUTH ---
 const VITE_PREVIEW_URL = import.meta.env.VITE_PREVIEW_URL
 
-let BASE_URL: string
+const VERSION = "1.0.5-" + Date.now();
+console.log(`[Config] Version: ${VERSION}`);
+console.log(`[Config] window.location:`, {
+    origin: window.location.origin,
+    protocol: window.location.protocol,
+    host: window.location.host
+});
+
+let origin = window.location.origin
 
 if (VITE_PREVIEW_URL) {
-	BASE_URL = VITE_PREVIEW_URL.replace(/^(https?:\/\/)/, '')
-} else {
-	const SERVER_IP = 'tshonq.duckdns.org'
-	const SERVER_PORT = '5173'
-	BASE_URL = `${SERVER_IP}:${SERVER_PORT}`
+    console.log(`[Config] Using VITE_PREVIEW_URL: ${VITE_PREVIEW_URL}`);
+    origin = VITE_PREVIEW_URL.replace(/\/$/, '')
 }
 
-// Base HTTP URL (Used for Assets and Links)
-export const SERVER_URL = `http://${BASE_URL}`
+// Force WSS if we are on HTTPS
+const isSecure = window.location.protocol === 'https:'
+export const SERVER_URL = origin
+export const WS_URL = origin.replace(/^http/, 'ws')
 
-// Base WebSocket URL (Used for Tldraw Sync)
-export const WS_URL = `ws://${BASE_URL}`
+console.log(`[Config] FINAL -> SERVER_URL: ${SERVER_URL}, WS_URL: ${WS_URL}`);
