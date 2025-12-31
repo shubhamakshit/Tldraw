@@ -17,7 +17,6 @@ if (VITE_PREVIEW_URL) {
 }
 
 // Force WSS if we are on HTTPS
-const isSecure = window.location.protocol === 'https:'
 export const SERVER_URL = origin
 export const WS_URL = origin.replace(/^http/, 'ws')
 
