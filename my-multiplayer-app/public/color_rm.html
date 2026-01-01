@@ -29,6 +29,7 @@
         :root {
             --bg-body: #000000; --bg-panel: #000000; --bg-surface: #111111;
             --primary: #ffffff; --accent: #0070f3; --text-main: #ffffff; --text-muted: #888888;
+            --text: var(--text-main); /* compat for splitview-simple.js */
             --border: #333333; --glass: rgba(0, 0, 0, 0.9);
             --menu-bg: #000000;
             --success: #0070f3;
@@ -395,6 +396,28 @@
     <input type="file" id="fileIn" accept="image/*,.pdf" style="display:none" multiple>
     <input type="file" id="splitViewFileIn" accept=".pdf" style="display:none">
 
+    <!-- Shared PDF Import (Main + Split) -->
+    <input type="file" id="sharedPdfImportInput" accept=".pdf" style="display:none">
+    <div id="sharedPdfImportModal" class="overlay" style="z-index:350">
+        <div class="card" style="max-width:420px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <h3 style="margin:0">Import PDF</h3>
+                <button onclick="window.CommonPdfImport?.hide()" style="background:none; border:none; color:#aaa; cursor:pointer;"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <p style="margin:0 0 14px 0; font-size:0.85rem; color:#888; line-height:1.4;">
+                Choose where to import this PDF.
+            </p>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                <button class="btn btn-primary" onclick="window.CommonPdfImport?.pick('main')" style="justify-content:center;">
+                    <i class="bi bi-brush"></i> Main
+                </button>
+                <button class="btn" onclick="window.CommonPdfImport?.pick('split')" style="justify-content:center; border-color:#444;">
+                    <i class="bi bi-diagram-2"></i> Split
+                </button>
+            </div>
+        </div>
+    </div>
+
     <header>
         <div style="display:flex; align-items:center; gap:16px;">
             <a href="/" class="btn btn-icon" title="Back to Hub" style="text-decoration:none; color:white; background:transparent; border:none; padding:0; width:auto; height:auto;">
@@ -738,6 +761,7 @@
         window.UI = {};
         window.App = {};
         window.LiveSync = {};
+        window.CommonPdfImport = window.CommonPdfImport || {};
 
         const UI = {
             showDashboard: () => { document.getElementById('dashboardModal').style.display='flex'; window.App.loadSessionList(); },
@@ -3348,6 +3372,64 @@
                 document.getElementById('floatingPicker').style.display='flex'; 
             }
         };
+
+        // Shared PDF Import controller (Main + Split)
+        const CommonPdfImport = {
+            target: null, // 'main' | 'split'
+            show() {
+                const m = document.getElementById('sharedPdfImportModal');
+                if (m) m.style.display = 'flex';
+            },
+            hide() {
+                const m = document.getElementById('sharedPdfImportModal');
+                if (m) m.style.display = 'none';
+            },
+            pick(target) {
+                this.target = target;
+                const input = document.getElementById('sharedPdfImportInput');
+                if (!input) return;
+                input.value = '';
+                input.click();
+            },
+            async onFileSelected(file) {
+                if (!file) return;
+                if (!file.type.includes('pdf')) {
+                    alert('Please select a PDF file.');
+                    return;
+                }
+
+                // Ensure split DB exists before importing
+                if (this.target === 'split') {
+                    if (!window.SplitView) {
+                        alert('SplitView is not loaded.');
+                        return;
+                    }
+                    // SplitView.handleFileUpload expects an event-like object with target.files
+                    await window.SplitView.handleFileUpload({ target: { files: [file] } });
+                    return;
+                }
+
+                // Default to main
+                if (!window.App || !window.App.handleImport) {
+                    alert('Main app is not ready yet.');
+                    return;
+                }
+                await window.App.handleImport({ target: { files: [file] } }, false);
+            }
+        };
+
+        // Wire file input change once
+        const sharedInput = document.getElementById('sharedPdfImportInput');
+        if (sharedInput) {
+            sharedInput.onchange = async (e) => {
+                const f = e.target.files?.[0];
+                CommonPdfImport.hide();
+                await CommonPdfImport.onFileSelected(f);
+                e.target.value = '';
+            };
+        }
+
+        window.CommonPdfImport = CommonPdfImport;
 
         // Attach to window for HTML events
         window.App = App;

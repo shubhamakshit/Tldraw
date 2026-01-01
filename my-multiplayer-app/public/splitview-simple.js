@@ -101,8 +101,7 @@ const SplitView = {
                   <button class="btn btn-sm" onclick="SplitView.showProjectManager()" style="flex:1; font-size:0.75rem;">
                     <i class="bi bi-folder"></i>
                   </button>
-                  <input type="file" id="rightPdfInput" accept=".pdf" style="display:none">
-                  <button class="btn btn-sm" onclick="document.getElementById('rightPdfInput').click()" style="flex:1; font-size:0.75rem;">
+                  <button class="btn btn-sm" onclick="window.CommonPdfImport?.show(); window.CommonPdfImport?.pick('split')" style="flex:1; font-size:0.75rem;" title="Import PDF">
                     <i class="bi bi-upload"></i>
                   </button>
                 </div>
@@ -164,12 +163,8 @@ const SplitView = {
     // Keep sidebar visible
     if (sidebar) sidebar.style.display = 'flex';
     
-    // Setup file input
-    const input = document.getElementById('rightPdfInput');
-    if (input) {
-      input.removeEventListener('change', this.handleFileUpload);
-      input.addEventListener('change', (e) => this.handleFileUpload(e));
-    }
+    // File import is handled by shared CommonPdfImport (in color_rm.html)
+    // (Legacy rightPdfInput removed)
     
     // Setup touch gestures for pinch zoom
     this.setupTouchGestures();
@@ -536,25 +531,22 @@ const SplitView = {
     
     if (!sidebar) return;
     
-    const isHidden = sidebar.style.marginLeft === '-200px';
-    
+    const isHidden = sidebar.style.display === 'none';
+
     if (isHidden) {
-      // Show sidebar
+      // Show sidebar (restore layout)
+      sidebar.style.display = 'flex';
       sidebar.style.marginLeft = '0';
       if (toggleBtn) {
         toggleBtn.style.display = 'none';
-        toggleBtn.querySelector('i').className = 'bi bi-chevron-right';
-        console.log('Sidebar shown');
       }
     } else {
-      // Hide sidebar
-      sidebar.style.marginLeft = '-200px';
+      // Hide sidebar completely so it doesn't overlap/steal space in overflow:hidden flex layouts
+      sidebar.style.display = 'none';
       if (toggleBtn) {
         toggleBtn.style.display = 'inline-flex';
         toggleBtn.style.alignItems = 'center';
         toggleBtn.style.justifyContent = 'center';
-        toggleBtn.querySelector('i').className = 'bi bi-chevron-right';
-        console.log('Sidebar hidden, toggle button visible');
       }
     }
   },
@@ -760,7 +752,7 @@ const SplitView = {
           </div>
           <div id="rightProjectList" style="flex:1; overflow-y:auto; padding:20px;"></div>
           <div style="padding:20px; border-top:1px solid var(--border); display:flex; gap:10px;">
-            <button class="btn btn-primary" onclick="document.getElementById('rightPdfInput').click(); SplitView.closeProjectManager();" style="flex:1;">
+            <button class="btn btn-primary" onclick="SplitView.closeProjectManager(); window.CommonPdfImport?.show(); window.CommonPdfImport?.pick('split')" style="flex:1;">
               <i class="bi bi-upload"></i> Upload New PDF
             </button>
             <button class="btn" onclick="SplitView.showImportFromMain()" style="flex:1; border:1px solid #333;">

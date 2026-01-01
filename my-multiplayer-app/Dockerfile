@@ -24,5 +24,5 @@ ENV NODE_ENV=development
 # Expose port 7860
 EXPOSE 7860
 
-# Run init, restore, then start dev server and backup worker concurrently
-CMD ["sh", "-c", "node cmd/hf_init.mjs && node cmd/hf_restore.mjs && npx concurrently \"npm run dev\" \"node cmd/hf_backup.mjs\""]
+# Run disk check, init, restore, then start dev server and backup worker concurrently
+CMD ["sh", "-c", "df -h && node cmd/hf_init.mjs && node cmd/hf_restore.mjs && npx concurrently \"npm run dev\" \"node cmd/hf_backup.mjs\""]
