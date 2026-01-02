@@ -12,6 +12,24 @@ export function useSPen(editor: Editor) {
     // DOUBLE TAP TRACKER
     const lastTapTimeRef = useRef<number>(0)
 
+    // 0. Keep track of the "main" tool (the one we want to revert to)
+    useEffect(() => {
+        const handleEvent = (e: any) => {
+            if (e.name === 'tool_change') {
+                const current = editor.getCurrentToolId()
+                // If we are NOT in button mode, and the new tool isn't the temporary eraser,
+                // update our memory of the "previous" (intended) tool.
+                if (!isInButtonModeRef.current && current !== 'eraser') {
+                    previousToolRef.current = current
+                }
+            }
+        }
+        editor.on('event', handleEvent)
+        return () => {
+            editor.off('event', handleEvent)
+        }
+    }, [editor])
+
     useEffect(() => {
         if (!editor) return
 
@@ -106,7 +124,12 @@ export function useSPen(editor: Editor) {
 
         const onButtonUp = () => {
             isInButtonModeRef.current = false // Mark button as inactive
-            performHotSwap(previousToolRef.current)
+
+            // Only switch back if we are currently on the eraser
+            // (If user manually switched tool while button was held, don't revert)
+            if (editor.getCurrentToolId() === 'eraser') {
+                performHotSwap(previousToolRef.current)
+            }
         }
 
         // Listeners

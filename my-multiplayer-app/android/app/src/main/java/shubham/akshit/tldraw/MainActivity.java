@@ -38,7 +38,18 @@ public class MainActivity extends BridgeActivity {
 
     private boolean wasButtonPressed = false;
     private boolean isTouchActive = false;
-    
+
+    // Cached arrays to avoid GC in dispatchTouchEvent
+    private final PointerProperties[] cachedPointerProperties = new PointerProperties[10];
+    private final PointerCoords[] cachedPointerCoords = new PointerCoords[10];
+
+    {
+        for (int i = 0; i < 10; i++) {
+            cachedPointerProperties[i] = new PointerProperties();
+            cachedPointerCoords[i] = new PointerCoords();
+        }
+    }
+
     private boolean isVolUpPressed = false;
     private boolean isVolDownPressed = false;
 
@@ -228,13 +239,14 @@ public class MainActivity extends BridgeActivity {
             if (isSideButtonPressed || (wasButtonPressed && isTouchActive)) {
 
                 int pointerCount = event.getPointerCount();
-                PointerProperties[] props = new PointerProperties[pointerCount];
-                PointerCoords[] coords = new PointerCoords[pointerCount];
+                // Safety check for array bounds
+                if (pointerCount > 10) pointerCount = 10;
+
+                PointerProperties[] props = cachedPointerProperties;
+                PointerCoords[] coords = cachedPointerCoords;
 
                 for (int i = 0; i < pointerCount; i++) {
-                    props[i] = new PointerProperties();
                     event.getPointerProperties(i, props[i]);
-                    coords[i] = new PointerCoords();
                     event.getPointerCoords(i, coords[i]);
                 }
 
