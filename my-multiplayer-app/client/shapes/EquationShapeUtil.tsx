@@ -42,12 +42,21 @@ function EquationShapeComponent({ shape, svgContent }: { shape: IEquationShape, 
             props: { scaleX, scaleY }
         })
     }
-    
-    const getButtonStyle = (): React.CSSProperties => ({
+
+    const toggleAspectRatio = (e: React.MouseEvent) => {
+        e.stopPropagation()
+        editor.updateShape({
+            id: shape.id,
+            type: 'equation',
+            props: { lockAspectRatio: !shape.props.lockAspectRatio }
+        })
+    }
+
+    const getButtonStyle = (active = false): React.CSSProperties => ({
         width: `${buttonSize}px`,
         height: `${buttonSize}px`,
         border: 'none',
-        background: 'rgba(255,255,255,0.15)',
+        background: active ? 'rgba(66, 135, 245, 0.9)' : 'rgba(255,255,255,0.15)',
         color: 'white',
         borderRadius: '4px',
         cursor: 'pointer',
@@ -96,6 +105,14 @@ function EquationShapeComponent({ shape, svgContent }: { shape: IEquationShape, 
                     <div style={{ width: '1px', background: 'rgba(255,255,255,0.3)', margin: '0 2px' }} />
                     <button onClick={(e) => handleZoom(1.2, e)} style={getButtonStyle()} title="Zoom In">+</button>
                     <button onClick={(e) => handleZoom(0.8, e)} style={getButtonStyle()} title="Zoom Out">−</button>
+                    <div style={{ width: '1px', background: 'rgba(255,255,255,0.3)', margin: '0 2px' }} />
+                    <button
+                        onClick={toggleAspectRatio}
+                        style={getButtonStyle(shape.props.lockAspectRatio)}
+                        title={shape.props.lockAspectRatio ? "Unlock Aspect Ratio" : "Lock Aspect Ratio"}
+                    >
+                        {shape.props.lockAspectRatio ? "🔒" : "🔓"}
+                    </button>
                 </div>
             )}
         </div>
@@ -131,7 +148,10 @@ export type IEquationShape = TLShape & {
         axisColor: string
         gridColor: string
         strokeColor: string
-        
+
+        // Behavior
+        lockAspectRatio?: boolean
+
         // Font (optional for backwards compatibility)
         fontSize?: number
         fontFamily?: string
@@ -162,14 +182,15 @@ export class EquationShapeUtil extends ShapeUtil<IEquationShape> {
         axisColor: T.string,
         gridColor: T.string,
         strokeColor: T.string,
+        lockAspectRatio: T.boolean.optional(),
         fontSize: T.number.optional(),
         fontFamily: T.string.optional(),
     }
 
     override canResize = (_shape: IEquationShape) => true
-    
-    override isAspectRatioLocked = (_shape: IEquationShape) => false
-    
+
+    override isAspectRatioLocked = (shape: IEquationShape) => shape.props.lockAspectRatio ?? false
+
     // Disable text editing on double-click
     override canEdit = () => false
 
@@ -204,6 +225,7 @@ export class EquationShapeUtil extends ShapeUtil<IEquationShape> {
             axisColor: '#666666',
             gridColor: '#e5e5e5',
             strokeColor: '#2563eb',
+            lockAspectRatio: false,
             fontSize: 8,
             fontFamily: 'monospace'
         }

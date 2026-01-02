@@ -52,6 +52,56 @@ export function RoomPage() {
         return null
     }
 
+    // --- ERROR MONITORING ---
+    useEffect(() => {
+        const recover = () => {
+            if (window.confirm('Would you like to clear local data to try and fix this issue? This will not delete server data, but will clear your local cache.')) {
+                localStorage.clear()
+                if (window.indexedDB) {
+                    window.indexedDB.databases().then((dbs) => {
+                        dbs.forEach((db) => {
+                            if (db.name && db.name.includes('tldraw')) {
+                                window.indexedDB.deleteDatabase(db.name)
+                            }
+                        })
+                    })
+                }
+                setTimeout(() => window.location.reload(), 500)
+            }
+        }
+
+        const handleError = (event: ErrorEvent) => {
+            const msg = event.message || ''
+            if (msg.includes('INVALID_RECORD') || msg.includes('RemoteSyncError') || msg.includes('ValidationError')) {
+                // Use setTimeout to ensure the alert doesn't block the error propagation immediately if that causes issues,
+                // but mainly to give UI a chance to render if it can.
+                setTimeout(() => {
+                    alert(`Sync/Validation Error: The room data appears to be invalid.\n\nDetails: ${msg}`)
+                    recover()
+                }, 100)
+            }
+        }
+
+        const handleRejection = (event: PromiseRejectionEvent) => {
+            const reason = event.reason?.message || String(event.reason || '')
+            if (reason.includes('INVALID_RECORD') || reason.includes('RemoteSyncError') || reason.includes('ValidationError')) {
+                setTimeout(() => {
+                    alert(`Sync/Validation Error: The room data appears to be invalid.\n\nDetails: ${reason}`)
+                    recover()
+                }, 100)
+            }
+        }
+
+        window.addEventListener('error', handleError)
+        window.addEventListener('unhandledrejection', handleRejection)
+
+        return () => {
+            window.removeEventListener('error', handleError)
+            window.removeEventListener('unhandledrejection', handleRejection)
+        }
+    }, [])
+    // ------------------------
+
     useEffect(() => {
         saveRoom(roomId)
         const metaUrl = `${SERVER_URL}/api/meta/${roomId}`;
