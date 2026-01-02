@@ -1,14 +1,15 @@
-import { 
-    track, 
-    useEditor, 
-    useValue, 
-    TldrawUiButton, 
+import {
+    track,
+    useEditor,
+    useValue,
+    TldrawUiButton,
     TldrawUiButtonIcon,
-    atom, 
+    atom,
     Box,
-    react
+    react,
+    TldrawUiButtonCheck
 } from 'tldraw'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { LockIcon } from './Icons'
 
 export const getSelectLockedSignal = (editor: any) => {
@@ -26,24 +27,23 @@ export const SelectOptionsPanel = track(() => {
     if (!isSelect) return null
 
     return (
-        <div style={{
+        <div className="tlui-menu" style={{
             position: 'absolute',
-            bottom: 84,
+            bottom: 60,
             left: 12,
             zIndex: 1000,
+            borderRadius: 'var(--radius-2)',
+            boxShadow: 'var(--shadow-2)',
+            backgroundColor: 'var(--color-panel)',
+            border: '1px solid var(--color-panel-contrast)',
+            padding: '4px',
+            pointerEvents: 'all',
             display: 'flex',
             flexDirection: 'column',
-            gap: '8px',
-            background: 'var(--tl-color-panel)',
-            padding: '8px',
-            borderRadius: '8px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-            border: '1px solid var(--tl-color-divider)',
-            minWidth: '150px'
+            gap: '4px'
         }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '4px', color: 'var(--tl-color-text)', textAlign: 'center' }}>Select Options</div>
             <TldrawUiButton
-                type="low"
+                type="normal"
                 onClick={() => {
                     const signal = getSelectLockedSignal(editor)
                     const next = !signal.get()
@@ -53,17 +53,17 @@ export const SelectOptionsPanel = track(() => {
                 }}
                 style={{
                     justifyContent: 'flex-start',
-                    padding: '4px 8px',
+                    padding: '8px 12px',
                     height: '32px',
-                    background: isSelectLocked ? 'var(--tl-color-selected)' : 'transparent',
-                    color: isSelectLocked ? 'white' : 'var(--tl-color-text)',
+                    background: isSelectLocked ? 'var(--color-selected-primary)' : 'transparent',
+                    color: isSelectLocked ? 'var(--color-selected-contrast)' : 'var(--color-text)',
+                    borderRadius: 'var(--radius-1)'
                 }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div style={{ width: '16px', display: 'flex', justifyContent: 'center' }}>
-                        {isSelectLocked ? <LockIcon size={14} /> : <div style={{ width: 14, height: 14, border: '1px solid currentColor', borderRadius: '2px' }} />}
-                    </div>
-                    <span>Select Locked</span>
+                    <LockIcon size={14} />
+                    <span style={{ fontSize: '12px', fontWeight: 500 }}>Select Locked</span>
+                    <TldrawUiButtonCheck checked={isSelectLocked} />
                 </div>
             </TldrawUiButton>
         </div>
@@ -94,43 +94,60 @@ export const SelectLockedToggle = track(() => {
 
 export function SelectLockedLogic() {
     const editor = useEditor()
-    
+
     // Handle click-to-select locked shapes
+    // We use a capturing listener on the window to intercept the event BEFORE Tldraw processes it.
+    // This prevents Tldraw from treating the click on a locked shape as a background click (which deselects everything).
     useEffect(() => {
-        const handleEvent = (event: any) => {
-            if (event.name !== 'pointer_down') return
-            
+        const handlePointerDown = (e: PointerEvent) => {
             const isSelectLocked = getSelectLockedSignal(editor).get()
             if (!isSelectLocked) return
+
+            // Only intervene if we are using the select tool
             if (editor.getCurrentToolId() !== 'select') return
-            
-            const { x, y } = editor.inputs.currentPagePoint
-            const pagePoint = { x, y }
-            
-            const shapes = editor.getCurrentPageShapesSorted()
-            let target = null
-            for (let i = shapes.length - 1; i >= 0; i--) {
-                const shape = shapes[i]
-                if (shape.isLocked && editor.isPointInShape(shape, pagePoint, { hitInside: true, margin: 0 })) {
-                    target = shape
-                    break
-                }
-            }
-            
-            if (target) {
-                setTimeout(() => {
-                    editor.setSelectedShapes([target!.id])
-                }, 50)
+
+            // Basic check: is this a click on the canvas?
+            const target = e.target as HTMLElement
+
+            // Allow clicks on UI elements (context menus, panels) to pass through
+            if (target.closest('.tl-ui-layout') || target.closest('.tl-context-menu')) return
+
+            // Allow clicks on interactive elements inside shapes
+            if (target.tagName === 'BUTTON' || target.tagName === 'INPUT' || target.closest('button')) return
+
+            if (!target || !target.closest('.tl-canvas')) return
+
+            // Convert screen point to page point
+            const point = editor.screenToPage({ x: e.clientX, y: e.clientY })
+
+            // Find if we hit a locked shape
+            // We check hitInside: true because we want to select filled shapes by clicking inside
+            // Using a slightly larger margin for easier selection
+            const zoom = editor.getZoomLevel()
+            const margin = 5 / zoom
+            const shape = editor.getShapeAtPoint(point, { hitInside: true, margin })
+
+            if (shape && shape.isLocked) {
+                // We found a locked shape!
+                // Stop Tldraw from processing this event (which would clear selection)
+                e.stopPropagation()
+                e.preventDefault()
+
+                // Select the shape
+                editor.setSelectedShapes([shape.id])
+                return
             }
         }
-        
-        editor.on('event', handleEvent)
+
+        // Use capture: true to intercept before Tldraw
+        window.addEventListener('pointerdown', handlePointerDown, { capture: true })
+
         return () => {
-            editor.off('event', handleEvent)
+            window.removeEventListener('pointerdown', handlePointerDown, { capture: true })
         }
     }, [editor])
 
-    // Handle drag-to-select (brush) locked shapes - OPTIMIZED
+    // Handle drag-to-select (brush) locked shapes
     useEffect(() => {
         return react('check-brush-locked', () => {
             const isSelectLocked = getSelectLockedSignal(editor).get()
@@ -140,30 +157,37 @@ export function SelectLockedLogic() {
             const brushModel = editor.getInstanceState().brush
             if (!brushModel) return
 
+            // Standard brush logic for locked shapes
             const brush = Box.From(brushModel)
             const shapes = editor.getCurrentPageShapesSorted()
-            const lockedInBrush = shapes.filter(shape => {
+
+            // Find all locked shapes that collide with the brush
+            const lockedInBrush = new Set(shapes.filter(shape => {
                 if (!shape.isLocked) return false
                 const bounds = editor.getShapePageBounds(shape)
                 if (!bounds) return false
                 return brush.collides(bounds)
-            })
+            }).map(s => s.id))
 
-            if (lockedInBrush.length > 0) {
-                const currentSelected = new Set(editor.getSelectedShapeIds())
-                let changed = false
-                for (const shape of lockedInBrush) {
-                    if (!currentSelected.has(shape.id)) {
-                        currentSelected.add(shape.id)
-                        changed = true
-                    }
+            // Get current selection
+            const currentSelected = new Set(editor.getSelectedShapeIds())
+
+            // Add any locked shapes that are in the brush but not selected
+            let needsUpdate = false
+            const newSelection = new Set(currentSelected)
+
+            for (const id of lockedInBrush) {
+                if (!currentSelected.has(id)) {
+                    newSelection.add(id)
+                    needsUpdate = true
                 }
-                if (changed) {
-                    editor.setSelectedShapes(Array.from(currentSelected))
-                }
+            }
+
+            if (needsUpdate) {
+                 editor.setSelectedShapes(Array.from(newSelection))
             }
         })
     }, [editor])
-    
+
     return null
 }

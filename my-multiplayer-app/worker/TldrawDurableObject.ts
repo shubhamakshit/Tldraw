@@ -24,8 +24,8 @@ const equationShapeProps: RecordProps<any> = {
 	tMax: T.number,
 	scaleX: T.number,
 	scaleY: T.number,
-	offsetX: T.number,
-	offsetY: T.number,
+	offsetX: T.number.optional(),
+	offsetY: T.number.optional(),
 	showAxes: T.boolean,
 	showGrid: T.boolean,
 	showNumbers: T.boolean,
@@ -34,6 +34,7 @@ const equationShapeProps: RecordProps<any> = {
 	strokeColor: T.string,
 	fontSize: T.number.optional(),
 	fontFamily: T.string.optional(),
+	lockAspectRatio: T.boolean.optional(),
 }
 
 // Create schema with custom equation shape

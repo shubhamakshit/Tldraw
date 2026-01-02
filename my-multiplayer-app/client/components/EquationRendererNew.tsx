@@ -413,7 +413,7 @@ export function EquationRenderer() {
                                 position: 'absolute',
                                 top: '8px',
                                 right: '8px',
-                                background: 'var(--color-panel)',
+                                background: '#212121',
                                 border: '1px solid var(--color-panel-contrast)',
                                 borderRadius: '6px',
                                 padding: '4px 8px',

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { Component, ReactNode, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { 
     Tldraw, 
@@ -39,6 +39,51 @@ const customShapeUtils = [
     HatchGeoShapeUtil,
     EquationShapeUtil
 ]
+
+class SyncErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+    constructor(props: { children: ReactNode }) {
+        super(props)
+        this.state = { hasError: false }
+    }
+
+    static getDerivedStateFromError(_error: any) {
+        return { hasError: true }
+    }
+
+    componentDidCatch(error: any, _errorInfo: any) {
+        const msg = error?.message || String(error)
+        console.error("SyncErrorBoundary caught:", msg)
+
+        // Check specifically for Tldraw sync/validation errors
+        if (msg.includes('INVALID_RECORD') || msg.includes('RemoteSyncError') || msg.includes('ValidationError')) {
+            setTimeout(() => {
+                alert(`Sync/Validation Error: The room data appears to be invalid.\n\nDetails: ${msg}`)
+
+                if (window.confirm('Would you like to clear local data to try and fix this issue? This will not delete server data, but will clear your local cache.')) {
+                    localStorage.clear()
+                    if (window.indexedDB) {
+                        window.indexedDB.databases().then((dbs) => {
+                            dbs.forEach((db) => {
+                                if (db.name && db.name.includes('tldraw')) {
+                                    window.indexedDB.deleteDatabase(db.name)
+                                }
+                            })
+                        })
+                    }
+                    setTimeout(() => window.location.reload(), 500)
+                }
+            }, 100)
+        }
+    }
+
+    render() {
+        if (this.state.hasError) {
+            // Render a fallback UI or nothing while the alert handles recovery
+            return <div style={{ color: 'white', padding: '20px' }}>Sync Error Detected. Please check the alert dialog.</div>
+        }
+        return this.props.children
+    }
+}
 
 export function RoomPage() {
     const { roomId } = useParams<{ roomId: string }>()
@@ -152,6 +197,34 @@ export function RoomPage() {
         )
     })
 
+    const LockedStylePanel = track(() => {
+        const editor = useEditor()
+        const selectedShapes = editor.getSelectedShapes()
+
+        if (selectedShapes.length === 0) return null
+
+        // Only render manually if ALL shapes are locked (Tldraw hides the panel in this case)
+        const allLocked = selectedShapes.every(s => s.isLocked)
+        if (!allLocked) return null
+
+        return (
+            <div style={{
+                position: 'absolute',
+                top: 50, // Match standard Tldraw layout (approx toolbar height)
+                right: 0,
+                height: 'calc(100% - 50px)',
+                zIndex: 200, // Below context menu but above canvas
+                pointerEvents: 'none', // Let clicks pass through container
+                display: 'flex',
+                flexDirection: 'column',
+                padding: '8px',
+            }}>
+                {/* Pass the actual shared styles of the selection so pickers show correct state */}
+                <CustomStylePanel styles={editor.getSharedStyles()} />
+            </div>
+        )
+    })
+
     const components = useMemo<TLComponents>(() => ({
         MainMenu: () => (
             <DefaultMainMenu>
@@ -196,12 +269,14 @@ export function RoomPage() {
             <>
                 <LockStatus />
                 <SelectOptionsPanel />
+                <LockedStylePanel />
             </>
         )
     }), [roomId, navigate])
 
     return (
         <div style={{ position: 'fixed', inset: 0 }}>
+            <SyncErrorBoundary>
             <Tldraw
                 store={store}
                 deepLinks
@@ -211,7 +286,7 @@ export function RoomPage() {
                 onMount={(editor) => {
                     editor.registerExternalAssetHandler('url', getBookmarkPreview)
                     editor.user.updateUserPreferences({ colorScheme: 'dark' })
-                    
+
                     // Prevent editing equation shapes by intercepting the editingShapeId change
                     editor.sideEffects.registerBeforeChangeHandler('instance', (prev: any, next: any) => {
                         // If trying to set editingShapeId for an equation shape, prevent it
@@ -224,7 +299,7 @@ export function RoomPage() {
                         }
                         return next
                     })
-                    
+
                     editor.sideEffects.registerBeforeCreateHandler('shape', (shape) => {
                         if (shape.type === 'geo') {
                             return {
@@ -275,6 +350,7 @@ export function RoomPage() {
                 <BrushManager />
                 <EquationRenderer />
             </Tldraw>
+            </SyncErrorBoundary>
         </div>
     )
 }

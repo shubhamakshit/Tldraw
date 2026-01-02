@@ -14,20 +14,28 @@ export function useSPen(editor: Editor) {
 
     // 0. Keep track of the "main" tool (the one we want to revert to)
     useEffect(() => {
-        const handleEvent = (e: any) => {
-            if (e.name === 'tool_change') {
-                const current = editor.getCurrentToolId()
+        // Optimized: Use sideEffects to track tool changes instead of global event listener
+        // This avoids processing every single pointer event
+        const cleanup = editor.sideEffects.registerAfterChangeHandler('instance_page_state', (prev, next) => {
+            // Check if tool changed (checking standard prop names for Tldraw records)
+            // @ts-ignore - 'toolId' or 'selectedToolId' depending on version, checking changes blindly is safer via getter if needed,
+            // but we can just check if the ID implies a tool change.
+            // Actually, simplest is to just check editor.getCurrentToolId() which is fast.
+
+            const prevTool = (prev as any).selectedToolId ?? (prev as any).toolId
+            const nextTool = (next as any).selectedToolId ?? (next as any).toolId
+
+            if (prevTool !== nextTool) {
+                const current = nextTool
                 // If we are NOT in button mode, and the new tool isn't the temporary eraser,
                 // update our memory of the "previous" (intended) tool.
                 if (!isInButtonModeRef.current && current !== 'eraser') {
                     previousToolRef.current = current
                 }
             }
-        }
-        editor.on('event', handleEvent)
-        return () => {
-            editor.off('event', handleEvent)
-        }
+        })
+
+        return cleanup
     }, [editor])
 
     useEffect(() => {
@@ -101,16 +109,22 @@ export function useSPen(editor: Editor) {
             editor.setCurrentTool(newTool)
 
             // C. Start new stroke (delayed slightly for state machine)
-            setTimeout(() => {
-                target.dispatchEvent(new PointerEvent('pointerdown', {
-                    bubbles: true, cancelable: true, view: window,
-                    clientX: lastEvent.clientX, clientY: lastEvent.clientY,
-                    pointerId: lastEvent.pointerId, pointerType: 'pen', isPrimary: true,
-                    buttons: 1, 
-                    pressure: lastEvent.pressure || 0.5,
-                    tiltX: lastEvent.tiltX, tiltY: lastEvent.tiltY
-                }))
-            }, 0)
+            // CRITICAL FIX: Only restart stroke for drawing tools.
+            // Restarting stroke for 'select' or 'hand' causes unwanted clicks/drags.
+            const isDrawingTool = ['draw', 'highlight', 'eraser', 'laser', 'scribble'].includes(newTool)
+
+            if (isDrawingTool) {
+                setTimeout(() => {
+                    target.dispatchEvent(new PointerEvent('pointerdown', {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: lastEvent.clientX, clientY: lastEvent.clientY,
+                        pointerId: lastEvent.pointerId, pointerType: 'pen', isPrimary: true,
+                        buttons: 1,
+                        pressure: lastEvent.pressure || 0.5,
+                        tiltX: lastEvent.tiltX, tiltY: lastEvent.tiltY
+                    }))
+                }, 0)
+            }
         }
 
         const onButtonDown = () => {

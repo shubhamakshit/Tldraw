@@ -34,21 +34,81 @@ const COLORS = [
 export const CustomStylePanel = track((props: TLUiStylePanelProps) => {
     const editor = useEditor()
     const styles = props.styles ?? editor.getSharedStyles()
-    
+
     const selectedShapes = editor.getSelectedShapes()
+
+    // Debug log to check for double rendering
+    // console.log('[CustomStylePanel] Rendering. Selected:', selectedShapes.length, 'IsLocked:', selectedShapes.every(s => s.isLocked))
+
     const toolId = editor.getCurrentToolId()
     const toolBrush = getBrushOpacityForTool(toolId)
     
-    const isGeo = selectedShapes.some(s => s.type === 'geo')
-    const hasText = selectedShapes.some(s => 'text' in s.props || s.type === 'text')
-    const isArrow = selectedShapes.some(s => s.type === 'arrow' || s.type === 'line')
-    
+    const isGeo = selectedShapes.some(s => s.type === 'geo') || (selectedShapes.length === 0 && toolId === 'geo')
+    const isEquation = selectedShapes.some(s => s.type === 'equation')
+    const hasText = selectedShapes.some(s => 'text' in s.props || s.type === 'text') || (selectedShapes.length === 0 && toolId === 'text')
+    const isArrow = selectedShapes.some(s => s.type === 'arrow' || s.type === 'line') || (selectedShapes.length === 0 && (toolId === 'arrow' || toolId === 'line'))
+    const isNote = selectedShapes.some(s => s.type === 'note') || (selectedShapes.length === 0 && toolId === 'note')
+
+    // Check if we should show stroke controls
+    // Geo, Arrow, Line, Highlight, Draw, Equation all use stroke color
+    // But specific controls like dash/size depend on type.
+    // For simplicity, we show the Stroke section if ANY shape supports it.
+    const hasStroke = selectedShapes.some(s =>
+        ['geo', 'arrow', 'line', 'highlight', 'draw', 'equation', 'note'].includes(s.type)
+    ) || (selectedShapes.length === 0 && ['geo', 'arrow', 'line', 'highlight', 'draw', 'note'].includes(toolId))
+
     // Eraser Settings
     const [eraserSettings, setEraserSettings] = useState(getEraserSettings)
     const updateEraserSetting = (key: string) => {
         const newSettings = { ...eraserSettings, [key]: !(eraserSettings as any)[key] }
         setEraserSettings(newSettings)
         localStorage.setItem('tldraw_eraser_settings', JSON.stringify(newSettings))
+    }
+
+    // Helper to update equation props
+    const updateEquationProp = (prop: string, value: any) => {
+        editor.updateShapes(selectedShapes.map(s => {
+            if (s.type !== 'equation') return s;
+            return {
+                id: s.id,
+                type: s.type,
+                props: { ...s.props, [prop]: value }
+            }
+        }))
+    }
+
+    const handleEquationZoom = (factor: number) => {
+        editor.updateShapes(selectedShapes.map(s => {
+            if (s.type !== 'equation') return s;
+            const currentScaleX = (s.props as any).scaleX ?? 40
+            const currentScaleY = (s.props as any).scaleY ?? 40
+            return {
+                id: s.id,
+                type: s.type,
+                props: {
+                    ...s.props,
+                    scaleX: Math.max(1, currentScaleX * factor),
+                    scaleY: Math.max(1, currentScaleY * factor)
+                }
+            }
+        }))
+    }
+
+    const handleEquationReset = () => {
+        editor.updateShapes(selectedShapes.map(s => {
+            if (s.type !== 'equation') return s;
+            return {
+                id: s.id,
+                type: s.type,
+                props: {
+                    ...s.props,
+                    scaleX: 40,
+                    scaleY: 40,
+                    offsetX: 250,
+                    offsetY: 250
+                }
+            }
+        }))
     }
 
     // Drawing tools don't use fill
@@ -97,16 +157,48 @@ export const CustomStylePanel = track((props: TLUiStylePanelProps) => {
             })))
         }
     }
+
+    const isLocked = selectedShapes.every(s => s.isLocked)
+
+    const toggleLock = () => {
+        editor.updateShapes(selectedShapes.map(s => ({
+            id: s.id,
+            type: s.type,
+            isLocked: !isLocked
+        })))
+    }
+
     return (
         <StylePanelContextProvider styles={styles}>
-            <div className="tlui-style-panel" style={{ 
-                overflowY: 'auto',
-                overflowX: 'hidden',
-                height: '100%',
-                background: editor.user.getIsDarkMode() ? 'rgba(30, 30, 30, 0.4)' : 'rgba(255, 255, 255, 0.4)',
-                backdropFilter: 'blur(10px)',
-                padding: '8px'
+            <div className="tlui-style-panel" style={{
+                pointerEvents: 'all',
+                backgroundColor: 'var(--color-panel)',
+                border: '1px solid var(--color-panel-contrast)',
+                borderRadius: 'var(--radius-2)',
+                boxShadow: 'var(--shadow-2)'
             }}>
+                <div className="tlui-style-panel__content" style={{ maxHeight: 'calc(100vh - 100px)', overflowY: 'auto' }}>
+
+                {selectedShapes.length > 0 && (
+                    <StylePanelSection>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                             <TldrawUiButton
+                                type="normal"
+                                onClick={toggleLock}
+                                style={{
+                                    width: '100%',
+                                    justifyContent: 'space-between',
+                                    background: isLocked ? 'var(--color-selected-primary)' : 'transparent',
+                                    color: isLocked ? 'var(--color-selected-contrast)' : 'inherit'
+                                }}
+                            >
+                                <span style={{ fontSize: '12px', fontWeight: 500 }}>{isLocked ? 'Unlock' : 'Lock'}</span>
+                                <TldrawUiButtonCheck checked={isLocked} />
+                            </TldrawUiButton>
+                        </div>
+                    </StylePanelSection>
+                )}
+
                 {toolId === 'eraser' && (
                     <StylePanelSection>
                         <StylePanelSubheading>Erase Only</StylePanelSubheading>
@@ -144,23 +236,85 @@ export const CustomStylePanel = track((props: TLUiStylePanelProps) => {
                         <StylePanelGeoShapePicker />
                     </StylePanelSection>
                 )}
-                
+
+                {isEquation && (
+                    <StylePanelSection>
+                        <StylePanelSubheading>Equation Settings</StylePanelSubheading>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            {[
+                                { label: 'Show Axes', prop: 'showAxes' },
+                                { label: 'Show Grid', prop: 'showGrid' },
+                                { label: 'Show Numbers', prop: 'showNumbers' },
+                                { label: 'Lock Aspect Ratio', prop: 'lockAspectRatio' }
+                            ].map(({ label, prop }) => {
+                                const value = selectedShapes.every(s => (s.props as any)[prop])
+                                return (
+                                    <TldrawUiButton
+                                        key={prop}
+                                        type="low"
+                                        onClick={() => updateEquationProp(prop, !value)}
+                                        style={{
+                                            justifyContent: 'space-between',
+                                            width: '100%',
+                                            padding: '4px 8px',
+                                            height: '32px',
+                                            background: value ? 'var(--color-selected-primary)' : 'transparent',
+                                            color: value ? 'var(--color-selected-contrast)' : 'inherit',
+                                        }}
+                                    >
+                                        <span style={{ fontSize: '12px', fontWeight: 500 }}>{label}</span>
+                                        <TldrawUiButtonCheck checked={value} />
+                                    </TldrawUiButton>
+                                )
+                            })}
+                        </div>
+                        <div style={{ marginTop: '8px', display: 'flex', gap: '4px' }}>
+                            <TldrawUiButton
+                                type="normal"
+                                onClick={() => handleEquationZoom(1.2)}
+                                title="Zoom In"
+                                style={{ flex: 1, justifyContent: 'center', background: 'var(--color-low)' }}
+                            >
+                                +
+                            </TldrawUiButton>
+                            <TldrawUiButton
+                                type="normal"
+                                onClick={() => handleEquationZoom(0.8)}
+                                title="Zoom Out"
+                                style={{ flex: 1, justifyContent: 'center', background: 'var(--color-low)' }}
+                            >
+                                -
+                            </TldrawUiButton>
+                            <TldrawUiButton
+                                type="normal"
+                                onClick={handleEquationReset}
+                                title="Reset View"
+                                style={{ flex: 1, justifyContent: 'center', background: 'var(--color-low)' }}
+                            >
+                                ↺
+                            </TldrawUiButton>
+                        </div>
+                    </StylePanelSection>
+                )}
+
                 {isArrow && <StylePanelSplinePicker />}
-                
-                <StylePanelSection>
-                    <StylePanelSubheading>Stroke</StylePanelSubheading>
-                    <StylePanelColorPicker />
-                    <StylePanelDashPicker />
-                    <StylePanelSizePicker />
-                    <TldrawUiSlider
-                        value={Math.round(borderOpacity * 100)}
-                        onValueChange={(value) => handleOpacityChange('borderOpacity', value / 100)}
-                        min={0}
-                        steps={100}
-                        label="Stroke Opacity"
-                        title="Stroke Opacity"
-                    />
-                </StylePanelSection>
+
+                {hasStroke && (
+                    <StylePanelSection>
+                        <StylePanelSubheading>Stroke</StylePanelSubheading>
+                        <StylePanelColorPicker />
+                        <StylePanelDashPicker />
+                        <StylePanelSizePicker />
+                        <TldrawUiSlider
+                            value={Math.round(borderOpacity * 100)}
+                            onValueChange={(value) => handleOpacityChange('borderOpacity', value / 100)}
+                            min={0}
+                            steps={100}
+                            label="Stroke Opacity"
+                            title="Stroke Opacity"
+                        />
+                    </StylePanelSection>
+                )}
 
                 {isGeo && !isDrawingTool && (
                     <StylePanelSection>
@@ -227,6 +381,7 @@ export const CustomStylePanel = track((props: TLUiStylePanelProps) => {
                         <StylePanelArrowKindPicker />
                     </StylePanelSection>
                 )}
+                </div>
             </div>
         </StylePanelContextProvider>
     )

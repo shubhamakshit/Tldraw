@@ -52,20 +52,35 @@ function EquationShapeComponent({ shape, svgContent }: { shape: IEquationShape, 
         })
     }
 
+    const handleReset = (e: React.MouseEvent) => {
+        e.stopPropagation()
+        editor.updateShape({
+            id: shape.id,
+            type: 'equation',
+            props: {
+                scaleX: 40,
+                scaleY: 40,
+                offsetX: 250,
+                offsetY: 250
+            }
+        })
+    }
+
     const getButtonStyle = (active = false): React.CSSProperties => ({
         width: `${buttonSize}px`,
         height: `${buttonSize}px`,
         border: 'none',
-        background: active ? 'rgba(66, 135, 245, 0.9)' : 'rgba(255,255,255,0.15)',
-        color: 'white',
-        borderRadius: '4px',
+        background: active ? 'var(--color-selected)' : 'var(--color-low)',
+        color: active ? 'var(--color-selected-contrast)' : 'var(--color-text)',
+        borderRadius: 'var(--radius-1)',
         cursor: 'pointer',
         fontSize: `${fontSize}px`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         padding: 0,
-        flexShrink: 0
+        flexShrink: 0,
+        pointerEvents: 'all' // Ensure button itself captures events
     })
     
     return (
@@ -86,18 +101,24 @@ function EquationShapeComponent({ shape, svgContent }: { shape: IEquationShape, 
             <div dangerouslySetInnerHTML={{ __html: svgContent }} />
             
             {showControls && (
-                <div style={{
+                <div
+                    className="tl-embed"
+                    style={{
                     position: 'absolute',
                     bottom: padding * 2,
                     right: padding * 2,
                     display: 'flex',
                     gap,
-                    background: 'rgba(0,0,0,0.8)',
+                    background: 'var(--color-panel)',
+                    border: '1px solid var(--color-panel-contrast)',
                     padding: `${padding}px`,
-                    borderRadius: '6px',
+                    borderRadius: 'var(--radius-2)',
                     zIndex: 1000,
-                    backdropFilter: 'blur(4px)'
-                }} onClick={(e) => e.stopPropagation()}>
+                    pointerEvents: 'all'
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                >
                     <button onClick={(e) => handlePan(-10, 0, e)} style={getButtonStyle()} title="Pan Left">←</button>
                     <button onClick={(e) => handlePan(10, 0, e)} style={getButtonStyle()} title="Pan Right">→</button>
                     <button onClick={(e) => handlePan(0, -10, e)} style={getButtonStyle()} title="Pan Up">↑</button>
@@ -112,6 +133,14 @@ function EquationShapeComponent({ shape, svgContent }: { shape: IEquationShape, 
                         title={shape.props.lockAspectRatio ? "Unlock Aspect Ratio" : "Lock Aspect Ratio"}
                     >
                         {shape.props.lockAspectRatio ? "🔒" : "🔓"}
+                    </button>
+                    <div style={{ width: '1px', background: 'rgba(255,255,255,0.3)', margin: '0 2px' }} />
+                    <button
+                        onClick={handleReset}
+                        style={getButtonStyle()}
+                        title="Reset View"
+                    >
+                        ↺
                     </button>
                 </div>
             )}
@@ -266,9 +295,9 @@ export class EquationShapeUtil extends ShapeUtil<IEquationShape> {
             /width="500" height="500"/,
             `width="${w}" height="${h}" preserveAspectRatio="none"`
         )
-        
+
         return (
-            <HTMLContainer id={shape.id}>
+            <HTMLContainer id={shape.id} className="tl-embed">
                 <EquationShapeComponent shape={shape} svgContent={modifiedSvg} />
             </HTMLContainer>
         )
