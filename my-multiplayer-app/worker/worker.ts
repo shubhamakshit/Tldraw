@@ -140,7 +140,7 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		if (!env.LIVEBLOCKS_SECRET_KEY) {
 			return new Response('Missing LIVEBLOCKS_SECRET_KEY', { status: 500 })
 		}
-		
+
 		const liveblocks = new Liveblocks({
 			secret: env.LIVEBLOCKS_SECRET_KEY,
 		})
