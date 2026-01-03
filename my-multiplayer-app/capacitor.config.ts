@@ -4,6 +4,7 @@ const getServerUrl = () => {
   const env = process.env.CAPACITOR_SERVER_IP_ENV
   if (env === 'local') return 'http://192.168.0.169:5173'
   if (env === 'hf') return 'https://jaimodiji-my-multiplayer-app.hf.space'
+  if (env === 'cloudflare') return 'https://multiplayer-template.bossemail.workers.dev'
   return 'http://tshonq.duckdns.org:5173'
 }
 
@@ -11,6 +12,7 @@ const getAllowNavigation = () => {
   const env = process.env.CAPACITOR_SERVER_IP_ENV
   if (env === 'local') return '192.168.0.169'
   if (env === 'hf') return 'jaimodiji-my-multiplayer-app.hf.space'
+  if (env === 'cloudflare') return 'multiplayer-template.bossemail.workers.dev'
   return 'tshonq.duckdns.org'
 }
 

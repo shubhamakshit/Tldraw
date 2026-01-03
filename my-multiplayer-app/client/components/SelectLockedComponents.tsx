@@ -9,7 +9,7 @@ import {
     react,
     TldrawUiButtonCheck
 } from 'tldraw'
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { LockIcon } from './Icons'
 
 export const getSelectLockedSignal = (editor: any) => {

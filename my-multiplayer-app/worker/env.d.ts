@@ -6,7 +6,10 @@ interface Env {
 	
 	// R2 bucket binding
 	TLDRAW_BUCKET: R2Bucket
-	
+
+	// KV Namespaces
+	TLDRAW_USERS_KV: KVNamespace
+
 	// Secrets
 	LIVEBLOCKS_SECRET_KEY?: string
 }

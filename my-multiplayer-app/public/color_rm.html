@@ -823,6 +823,9 @@
             isInitializing: true,
 
             async init(ownerId, projectId) {
+                const regUser = Registry.getUsername();
+                if (regUser) this.userId = regUser;
+
                 if (!this.userId) {
                     this.userId = `user_${Math.random().toString(36).substring(2, 9)}`;
                     localStorage.setItem('color_rm_user_id', this.userId);
@@ -1155,6 +1158,8 @@
                     req.onsuccess = e => r(e.target.result);
                 });
 
+                await Registry.sync();
+
                 // 2. Setup UI
                 this.setupUI();
                 this.setupDrawing();
@@ -1171,6 +1176,9 @@
                 const parts = hashPath.split('/').filter(Boolean); 
                 
                 // Failsafe for missing userId
+                const regUser = Registry.getUsername();
+                if (regUser) LiveSync.userId = regUser;
+
                 if (!LiveSync.userId) {
                     LiveSync.userId = `user_${Math.random().toString(36).substring(2, 9)}`;
                     localStorage.setItem('color_rm_user_id', LiveSync.userId);
@@ -1262,7 +1270,8 @@
                     req.result.sort((a,b) => b.lastMod - a.lastMod).forEach(s => {
                         const isMine = s.ownerId === LiveSync.userId;
                         const badge = isMine ? '<span class="owner-badge">Owner</span>' : `<span class="other-badge">Shared</span>`;
-                        
+                        const cloudIcon = s.isCloudBackedUp ? '<i class="bi bi-cloud-check-fill" style="color:var(--success); margin-left:6px;" title="Backed up to Cloud"></i>' : '';
+
                         const item = document.createElement('div');
                         item.className = 'session-item';
                         item.id = `sess_${s.id}`;
@@ -1278,7 +1287,7 @@
                         item.innerHTML = `
                             <input type="checkbox" class="session-checkbox" onclick="event.stopPropagation()" onchange="window.App.toggleSessionSelection('${s.id}')">
                             <div>
-                                <div style="font-weight:600; color:white;">${s.name} ${badge}</div>
+                                <div style="font-weight:600; color:white;">${s.name} ${badge} ${cloudIcon}</div>
                                 <div style="font-size:0.7rem; color:#666; font-family:monospace;">${s.id}</div>
                             </div>
                             <div style="font-size:0.7rem; color:#888;">${s.pageCount} pgs</div>
@@ -1323,12 +1332,14 @@
             updateMultiSelectUI() {
                 const count = this.state.selectedSessions.size;
                 document.getElementById('multiDeleteCount').innerText = `${count} selected`;
-                
+
                 // Update Checkboxes and classes
                 const items = document.querySelectorAll('.session-item');
                 items.forEach(el => {
-                    const id = el.id.replace('sess_', '');
-                    const isSelected = this.state.selectedSessions.has(id);
+                    const idStr = el.id.replace('sess_', '');
+                    // FIX: Handle both string and number IDs to ensure checkbox ticks
+                    const isSelected = this.state.selectedSessions.has(idStr) || (!isNaN(idStr) && this.state.selectedSessions.has(Number(idStr)));
+
                     el.classList.toggle('selected', isSelected);
                     const cb = el.querySelector('.session-checkbox');
                     if (cb) cb.checked = isSelected;
@@ -1341,18 +1352,19 @@
                 if (!confirm(`Permanently delete ${count} project(s) and ALL their drawing data? This cannot be undone.`)) return;
 
                 UI.toggleLoader(true, "Deleting...");
-                
+
                 const deletePromises = Array.from(this.state.selectedSessions).map(async (id) => {
+                    Registry.delete(id);
                     return new Promise((resolve) => {
                         // 1. Delete Pages
                         const pagesTx = this.db.transaction('pages', 'readwrite');
                         const pagesStore = pagesTx.objectStore('pages');
                         const index = pagesStore.index('sessionId');
                         const pagesReq = index.getAll(id);
-                        
+
                         pagesReq.onsuccess = () => {
                             pagesReq.result.forEach(pg => pagesStore.delete(pg.id));
-                            
+
                             // 2. Delete Session Metadata
                             const sessTx = this.db.transaction('sessions', 'readwrite');
                             sessTx.objectStore('sessions').delete(id);
@@ -1364,9 +1376,15 @@
                 await Promise.all(deletePromises);
 
                 const deletedActive = this.state.selectedSessions.has(this.state.sessionId);
+
+                // FIX: Properly reset UI state
                 this.state.isMultiSelect = false;
                 this.state.selectedSessions.clear();
-                
+
+                document.getElementById('dashEditBtn').innerHTML = '<i class="bi bi-pencil-square"></i> Edit';
+                document.getElementById('sessionList').classList.remove('active-multi');
+                document.getElementById('multiDeleteBar').classList.remove('show');
+
                 if (deletedActive) {
                     window.location.hash = '';
                     location.reload();
@@ -1409,6 +1427,7 @@
                         showCursors: this.state.showCursors
                     };
                     this.dbPut('sessions', s);
+                    Registry.upsert(s);
                 }
 
                 // Save Remotely (Metadata)
@@ -2771,6 +2790,8 @@
                             if (session) {
                                 session.pageCount = idx;
                                 await this.dbPut('sessions', session);
+                                // Sync to cloud registry so it appears on other devices
+                                Registry.upsert(session);
                             }
                             
                             // Final reload to ensure everything is synced
@@ -2843,7 +2864,8 @@
 
             async createNewProject(openPicker = true, forceId = null, forceOwnerId = null) {
                 // Determine IDs (One PDF -> One Project Key in User Room)
-                const ownerId = forceOwnerId || LiveSync.userId;
+                const regUser = Registry.getUsername();
+                const ownerId = forceOwnerId || regUser || LiveSync.userId;
                 const projectId = forceId || `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 
                 // --- IMMEDIATE UI & URL UPDATE ---
@@ -3431,10 +3453,153 @@
 
         window.CommonPdfImport = CommonPdfImport;
 
+        // --- Identity & Registry Sync ---
+        const Registry = {
+            getToken() { return localStorage.getItem('tldraw_auth_token'); },
+            getUsername() { return localStorage.getItem('tldraw_auth_username'); },
+
+            async sync() {
+                const token = this.getToken();
+                if (!token) return; // Anonymous users don't sync registry
+
+                try {
+                    // 1. Fetch Cloud Registry
+                    const res = await fetch('/api/color_rm/registry', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    if (!res.ok) throw new Error("Registry fetch failed");
+                    const data = await res.json();
+                    console.log('Registry Sync Data:', data);
+                    const cloudProjects = data.projects || [];
+                    console.log('Cloud Projects:', cloudProjects);
+                    const cloudIds = new Set(cloudProjects.map(p => p.id));
+
+                    // 2. Merge into Local DB
+                    // Strategy: "Last Write Wins" based on lastMod, but prefer Cloud if missing locally
+                    const tx = App.db.transaction('sessions', 'readwrite');
+                    const store = tx.objectStore('sessions');
+
+                    // Get all local first to compare
+                    const localRequest = await new Promise((resolve) => {
+                        const r = store.getAll();
+                        r.onsuccess = () => resolve(r.result);
+                    });
+
+                    const localMap = new Map(localRequest.map(p => [p.id, p]));
+
+                    for (const cp of cloudProjects) {
+                        const local = localMap.get(cp.id);
+
+                        if (!local) {
+                            // New project from cloud (metadata only)
+                            await App.dbPut('sessions', {
+                                id: cp.id,
+                                name: cp.name,
+                                pageCount: cp.pageCount,
+                                lastMod: cp.lastMod,
+                                ownerId: cp.ownerId,
+                                baseFileName: cp.baseFileName,
+                                idx: 0,
+                                bookmarks: [],
+                                clipboardBox: [],
+                                state: null,
+                                isCloudBackedUp: true
+                            });
+                        } else {
+                            // Update existing
+                            let changed = false;
+                            if (cp.lastMod > (local.lastMod || 0)) {
+                                local.name = cp.name;
+                                local.pageCount = cp.pageCount;
+                                local.lastMod = cp.lastMod;
+                                local.ownerId = cp.ownerId;
+                                changed = true;
+                            }
+                            // Mark as backed up
+                            if (!local.isCloudBackedUp) {
+                                local.isCloudBackedUp = true;
+                                changed = true;
+                            }
+
+                            if (changed) await App.dbPut('sessions', local);
+                        }
+                    }
+
+                    // Optional: Mark locals as NOT backed up if they are missing from cloud list?
+                    // Only do this if we are sure the list is complete.
+                    for (const [id, local] of localMap) {
+                        if (local.isCloudBackedUp && !cloudIds.has(id)) {
+                             // Verify ownership before unmarking?
+                             // If I am owner and it's not in my registry, it's not backed up.
+                             if (local.ownerId === LiveSync.userId) {
+                                 local.isCloudBackedUp = false;
+                                 await App.dbPut('sessions', local);
+                             }
+                        }
+                    }
+
+                } catch (e) {
+                    console.warn("Registry sync error:", e);
+                }
+            },
+
+            async upsert(project) {
+                const token = this.getToken();
+                if (!token) return;
+
+                // Prepare lightweight metadata object
+                const payload = {
+                    id: project.id,
+                    name: project.name,
+                    pageCount: project.pageCount,
+                    lastMod: project.lastMod,
+                    ownerId: project.ownerId,
+                    baseFileName: project.baseFileName
+                };
+
+                fetch('/api/color_rm/registry', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ project: payload })
+                })
+                .then(res => {
+                    if (res.ok) {
+                        // Mark as backed up locally
+                        App.dbGet('sessions', project.id).then(s => {
+                            if (s) {
+                                s.isCloudBackedUp = true;
+                                App.dbPut('sessions', s).then(() => {
+                                    // Refresh list if dashboard is open
+                                    if(document.getElementById('dashboardModal').style.display === 'flex') {
+                                        window.App.loadSessionList();
+                                    }
+                                });
+                            }
+                        });
+                    }
+                })
+                .catch(e => console.warn("Registry upsert failed:", e));
+            },
+
+            async delete(projectId) {
+                const token = this.getToken();
+                if (!token) return;
+
+                fetch(`/api/color_rm/registry/${projectId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                }).catch(e => console.warn("Registry delete failed:", e));
+            }
+        };
+
         // Attach to window for HTML events
         window.App = App;
         window.UI = UI;
         window.LiveSync = LiveSync;
+        window.Registry = Registry;
 
         App.init();
     </script>

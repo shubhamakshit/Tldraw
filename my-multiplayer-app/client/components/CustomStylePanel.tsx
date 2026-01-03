@@ -47,7 +47,6 @@ export const CustomStylePanel = track((props: TLUiStylePanelProps) => {
     const isEquation = selectedShapes.some(s => s.type === 'equation')
     const hasText = selectedShapes.some(s => 'text' in s.props || s.type === 'text') || (selectedShapes.length === 0 && toolId === 'text')
     const isArrow = selectedShapes.some(s => s.type === 'arrow' || s.type === 'line') || (selectedShapes.length === 0 && (toolId === 'arrow' || toolId === 'line'))
-    const isNote = selectedShapes.some(s => s.type === 'note') || (selectedShapes.length === 0 && toolId === 'note')
 
     // Check if we should show stroke controls
     // Geo, Arrow, Line, Highlight, Draw, Equation all use stroke color

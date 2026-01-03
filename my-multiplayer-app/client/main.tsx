@@ -4,6 +4,7 @@ import { createHashRouter, RouterProvider } from 'react-router-dom'
 import './index.css'
 import { RoomPage as Room } from './pages/RoomPage'
 import { Lobby } from './pages/Lobby' // Import Lobby
+import { AuthProvider } from './hooks/useAuth'
 
 // --- NUCLEAR CLEAN (DISABLED) ---
 // Wipes all local data to guarantee a fresh start
@@ -39,6 +40,8 @@ const router = createHashRouter([
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <React.StrictMode>
-        <RouterProvider router={router} />
+        <AuthProvider>
+            <RouterProvider router={router} />
+        </AuthProvider>
     </React.StrictMode>
 )

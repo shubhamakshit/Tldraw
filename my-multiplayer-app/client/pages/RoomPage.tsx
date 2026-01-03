@@ -33,6 +33,7 @@ import { BrushManager } from '../components/BrushManager'
 import { EquationRenderer } from '../components/EquationRendererSimple'
 import { getEraserSettings } from '../utils/eraserUtils'
 import { EquationShapeUtil } from '../shapes/EquationShapeUtil'
+import { BackupMenuItem } from '../components/BackupControl'
 
 const customShapeUtils = [
     ...defaultShapeUtils.filter(u => u.type !== 'geo'),
@@ -245,6 +246,7 @@ export function RoomPage() {
                         readonlyOk
                         onSelect={() => shareLink(roomId)}
                     />
+                    <BackupMenuItem roomId={roomId} />
                 </TldrawUiMenuGroup>
                 <DefaultMainMenuContent />
             </DefaultMainMenu>
@@ -341,6 +343,42 @@ export function RoomPage() {
                         if (['geo', 'arrow', 'line', 'note', 'frame', 'group'].includes(type) && !settings.shapes) return false
                         if (['image', 'video'].includes(type) && !settings.images) return false
                     })
+
+                    // Restore from backup if data exists in sessionStorage or localStorage
+                    try {
+                        const restoreKey = `restore_data_${roomId}`
+                        let restoreData = sessionStorage.getItem(restoreKey)
+                        let storageType = 'session'
+
+                        if (!restoreData) {
+                            restoreData = localStorage.getItem(restoreKey)
+                            storageType = 'local'
+                        }
+
+                        if (restoreData) {
+                            const parsed = JSON.parse(restoreData)
+                            // The backup structure has { snapshot, roomName, ... }
+                            // But fallback to using parsed directly if snapshot prop missing
+                            const snapshot = parsed.snapshot || parsed
+
+                            console.log(`[Room] Restoring backup for ${roomId}...`)
+                            editor.loadSnapshot(snapshot)
+
+                            // Clean up
+                            if (storageType === 'session') {
+                                sessionStorage.removeItem(restoreKey)
+                            } else {
+                                localStorage.removeItem(restoreKey)
+                            }
+
+                            // If name is present, ensure it's saved locally (server meta update happens separately if we implemented it)
+                            if (parsed.roomName) {
+                                saveRoom(roomId, parsed.roomName)
+                            }
+                        }
+                    } catch (e) {
+                        console.error('[Room] Failed to restore backup', e)
+                    }
                 }}
             >
                 <SPenController />

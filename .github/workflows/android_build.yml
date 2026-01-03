@@ -12,6 +12,7 @@ on:
           - local
           - remote
           - hf
+          - cloudflare
 
 jobs:
   build:

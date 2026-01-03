@@ -2,18 +2,36 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { uniqueId } from 'tldraw'
 
+import { generateBoardName } from '../utils/nameGenerator'
+import { saveRoom } from './storageUtils'
+import { useAuth } from '../hooks/useAuth'
+import { AuthModal } from '../components/AuthModal'
+import { BackupList } from '../components/BackupList'
+
 interface SavedRoom {
     id: string
+    name: string
     lastVisited: number
+}
+
+interface ColorRmProject {
+    id: string
+    name: string
+    lastMod: number
+    ownerId?: string
 }
 
 export function Lobby() {
     const navigate = useNavigate()
+    const { user, isAuthenticated, token, logout } = useAuth()
     const [name, setName] = useState(localStorage.getItem('tldraw_user_name') || '')
     const [recentRooms, setRecentRooms] = useState<SavedRoom[]>([])
+    const [colorRmProjects, setColorRmProjects] = useState<ColorRmProject[]>([])
+    const [isCreating, setIsCreating] = useState(false)
+    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
 
     useEffect(() => {
-        const stored = localStorage.getItem('tldraw_recent_rooms')
+        const stored = localStorage.getItem('tldraw_saved_rooms')
         if (stored) {
             try {
                 const parsed = JSON.parse(stored)
@@ -24,16 +42,50 @@ export function Lobby() {
         }
     }, [])
 
-    const handleCreate = () => {
+    useEffect(() => {
+        if (isAuthenticated && token) {
+            fetch('/api/color_rm/registry', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(res => {
+                if (res.ok) return res.json()
+                throw new Error('Failed to fetch registry')
+            })
+            .then((data: any) => {
+                if (data.projects) {
+                    setColorRmProjects(data.projects.sort((a: ColorRmProject, b: ColorRmProject) => b.lastMod - a.lastMod))
+                }
+            })
+            .catch(e => console.error("Error fetching ColorRM projects:", e))
+        } else {
+            setColorRmProjects([])
+        }
+    }, [isAuthenticated, token])
+
+    const handleCreate = async () => {
+        if (isCreating) return
+        setIsCreating(true)
         saveName()
-        const newId = uniqueId()
-        addToRecents(newId)
-        navigate(`/${newId}`)
+
+        try {
+            const boardName = await generateBoardName()
+            const newId = uniqueId()
+
+            // Save to local storage with the generated name immediately
+            saveRoom(newId, boardName)
+
+            navigate(`/${newId}`)
+        } catch (e) {
+            console.error("Failed to create room", e)
+            setIsCreating(false)
+        }
     }
 
     const handleJoin = (id: string) => {
         saveName()
-        addToRecents(id)
+        saveRoom(id) // Updates last visited
         navigate(`/${id}`)
     }
 
@@ -43,11 +95,7 @@ export function Lobby() {
         }
     }
 
-    const addToRecents = (id: string) => {
-        const newEntry = { id, lastVisited: Date.now() }
-        const updated = [newEntry, ...recentRooms.filter(r => r.id !== id)].slice(0, 10)
-        localStorage.setItem('tldraw_recent_rooms', JSON.stringify(updated))
-    }
+    // Removed addToRecents as it's replaced by saveRoom from storageUtils
 
     return (
         <div style={{ 
@@ -55,8 +103,8 @@ export function Lobby() {
             backgroundColor: '#000', color: '#fff', padding: '0 20px'
         }}>
             {/* Header / Nav */}
-            <nav style={{ 
-                height: '64px', display: 'flex', alignItems: 'center', 
+            <nav style={{
+                height: '64px', display: 'flex', alignItems: 'center',
                 maxWidth: '1000px', width: '100%', margin: '0 auto',
                 borderBottom: '1px solid #333', justifyContent: 'space-between'
             }}>
@@ -64,11 +112,39 @@ export function Lobby() {
                     <svg width="26" height="26" viewBox="0 0 76 65" fill="#fff"><path d="M37.5274 0L75.0548 65H0L37.5274 0Z"></path></svg>
                     <span style={{ fontWeight: 600, fontSize: '1.2rem', letterSpacing: '-0.02em' }}>Collaborative Suite</span>
                 </div>
-                <div style={{ display: 'flex', gap: '24px' }}>
+                <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
                      <a href="https://tldraw.com" target="_blank" style={{ fontSize: '0.9rem', color: '#888', textDecoration: 'none' }}>tldraw</a>
                      <a href="https://workers.cloudflare.com" target="_blank" style={{ fontSize: '0.9rem', color: '#888', textDecoration: 'none' }}>Cloudflare</a>
+
+                     {isAuthenticated ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: '12px' }}>
+                            <span style={{ color: '#fff', fontSize: '0.9rem', fontWeight: 600 }}>{user?.username}</span>
+                            <button
+                                onClick={logout}
+                                style={{
+                                    background: 'none', border: '1px solid #333', borderRadius: '4px',
+                                    color: '#888', padding: '4px 8px', fontSize: '0.8rem', cursor: 'pointer'
+                                }}
+                            >
+                                Log Out
+                            </button>
+                        </div>
+                     ) : (
+                        <button
+                            onClick={() => setIsAuthModalOpen(true)}
+                            style={{
+                                background: '#fff', border: 'none', borderRadius: '4px',
+                                color: '#000', padding: '6px 12px', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer',
+                                marginLeft: '12px'
+                            }}
+                        >
+                            Log In
+                        </button>
+                     )}
                 </div>
             </nav>
+
+            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
 
             <main style={{ 
                 flex: 1, display: 'flex', flexDirection: 'column', 
@@ -116,19 +192,19 @@ export function Lobby() {
                                 Endless canvas for brainstorming and system design. Built on tldraw SDK.
                             </p>
                         </div>
-                        <button 
+                        <button
                             onClick={handleCreate}
-                            disabled={!name.trim()}
-                            style={{ 
-                                padding: '14px', background: '#fff', color: '#000', 
+                            disabled={!name.trim() || isCreating}
+                            style={{
+                                padding: '14px', background: '#fff', color: '#000',
                                 border: 'none', borderRadius: '6px', fontWeight: 600,
                                 fontSize: '1rem', cursor: 'pointer', transition: '0.2s',
-                                opacity: name.trim() ? 1 : 0.5, marginTop: 'auto'
+                                opacity: (!name.trim() || isCreating) ? 0.5 : 1, marginTop: 'auto'
                             }}
-                            onMouseOver={e => { if(name.trim()) e.currentTarget.style.background = '#ccc'; }}
+                            onMouseOver={e => { if(name.trim() && !isCreating) e.currentTarget.style.background = '#ccc'; }}
                             onMouseOut={e => { e.currentTarget.style.background = '#fff'; }}
                         >
-                            New Board
+                            {isCreating ? 'Creating...' : 'New Board'}
                         </button>
                     </div>
 
@@ -160,14 +236,14 @@ export function Lobby() {
                 </div>
 
                 {recentRooms.length > 0 && (
-                    <div style={{ marginBottom: '100px' }}>
-                        <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '24px' }}>Recent Projects</h2>
+                    <div style={{ marginBottom: '60px' }}>
+                        <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '24px' }}>Recent Whiteboards (Local)</h2>
                         <div style={{ border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
                             {recentRooms.map((room, i) => (
-                                <div 
+                                <div
                                     key={room.id}
                                     onClick={() => handleJoin(room.id)}
-                                    style={{ 
+                                    style={{
                                         padding: '16px 24px', display: 'flex', justifyContent: 'space-between',
                                         alignItems: 'center', cursor: 'pointer', transition: '0.2s',
                                         borderBottom: i === recentRooms.length - 1 ? 'none' : '1px solid #333',
@@ -177,10 +253,13 @@ export function Lobby() {
                                     onMouseOut={e => e.currentTarget.style.background = '#000'}
                                 >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                                        <div style={{ width: '32px', height: '32px', background: '#333', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem' }}>
-                                            {i + 1}
+                                        <div style={{ width: '32px', height: '32px', background: '#333', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', color: '#fff' }}>
+                                            {room.name ? room.name.charAt(0).toUpperCase() : (i + 1)}
                                         </div>
-                                        <span style={{ fontWeight: 500 }}>{room.id}</span>
+                                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                            <span style={{ fontWeight: 600, color: '#fff' }}>{room.name || 'Untitled Board'}</span>
+                                            <span style={{ fontSize: '0.8rem', color: '#666' }}>{room.id}</span>
+                                        </div>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                                         <span style={{ color: '#888', fontSize: '0.9rem' }}>{new Date(room.lastVisited).toLocaleDateString()}</span>
@@ -191,6 +270,65 @@ export function Lobby() {
                         </div>
                     </div>
                 )}
+
+                {/* Color RM Projects (Cloud) */}
+                {colorRmProjects.length > 0 && (
+                    <div style={{ marginBottom: '60px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+                            <h2 style={{ fontSize: '1.5rem', fontWeight: 700, margin: 0 }}>ColorRM Projects (Cloud)</h2>
+                            <div style={{
+                                background: '#a855f7', color: '#fff', fontSize: '0.7rem', fontWeight: 700,
+                                padding: '2px 8px', borderRadius: '100px', textTransform: 'uppercase'
+                            }}>
+                                Synced
+                            </div>
+                        </div>
+                        <div style={{ border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
+                            {colorRmProjects.map((project, i) => (
+                                <a
+                                    key={project.id}
+                                    href={`/color_rm.html#/color_rm/${project.ownerId || user?.username}/${project.id}`}
+                                    style={{ textDecoration: 'none' }}
+                                >
+                                    <div
+                                        style={{
+                                            padding: '16px 24px', display: 'flex', justifyContent: 'space-between',
+                                            alignItems: 'center', cursor: 'pointer', transition: '0.2s',
+                                            borderBottom: i === colorRmProjects.length - 1 ? 'none' : '1px solid #333',
+                                            background: '#000'
+                                        }}
+                                        onMouseOver={e => e.currentTarget.style.background = '#111'}
+                                        onMouseOut={e => e.currentTarget.style.background = '#000'}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                                            <div style={{ width: '32px', height: '32px', background: '#a855f7', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', color: '#fff' }}>
+                                                {project.name ? project.name.charAt(0).toUpperCase() : 'C'}
+                                            </div>
+                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                                    <span style={{ fontWeight: 600, color: '#fff' }}>{project.name || 'Untitled Project'}</span>
+                                                    {project.ownerId === user?.username ? (
+                                                        <span style={{ fontSize: '0.6rem', padding: '2px 4px', borderRadius: '2px', background: '#fff', color: '#000', fontWeight: 800, textTransform: 'uppercase', marginLeft: '8px' }}>Owner</span>
+                                                    ) : (
+                                                        <span style={{ fontSize: '0.6rem', padding: '2px 4px', borderRadius: '2px', background: '#333', color: '#fff', fontWeight: 800, textTransform: 'uppercase', marginLeft: '8px' }}>Shared</span>
+                                                    )}
+                                                </div>
+                                                <span style={{ fontSize: '0.8rem', color: '#666' }}>{project.id}</span>
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                                            <span style={{ color: '#888', fontSize: '0.9rem' }}>{new Date(project.lastMod).toLocaleDateString()}</span>
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                                        </div>
+                                    </div>
+                                </a>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Cloud Backups Section */}
+                {isAuthenticated && <BackupList />}
             </main>
 
             <footer style={{ 

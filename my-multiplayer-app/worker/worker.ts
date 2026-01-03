@@ -172,9 +172,221 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 		return new Response(body, { status })
 	})
 
+    // --- Authentication Routes ---
+
+    .post('/api/auth/register', async (request, env) => {
+        try {
+            const { username, password } = await request.json() as any;
+            if (!username || !password) return new Response('Missing username or password', { status: 400 });
+
+            const existing = await env.TLDRAW_USERS_KV.get(`user:${username}`);
+            if (existing) return new Response('Username already taken', { status: 409 });
+
+            // Simple SHA-256 hash for the password
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashHex = hashArray(hashBuffer);
+
+            await env.TLDRAW_USERS_KV.put(`user:${username}`, JSON.stringify({
+                passwordHash: hashHex,
+                created: Date.now()
+            }));
+
+            return new Response(JSON.stringify({ success: true, username }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    .post('/api/auth/login', async (request, env) => {
+        try {
+            const { username, password } = await request.json() as any;
+            if (!username || !password) return new Response('Missing credentials', { status: 400 });
+
+            const userStr = await env.TLDRAW_USERS_KV.get(`user:${username}`);
+            if (!userStr) return new Response('Invalid credentials', { status: 401 });
+
+            const user = JSON.parse(userStr);
+
+            // Hash input to compare
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashHex = hashArray(hashBuffer);
+
+            if (hashHex !== user.passwordHash) {
+                return new Response('Invalid credentials', { status: 401 });
+            }
+
+            // Generate Token
+            const token = crypto.randomUUID();
+            // Store token -> username mapping, valid for 7 days
+            await env.TLDRAW_USERS_KV.put(`token:${token}`, username, { expirationTtl: 60 * 60 * 24 * 7 });
+
+            return new Response(JSON.stringify({ token, username }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    // --- Backup & Restore Routes ---
+
+    .post('/api/backup', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        try {
+            const { snapshot, roomName, roomId, type } = await request.json() as any;
+            const timestamp = Date.now();
+            // Safe key generation
+            const safeName = (roomName || 'Untitled').replace(/[^a-zA-Z0-9-]/g, '_');
+            const key = `backups/${auth.username}/${timestamp}_${safeName}.json`;
+
+            await env.TLDRAW_BUCKET.put(key, JSON.stringify(snapshot), {
+                customMetadata: {
+                    originalId: roomId,
+                    roomName: roomName,
+                    type: type || 'tldraw',
+                    backupDate: new Date().toISOString()
+                }
+            });
+
+            return new Response(JSON.stringify({ success: true, key }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+             return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    .get('/api/backups', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        try {
+            const prefix = `backups/${auth.username}/`;
+            const list = await env.TLDRAW_BUCKET.list({ prefix, include: ['customMetadata'] });
+
+            const backups = list.objects.map(obj => ({
+                key: obj.key,
+                name: obj.customMetadata?.roomName || obj.key.split('_').pop()?.replace('.json', '') || 'Unknown',
+                date: obj.uploaded,
+                size: obj.size,
+                type: obj.customMetadata?.type || 'tldraw',
+                originalId: obj.customMetadata?.originalId
+            })).sort((a, b) => b.date.getTime() - a.date.getTime());
+
+            return new Response(JSON.stringify({ backups }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    .delete('/api/backup/:key', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        const key = decodeURIComponent(request.params.key);
+
+        // Security check: Ensure user is only accessing their own backups
+        if (!key.startsWith(`backups/${auth.username}/`)) {
+             return new Response('Forbidden', { status: 403 });
+        }
+
+        try {
+            await env.TLDRAW_BUCKET.delete(key);
+            return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    .get('/api/backup/:key', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        const key = decodeURIComponent(request.params.key);
+
+        // Security check: Ensure user is only accessing their own backups
+        if (!key.startsWith(`backups/${auth.username}/`)) {
+             return new Response('Forbidden', { status: 403 });
+        }
+
+        const obj = await env.TLDRAW_BUCKET.get(key);
+        if (!obj) return new Response('Not found', { status: 404 });
+
+        return new Response(obj.body, { headers: { 'Content-Type': 'application/json' }});
+    })
+
 	// New routes for color_rm base file sync
 	.post('/api/color_rm/upload/:roomId', handleColorRmUpload)
 	.get('/api/color_rm/base_file/:roomId', handleColorRmDownload)
+
+    // --- Color RM Registry Routes ---
+
+    .get('/api/color_rm/registry', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        try {
+            const registryStr = await env.TLDRAW_USERS_KV.get(`registry:${auth.username}`);
+            const registry = registryStr ? JSON.parse(registryStr) : [];
+            return new Response(JSON.stringify({ projects: registry }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    .post('/api/color_rm/registry', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        try {
+            const { project } = await request.json() as any;
+            if (!project || !project.id) return new Response('Invalid project data', { status: 400 });
+
+            const registryKey = `registry:${auth.username}`;
+            const registryStr = await env.TLDRAW_USERS_KV.get(registryKey);
+            let registry = registryStr ? JSON.parse(registryStr) : [];
+
+            // Upsert: Remove existing entry with same ID if present
+            registry = registry.filter((p: any) => p.id !== project.id);
+            // Add new/updated project
+            registry.push(project);
+
+            await env.TLDRAW_USERS_KV.put(registryKey, JSON.stringify(registry));
+
+            return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    .delete('/api/color_rm/registry/:projectId', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        const projectId = request.params.projectId;
+
+        try {
+            const registryKey = `registry:${auth.username}`;
+            const registryStr = await env.TLDRAW_USERS_KV.get(registryKey);
+            if (!registryStr) return new Response(JSON.stringify({ success: true })); // Already empty
+
+            let registry = JSON.parse(registryStr);
+            const initialLength = registry.length;
+            registry = registry.filter((p: any) => p.id !== projectId);
+
+            if (registry.length !== initialLength) {
+                await env.TLDRAW_USERS_KV.put(registryKey, JSON.stringify(registry));
+            }
+
+            return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
 
 	// assets can be uploaded to the bucket under /uploads:
 	.post('/api/uploads/:uploadId', handleAssetUpload)
@@ -190,4 +402,23 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 
 export default {
 	fetch: router.fetch,
+}
+
+// --- Helpers ---
+
+async function authenticate(request: IRequest, env: Env) {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+
+    const token = authHeader.split(' ')[1];
+    const username = await env.TLDRAW_USERS_KV.get(`token:${token}`);
+    if (!username) return null;
+
+    return { username };
+}
+
+function hashArray(buffer: ArrayBuffer) {
+    return Array.from(new Uint8Array(buffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
 }

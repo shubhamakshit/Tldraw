@@ -12,6 +12,9 @@ export function useSPen(editor: Editor) {
     // DOUBLE TAP TRACKER
     const lastTapTimeRef = useRef<number>(0)
 
+    // BUG FIX: Track when the pointer went down to detect accidental strokes
+    const pointerDownTimeRef = useRef<number>(0)
+
     // 0. Keep track of the "main" tool (the one we want to revert to)
     useEffect(() => {
         // Optimized: Use sideEffects to track tool changes instead of global event listener
@@ -50,6 +53,7 @@ export function useSPen(editor: Editor) {
 
             if (e.type === 'pointerdown') {
                 isPenDownRef.current = true
+                pointerDownTimeRef.current = Date.now()
 
                 // --- GESTURE: HOLD BUTTON + DOUBLE TAP TO UNDO ---
                 if (isInButtonModeRef.current) {
@@ -98,7 +102,14 @@ export function useSPen(editor: Editor) {
             const target = document.elementFromPoint(lastEvent.clientX, lastEvent.clientY) || window
 
             // A. End current stroke
-            target.dispatchEvent(new PointerEvent('pointerup', {
+            // BUG FIX: If we are switching FROM eraser TO draw, and the stroke was very short (< 250ms),
+            // it's likely an "accidental" eraser stroke caused by race conditions (Pen Down before Button Up).
+            // In this case, use 'pointercancel' to revert the erasure instead of 'pointerup' which commits it.
+            const currentTool = editor.getCurrentToolId()
+            const strokeDuration = Date.now() - pointerDownTimeRef.current
+            const isAccidentalEraser = currentTool === 'eraser' && newTool !== 'eraser' && strokeDuration < 250
+
+            target.dispatchEvent(new PointerEvent(isAccidentalEraser ? 'pointercancel' : 'pointerup', {
                 bubbles: true, cancelable: true, view: window,
                 clientX: lastEvent.clientX, clientY: lastEvent.clientY,
                 pointerId: lastEvent.pointerId, pointerType: 'pen', isPrimary: true,
