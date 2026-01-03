@@ -1,4 +1,7 @@
 import { showModal } from '../components/Modal'
+import { showToast as showToastImpl } from '../components/Toast'
+
+export const showToast = showToastImpl
 
 export const customAlert = async (message: string, title?: string) => {
     await showModal({
@@ -25,11 +28,8 @@ export const customPrompt = async (message: string, defaultValue?: string, title
 // but based on current Modal code, 'alert' type doesn't show Cancel button.
 // Let's UPDATE Modal.tsx to support 'confirm' type first.
 export const customConfirm = async (message: string, title?: string): Promise<boolean> => {
-    // We need to update Modal.tsx to support this first.
-    // For now, mapping to window.confirm as fallback or we can quickly update Modal.
-    // Let's assume we will update Modal.tsx in the next step.
     const result = await showModal({
-        type: 'confirm' as any, // We will add this type
+        type: 'confirm',
         message,
         title,
     })

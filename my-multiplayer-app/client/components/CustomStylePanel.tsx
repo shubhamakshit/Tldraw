@@ -53,8 +53,8 @@ export const CustomStylePanel = track((props: TLUiStylePanelProps) => {
     // But specific controls like dash/size depend on type.
     // For simplicity, we show the Stroke section if ANY shape supports it.
     const hasStroke = selectedShapes.some(s =>
-        ['geo', 'arrow', 'line', 'highlight', 'draw', 'equation', 'note'].includes(s.type)
-    ) || (selectedShapes.length === 0 && ['geo', 'arrow', 'line', 'highlight', 'draw', 'note'].includes(toolId))
+        ['geo', 'arrow', 'line', 'highlight', 'draw', 'equation', 'note', 'text'].includes(s.type)
+    ) || (selectedShapes.length === 0 && ['geo', 'arrow', 'line', 'highlight', 'draw', 'note', 'text'].includes(toolId))
 
     // Eraser Settings
     const [eraserSettings, setEraserSettings] = useState(getEraserSettings)

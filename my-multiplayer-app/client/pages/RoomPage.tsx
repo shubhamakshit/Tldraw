@@ -33,7 +33,7 @@ import { BrushManager } from '../components/BrushManager'
 import { EquationRenderer } from '../components/EquationRendererSimple'
 import { getEraserSettings } from '../utils/eraserUtils'
 import { EquationShapeUtil } from '../shapes/EquationShapeUtil'
-import { BackupMenuItem } from '../components/BackupControl'
+import { BackupMenuItem, DownloadMenuItem, RestoreMenuItem, RestoreFileHandler, PdfExportMenuItem } from '../components/BackupControl'
 
 const customShapeUtils = [
     ...defaultShapeUtils.filter(u => u.type !== 'geo'),
@@ -201,11 +201,14 @@ export function RoomPage() {
     const LockedStylePanel = track(() => {
         const editor = useEditor()
         const selectedShapes = editor.getSelectedShapes()
+        
 
         if (selectedShapes.length === 0) return null
 
-        // Only render manually if ALL shapes are locked (Tldraw hides the panel in this case)
+        // Only render manually if ALL shapes are locked
+        // (Tldraw hides the panel in this case)
         const allLocked = selectedShapes.every(s => s.isLocked)
+
         if (!allLocked) return null
 
         return (
@@ -237,6 +240,11 @@ export function RoomPage() {
                         readonlyOk
                         onSelect={() => navigate('/')}
                     />
+                </TldrawUiMenuGroup>
+                <TldrawUiMenuGroup id="file">
+                    <DownloadMenuItem roomId={roomId} />
+                    <RestoreMenuItem />
+                    <PdfExportMenuItem roomId={roomId} />
                 </TldrawUiMenuGroup>
                 <TldrawUiMenuGroup id="share">
                     <TldrawUiMenuItem
@@ -286,6 +294,9 @@ export function RoomPage() {
                 components={components}
                 shapeUtils={customShapeUtils}
                 onMount={(editor) => {
+                    // Expose editor to window for debugging
+                    ;(window as any).editor = editor
+
                     editor.registerExternalAssetHandler('url', getBookmarkPreview)
                     editor.user.updateUserPreferences({ colorScheme: 'dark' })
 
@@ -382,6 +393,7 @@ export function RoomPage() {
                 }}
             >
                 <SPenController />
+                <RestoreFileHandler roomId={roomId} />
                 <StatePersistence roomId={roomId} />
                 <NavigationDock roomId={roomId} />
                 <SelectLockedLogic />
