@@ -73,7 +73,7 @@ export const exportToImage = async (editor: Editor, roomId: string, format: 'png
                 const result = await editor.toImage(shapeIds, {
                     format: 'svg',
                     background: true,
-                    scale: 5,
+                    scale: 1,
                     padding: 32,
                 })
 

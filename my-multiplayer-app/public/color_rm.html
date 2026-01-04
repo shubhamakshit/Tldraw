@@ -384,7 +384,6 @@
         </div>
         <div class="picker-body">
             <div id="iroWheel"></div>
-            <div id="pickerSwatches" style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; justify-content:center; width:100%;"></div>
             <button id="pickerActionBtn" class="btn btn-primary" style="width:100%; margin-top:10px;">Set</button>
             <button id="pickerNoneBtn" class="btn" style="width:100%; margin-top:5px; display:none">Transparent</button>
         </div>
@@ -482,11 +481,12 @@
                     <div id="toolSettingsPanel" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; margin-bottom:10px; display:none;">
                         
                         <div id="penOptions" style="display:none;">
-                            <div style="display:flex; gap:8px;">
+                            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                                 <div class="color-dot" style="background:#ef4444" onclick="App.setPenColor('#ef4444')"></div>
                                 <div class="color-dot" style="background:#3b82f6" onclick="App.setPenColor('#3b82f6')"></div>
                                 <div class="color-dot" style="background:#000" onclick="App.setPenColor('#000000')"></div>
-                                <button class="btn btn-sm" onclick="App.openPicker('pen')">Custom</button>
+                                <div id="customSwatches" style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;"></div>
+                                <button class="btn btn-sm" onclick="App.openPicker('pen')" title="Custom Color" style="width:22px; height:22px; padding:0; justify-content:center; border-radius:4px;"><i class="bi bi-plus"></i></button>
                             </div>
                         </div>
 

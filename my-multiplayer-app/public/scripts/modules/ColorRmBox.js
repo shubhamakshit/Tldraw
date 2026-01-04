@@ -1,0 +1,351 @@
+export const ColorRmBox = {
+    // --- The Clipboard Box Feature ---
+    // Now uses Blobs instead of base64 for ~10x memory savings
+    addToBox(x, y, w, h, srcOrBlob=null, pageIdx=null) {
+        const createItem = (blob) => {
+            if(!this.state.clipboardBox) this.state.clipboardBox = [];
+            this.state.clipboardBox.push({
+                id: Date.now() + Math.random(),
+                blob: blob,  // Store as Blob, not base64
+                blobUrl: null,  // Lazy-create URL when rendering
+                w: w, h: h,
+                pageIdx: (pageIdx !== null) ? pageIdx : this.state.idx
+            });
+
+            this.ui.showToast("Added to Box!");
+            this.saveSessionState();
+            if(this.state.activeSideTab === 'box') this.renderBox();
+        };
+
+        // If a Blob was passed directly
+        if (srcOrBlob instanceof Blob) {
+            createItem(srcOrBlob);
+            return;
+        }
+
+        // If a base64 dataURL was passed (legacy support), convert to Blob
+        if (srcOrBlob && typeof srcOrBlob === 'string' && srcOrBlob.startsWith('data:')) {
+            fetch(srcOrBlob)
+                .then(res => res.blob())
+                .then(blob => createItem(blob));
+            return;
+        }
+
+        // Capture from canvas
+        const cvs = this.getElement('canvas');
+        const ctx = cvs.getContext('2d');
+        const id = ctx.getImageData(x, y, w, h);
+        const tmp = document.createElement('canvas');
+        tmp.width = w; tmp.height = h;
+        tmp.getContext('2d').putImageData(id, 0, 0);
+
+        // Use toBlob instead of toDataURL
+        tmp.toBlob(blob => {
+            createItem(blob);
+        }, 'image/jpeg', 0.85);
+    },
+
+    captureFullPage() {
+        const cvs = this.getElement('canvas');
+        this.addToBox(0, 0, cvs.width, cvs.height);
+    },
+
+    async addRangeToBox() {
+        const txt = this.getElement('boxRangeInput').value.trim();
+        if(!txt) return alert("Please enter a range (e.g. 1, 3-5)");
+
+        const indices = [];
+        const set = new Set();
+        txt.split(',').forEach(p => {
+            if(p.includes('-')) {
+                const [s,e] = p.split('-').map(n=>parseInt(n));
+                if(!isNaN(s) && !isNaN(e)) for(let k=s; k<=e; k++) if(k>0 && k<=this.state.images.length) set.add(k-1);
+            } else { const n=parseInt(p); if(!isNaN(n) && n>0 && n<=this.state.images.length) set.add(n-1); }
+        });
+        indices.push(...Array.from(set).sort((a,b)=>a-b));
+
+        if(indices.length === 0) return alert("No valid pages found in range");
+
+        this.ui.toggleLoader(true, "Capturing Pages...");
+        const cvs = document.createElement('canvas');
+        const ctx = cvs.getContext('2d');
+
+        for(let i=0; i<indices.length; i++) {
+            const idx = indices[i];
+            this.ui.updateProgress((i/indices.length)*100, `Processing Page ${idx+1}`);
+            const item = this.state.images[idx];
+
+            // Render Page to Canvas
+            const img = new Image();
+            img.src = URL.createObjectURL(item.blob);
+            await new Promise(r => img.onload = r);
+
+            cvs.width = img.width; cvs.height = img.height;
+            ctx.drawImage(img, 0, 0);
+
+            // Apply Edits (History) to Canvas
+            if(item.history && item.history.length > 0) {
+                item.history.forEach(st => {
+                    ctx.save();
+                    if(st.rotation && st.tool!=='pen') {
+                        const cx = st.x + st.w/2; const cy = st.y + st.h/2;
+                        ctx.translate(cx, cy); ctx.rotate(st.rotation); ctx.translate(-cx, -cy);
+                    }
+                    if(st.tool === 'text') { ctx.fillStyle = st.color; ctx.font = `${st.size}px sans-serif`; ctx.textBaseline = 'top'; ctx.fillText(st.text, st.x, st.y); }
+                    else if(st.tool === 'shape') {
+                        ctx.strokeStyle = st.border; ctx.lineWidth = st.width; if(st.fill!=='transparent') { ctx.fillStyle=st.fill; }
+                        ctx.beginPath(); const {x,y,w,h} = st;
+                        if(st.shapeType==='rectangle') ctx.rect(x,y,w,h); else if(st.shapeType==='circle') ctx.ellipse(x+w/2, y+h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI); else if(st.shapeType==='line') { ctx.moveTo(x,y); ctx.lineTo(x+w,y+h); }
+                        if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) ctx.fill(); ctx.stroke();
+                    } else {
+                        ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=st.size; ctx.strokeStyle = st.tool==='eraser' ? '#000' : st.color; if(st.tool==='eraser') ctx.globalCompositeOperation='destination-out';
+                        ctx.beginPath(); if(st.pts.length) ctx.moveTo(st.pts[0].x, st.pts[0].y); for(let j=1; j<st.pts.length; j++) ctx.lineTo(st.pts[j].x, st.pts[j].y); ctx.stroke();
+                    }
+                    ctx.restore();
+                });
+            }
+
+            // Use toBlob instead of toDataURL for memory efficiency
+            const blob = await new Promise(r => cvs.toBlob(r, 'image/jpeg', 0.85));
+            this.addToBox(0, 0, cvs.width, cvs.height, blob, idx);
+            await new Promise(r => setTimeout(r, 0));
+        }
+
+        this.ui.toggleLoader(false);
+        this.getElement('boxRangeInput').value = '';
+    },
+
+    renderBox() {
+        const el = this.getElement('boxList');
+        if (!el) return;
+
+        // Revoke old blob URLs to prevent memory leaks
+        if (this.boxBlobUrls) {
+            this.boxBlobUrls.forEach(url => URL.revokeObjectURL(url));
+        }
+        this.boxBlobUrls = [];
+
+        el.innerHTML = '';
+        const countEl = this.getElement('boxCount');
+        if (countEl) countEl.innerText = (this.state.clipboardBox || []).length;
+
+        if(!this.state.clipboardBox || this.state.clipboardBox.length === 0) {
+            el.innerHTML = '<div style="grid-column:1/-1; color:#666; text-align:center; padding:20px;">Box is empty. Use Capture Tool or Add Full Page.</div>';
+            return;
+        }
+
+        this.state.clipboardBox.forEach((item, idx) => {
+            const div = document.createElement('div');
+            div.className = 'box-item';
+            const im = new Image();
+
+            // Support both new Blob format and legacy base64 src format
+            if (item.blob) {
+                const url = URL.createObjectURL(item.blob);
+                this.boxBlobUrls.push(url);
+                im.src = url;
+            } else if (item.src) {
+                im.src = item.src;  // Legacy base64 support
+            }
+
+            div.appendChild(im);
+
+            const btn = document.createElement('button');
+            btn.className = 'box-del';
+            btn.innerHTML = '<i class="bi bi-trash"></i>';
+            btn.onclick = () => {
+                // Revoke the URL for this item if it has one
+                if (item.blob && item.blobUrl) {
+                    URL.revokeObjectURL(item.blobUrl);
+                }
+                this.state.clipboardBox.splice(idx, 1);
+                this.saveSessionState();
+                this.renderBox();
+            };
+            div.appendChild(btn);
+            el.appendChild(div);
+        });
+    },
+
+    clearBox() {
+        if(confirm("Clear all items in Box?")) {
+            // Revoke all blob URLs
+            if (this.boxBlobUrls) {
+                this.boxBlobUrls.forEach(url => URL.revokeObjectURL(url));
+                this.boxBlobUrls = [];
+            }
+            this.state.clipboardBox = [];
+            this.saveSessionState();
+            this.renderBox();
+        }
+    },
+
+    addBoxTag(t, area) {
+        const id = area === 'header' ? 'boxHeaderTxt' : 'boxLabelTxt';
+        const el = this.getElement(id);
+        if(el) el.value += " " + t;
+    },
+
+    processTags(text, context = {}) {
+        const now = new Date();
+        const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        let res = text.replace('{date}', now.toLocaleDateString())
+                      .replace('{day}', days[now.getDay()])
+                      .replace('{time}', now.toLocaleTimeString())
+                      .replace('{count}', (this.state.clipboardBox||[]).length);
+
+        if(context.seq !== undefined) res = res.replace('{seq}', context.seq);
+        if(context.page !== undefined) res = res.replace('{page}', context.page);
+
+        return res;
+    },
+
+    async generateBoxImage() {
+        if(!this.state.clipboardBox || this.state.clipboardBox.length === 0) return alert("Box is empty");
+
+        this.ui.toggleLoader(true, "Generating Sheets...");
+
+        const cols = parseInt(this.getElement('boxCols').value);
+        const pad = 30;
+        const A4W = 2480;
+        const A4H = 3508;
+        const colW = (A4W - (pad * (cols + 1))) / cols;
+
+        // Configs
+        const practiceOn = this.getElement('boxPracticeOn').checked;
+        const practiceCol = this.getElement('boxPracticeColor').value;
+        const labelsOn = this.getElement('boxLabelsOn').checked;
+        const labelPos = this.getElement('boxLabelsPos').value;
+        const labelTxt = this.getElement('boxLabelTxt').value;
+        const labelH = labelsOn ? 60 : 0;
+
+        // Pagination State
+        let pages = [];
+        let currentCanvas = document.createElement('canvas');
+        currentCanvas.width = A4W; currentCanvas.height = A4H;
+        let ctx = currentCanvas.getContext('2d');
+
+        // Helper to start new page
+        const initPage = () => {
+             ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0, A4W, A4H);
+             return this.getElement('boxHeaderOn').checked ? 150 : pad;
+        };
+
+        let currentY = initPage();
+
+        // 1. Organize into Rows
+        const rows = [];
+        for(let i = 0; i < this.state.clipboardBox.length; i += cols) {
+             const rowItems = this.state.clipboardBox.slice(i, i + cols);
+
+             // Calculate Heights
+             const effectiveImgW = practiceOn ? (colW/2 - 10) : colW;
+
+             const rowHeights = rowItems.map(item => item.h * (effectiveImgW / item.w));
+             const maxRowH = Math.max(...rowHeights);
+
+             rows.push({
+                 items: rowItems.map((item, idx) => ({
+                     item,
+                     finalH: item.h * (effectiveImgW / item.w),
+                     seq: i + idx + 1
+                 })),
+                 height: maxRowH + labelH + pad
+             });
+        }
+
+        // 2. Draw Loop
+        for(let r=0; r<rows.length; r++) {
+            const row = rows[r];
+
+            // Check Pagination
+            if((currentY + row.height + (this.getElement('boxFooterOn').checked ? 100 : 0)) > A4H) {
+                this.drawHeaderFooter(ctx, A4W, A4H);
+                pages.push(currentCanvas);
+
+                currentCanvas = document.createElement('canvas');
+                currentCanvas.width = A4W; currentCanvas.height = A4H;
+                ctx = currentCanvas.getContext('2d');
+                currentY = initPage();
+            }
+
+            // Draw Row
+            for(let c=0; c<row.items.length; c++) {
+                const {item, finalH, seq} = row.items[c];
+                const x = pad + (c * colW);
+                const y = currentY;
+
+                // Draw Image
+                const im = new Image();
+                if (item.blob) {
+                    im.src = URL.createObjectURL(item.blob);
+                } else {
+                    im.src = item.src;
+                }
+                await new Promise(res => im.onload = res);
+
+                const effectiveImgW = practiceOn ? (colW/2 - 10) : colW;
+                ctx.drawImage(im, x, y, effectiveImgW, finalH);
+
+                if (item.blob) URL.revokeObjectURL(im.src);
+
+                // Draw Practice Space
+                if (practiceOn) {
+                    ctx.fillStyle = practiceCol === 'black' ? '#000000' : '#f0f0f0';
+                    ctx.fillRect(x + colW/2, y, colW/2 - 10, finalH);
+                }
+
+                // Draw Label
+                if (labelsOn) {
+                    ctx.fillStyle = "#333333";
+                    ctx.font = "24px Arial";
+                    ctx.textAlign = "center";
+                    const labelY = labelPos === 'top' ? y - 10 : y + finalH + 30;
+                    ctx.fillText(this.processTags(labelTxt, {seq, page: pages.length + 1}), x + colW/2, labelY);
+                }
+            }
+            currentY += row.height;
+        }
+
+        // Finalize last page
+        this.drawHeaderFooter(ctx, A4W, A4H);
+        pages.push(currentCanvas);
+
+        this.ui.toggleLoader(false);
+
+        // 3. Export to PDF
+        // Note: Using window.jsPDF because it's loaded via script tag
+        if (!window.jspdf) {
+            alert("jsPDF library not loaded");
+            return;
+        }
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+
+        for(let i=0; i<pages.length; i++) {
+            if(i > 0) pdf.addPage();
+            const data = pages[i].toDataURL('image/jpeg', 0.8);
+            pdf.addImage(data, 'JPEG', 0, 0, 210, 297);
+        }
+
+        pdf.save(`ColorRM_Sheet_${Date.now()}.pdf`);
+    },
+
+    drawHeaderFooter(ctx, w, h) {
+        ctx.fillStyle = "#333333";
+        ctx.textAlign = "center";
+        ctx.font = "30px Arial";
+
+        if(this.getElement('boxHeaderOn').checked) {
+            const txt = this.processTags(this.getElement('boxHeaderTxt').value);
+            ctx.fillText(txt, w/2, 80);
+            ctx.fillRect(30, 100, w-60, 2);
+        }
+
+        if(this.getElement('boxFooterOn').checked) {
+            const txt = this.processTags(this.getElement('boxFooterTxt').value);
+            ctx.fillRect(30, h-100, w-60, 2);
+            ctx.fillText(txt, w/2, h-60);
+        }
+    }
+};

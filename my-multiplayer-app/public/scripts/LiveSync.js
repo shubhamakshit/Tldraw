@@ -16,6 +16,7 @@ export class LiveSyncClient {
         // Track recent local page changes to prevent sync conflicts
         this.lastLocalPageChange = 0;
         this.PAGE_CHANGE_GRACE_PERIOD = 2000; // 2 seconds grace period
+        this.remoteTrails = {};
     }
 
     async init(ownerId, projectId) {
@@ -137,11 +138,15 @@ export class LiveSyncClient {
         this.renderUsers();
     }
 
-    updateCursor(pt) {
+    updateCursor(pt, tool, isDrawing, color, size) {
         if (!this.room) return;
         this.room.updatePresence({
             cursor: pt,
-            pageIdx: this.app.state.idx
+            pageIdx: this.app.state.idx,
+            tool: tool,
+            isDrawing: isDrawing,
+            color: color,
+            size: size
         });
     }
 
@@ -149,31 +154,122 @@ export class LiveSyncClient {
         const container = this.app.getElement('cursorLayer');
         if (!container) return;
 
-        // Clear old cursors
-        container.innerHTML = '';
+        // Clear old cursors but keep canvas
+        const oldCursors = container.querySelectorAll('.remote-cursor');
+        oldCursors.forEach(el => el.remove());
 
         if (!this.app.state.showCursors) return;
 
         if (!this.room) return;
 
-        const others = this.room.getOthers();
-        const canvas = this.app.getElement('canvas');
+        // Setup Trail Canvas
+        let trailCanvas = container.querySelector('#remote-trails-canvas');
+        if (!trailCanvas) {
+            trailCanvas = document.createElement('canvas');
+            trailCanvas.id = 'remote-trails-canvas';
+            trailCanvas.style.position = 'absolute';
+            trailCanvas.style.inset = '0';
+            trailCanvas.style.pointerEvents = 'none';
+            container.appendChild(trailCanvas);
+        }
+
         const viewport = this.app.getElement('viewport');
+        const canvas = this.app.getElement('canvas');
         if (!canvas || !viewport) return;
 
-        const rect = canvas.getBoundingClientRect();
-        const viewRect = viewport.getBoundingClientRect();
+        const rect = canvas.getBoundingClientRect(); // Canvas on screen rect
+        const viewRect = viewport.getBoundingClientRect(); // Viewport rect
+
+        // 1. Align cursorLayer to match canvas exactly (fixes alignment & trail black screen issues)
+        container.style.position = 'absolute';
+        container.style.width = rect.width + 'px';
+        container.style.height = rect.height + 'px';
+        container.style.left = (rect.left - viewRect.left) + 'px';
+        container.style.top = (rect.top - viewRect.top) + 'px';
+        container.style.inset = 'auto'; // Override CSS inset:0
+
+        // 2. Match trailCanvas resolution to main canvas internal resolution
+        if (trailCanvas.width !== this.app.state.viewW || trailCanvas.height !== this.app.state.viewH) {
+            trailCanvas.width = this.app.state.viewW;
+            trailCanvas.height = this.app.state.viewH;
+        }
+        trailCanvas.style.width = '100%';
+        trailCanvas.style.height = '100%';
+        trailCanvas.style.backgroundColor = 'transparent'; // Ensure transparent
+
+        const ctx = trailCanvas.getContext('2d');
+        // Reset transform to identity to ensure full clear
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
+
+        const others = this.room.getOthers();
+        let hasActiveTrails = false;
 
         others.forEach(user => {
             const presence = user.presence;
-            if (!presence || !presence.cursor || presence.pageIdx !== this.app.state.idx) return;
+            if (!presence || !presence.cursor || presence.pageIdx !== this.app.state.idx) {
+                if (this.remoteTrails[user.connectionId]) delete this.remoteTrails[user.connectionId];
+                return;
+            }
 
+            // --- Draw Live Trail ---
+            if (presence.isDrawing && presence.tool === 'pen') {
+                hasActiveTrails = true;
+                let trail = this.remoteTrails[user.connectionId] || [];
+                // Add point if new
+                const lastPt = trail[trail.length - 1];
+                if (!lastPt || lastPt.x !== presence.cursor.x || lastPt.y !== presence.cursor.y) {
+                    trail.push(presence.cursor);
+                }
+                this.remoteTrails[user.connectionId] = trail;
+
+                if (trail.length > 1) {
+                    ctx.save();
+                    // Transform to match main canvas state
+                    ctx.translate(this.app.state.pan.x, this.app.state.pan.y);
+                    ctx.scale(this.app.state.zoom, this.app.state.zoom);
+
+                    ctx.beginPath();
+                    ctx.moveTo(trail[0].x, trail[0].y);
+                    for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
+
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.lineWidth = (presence.size || 3);
+                    
+                    // Smooth transition: Use user's color with opacity
+                    const hex = presence.color || '#000000';
+                    let r=0, g=0, b=0;
+                    if(hex.length === 4) {
+                        r = parseInt(hex[1]+hex[1], 16);
+                        g = parseInt(hex[2]+hex[2], 16);
+                        b = parseInt(hex[3]+hex[3], 16);
+                    } else if (hex.length === 7) {
+                        r = parseInt(hex.slice(1,3), 16);
+                        g = parseInt(hex.slice(3,5), 16);
+                        b = parseInt(hex.slice(5,7), 16);
+                    }
+                    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
+                    
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            } else {
+                if (this.remoteTrails[user.connectionId]) delete this.remoteTrails[user.connectionId];
+            }
+
+            // --- Draw Cursor ---
             const div = document.createElement('div');
+            // ... (cursor drawing code) ...
             div.className = 'remote-cursor';
 
-            // Map canvas coordinates to screen coordinates
-            const x = (presence.cursor.x * this.app.state.zoom + this.app.state.pan.x) * (rect.width / this.app.state.viewW) + rect.left - viewRect.left;
-            const y = (presence.cursor.y * this.app.state.zoom + this.app.state.pan.y) * (rect.height / this.app.state.viewH) + rect.top - viewRect.top;
+            // Map canvas coordinates to screen coordinates relative to cursorLayer (which now matches canvas)
+            // x_screen = (x_internal * zoom + pan) * (screen_width / internal_width)
+            const scaleX = rect.width / this.app.state.viewW;
+            const scaleY = rect.height / this.app.state.viewH;
+            
+            const x = (presence.cursor.x * this.app.state.zoom + this.app.state.pan.x) * scaleX;
+            const y = (presence.cursor.y * this.app.state.zoom + this.app.state.pan.y) * scaleY;
 
             div.style.left = `${x}px`;
             div.style.top = `${y}px`;
@@ -185,6 +281,9 @@ export class LiveSyncClient {
             `;
             container.appendChild(div);
         });
+
+        // Hide trail canvas if no active trails to minimize risk of obstruction
+        trailCanvas.style.display = hasActiveTrails ? 'block' : 'none';
     }
 
     renderUsers() {
@@ -298,6 +397,7 @@ export class LiveSyncClient {
             if (localImg) {
                 localImg.history = newHist;
                 currentIdxChanged = true;
+                if (this.app.invalidateCache) this.app.invalidateCache();
             }
         }
 
