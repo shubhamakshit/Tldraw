@@ -1363,16 +1363,58 @@ export class ColorRmApp {
 
     saveBlobNative(blob, filename) {
         if (window.AndroidNative) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const base64 = reader.result.split(',')[1];
-                window.AndroidNative.saveBlob(base64, filename, blob.type);
-                this.ui.showToast("Saved to Downloads");
-            };
-            reader.readAsDataURL(blob);
+            // For large files, process in chunks to avoid OOM
+            const CHUNK_SIZE = 512 * 1024; // 512KB chunks
+
+            if (blob.size > CHUNK_SIZE * 2) {
+                // Large file: use chunked approach
+                this.ui.showToast("Saving large file...");
+                this.saveBlobNativeChunked(blob, filename);
+            } else {
+                // Small file: use direct approach
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64 = reader.result.split(',')[1];
+                    window.AndroidNative.saveBlob(base64, filename, blob.type);
+                    this.ui.showToast("Saved to Downloads");
+                };
+                reader.onerror = () => {
+                    console.error("FileReader error");
+                    this.ui.showToast("Save failed");
+                };
+                reader.readAsDataURL(blob);
+            }
             return true;
         }
         return false;
+    }
+
+    // Chunked saving for large blobs on Android
+    async saveBlobNativeChunked(blob, filename) {
+        try {
+            // Convert blob to base64 in chunks to avoid memory spike
+            const arrayBuffer = await blob.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+
+            // Convert to base64 in chunks
+            let base64 = '';
+            const chunkSize = 32768; // Process 32KB at a time
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                const chunk = bytes.slice(i, Math.min(i + chunkSize, bytes.length));
+                base64 += btoa(String.fromCharCode.apply(null, chunk));
+
+                // Yield to UI every few chunks
+                if (i % (chunkSize * 10) === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+
+            window.AndroidNative.saveBlob(base64, filename, blob.type);
+            this.ui.showToast("Saved to Downloads");
+        } catch (e) {
+            console.error("Chunked save failed:", e);
+            this.ui.showToast("Save failed: " + e.message);
+        }
     }
 
     async saveImage() {
@@ -1381,6 +1423,45 @@ export class ColorRmApp {
             if (this.saveBlobNative(blob, 'Page.png')) return;
             const a=document.createElement('a'); a.download='Page.png'; a.href=URL.createObjectURL(blob); a.click();
         });
+    }
+
+    // Share session URL via native share or clipboard
+    async shareSession() {
+        if (!this.state.sessionId || !this.liveSync) {
+            this.ui.showToast("No active session to share");
+            return;
+        }
+
+        const ownerId = this.liveSync.ownerId || this.state.ownerId;
+        const projectId = this.state.sessionId;
+
+        if (!ownerId) {
+            this.ui.showToast("Session not synced yet");
+            return;
+        }
+
+        // Build the share URL
+        const baseUrl = window.Config?.getApiBase() || window.location.origin;
+        const shareUrl = `${baseUrl}/color_rm.html#/color_rm/${ownerId}/${projectId}`;
+
+        try {
+            // Try native share first (works on mobile)
+            if (navigator.share) {
+                await navigator.share({
+                    title: this.state.projectName || 'ColorRM Session',
+                    text: 'Join my ColorRM session',
+                    url: shareUrl
+                });
+                return;
+            }
+
+            // Fallback to clipboard
+            await navigator.clipboard.writeText(shareUrl);
+            this.ui.showToast("Link copied to clipboard!");
+        } catch (e) {
+            // Final fallback: show URL in prompt
+            prompt("Share this URL:", shareUrl);
+        }
     }
 
     renderSwatches() {
@@ -1990,11 +2071,31 @@ export class ColorRmApp {
             } else {
                 this.ui.toggleLoader(true, "Zipping...");
                 const zip = new JSZip();
+
+                // Use JPEG for smaller file sizes (especially on Android)
+                const useJpeg = pages.length > 2 || (window.Capacitor !== undefined);
+                const format = useJpeg ? 'image/jpeg' : 'image/png';
+                const ext = useJpeg ? 'jpg' : 'png';
+                const quality = useJpeg ? 0.85 : undefined;
+
                 for(let i=0; i<pages.length; i++) {
-                    const blob = await new Promise(r => pages[i].toBlob(r));
-                    zip.file(`${this.state.projectName}_Sheet_${i+1}.png`, blob);
+                    this.ui.toggleLoader(true, `Compressing ${i+1}/${pages.length}...`);
+                    const blob = await new Promise(r => pages[i].toBlob(r, format, quality));
+                    zip.file(`${this.state.projectName}_Sheet_${i+1}.${ext}`, blob);
+
+                    // Yield to UI to prevent freezing
+                    await new Promise(r => setTimeout(r, 0));
                 }
-                const content = await zip.generateAsync({type:"blob"});
+
+                this.ui.toggleLoader(true, "Generating zip...");
+                const content = await zip.generateAsync({
+                    type: "blob",
+                    compression: "DEFLATE",
+                    compressionOptions: { level: 6 }  // Balance speed vs size
+                }, (metadata) => {
+                    // Progress callback
+                    this.ui.toggleLoader(true, `Zipping ${Math.round(metadata.percent)}%...`);
+                });
                 const filename = `${this.state.projectName}_Sheets.zip`;
 
                 if (this.saveBlobNative(content, filename)) {

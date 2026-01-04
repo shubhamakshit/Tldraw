@@ -18,6 +18,7 @@ import android.os.Environment;
 import android.content.Intent;
 import android.net.Uri;
 import androidx.core.content.FileProvider;
+import android.webkit.WebView;
 
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -55,6 +56,11 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Enable WebView debugging for chrome://inspect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
+
         // 1. DYNAMIC SERVER URL OVERRIDE
         SharedPreferences prefs = getSharedPreferences("CapacitorPrefs", Context.MODE_PRIVATE);
         String customUrl = prefs.getString("server_url", null);
