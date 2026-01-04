@@ -15,13 +15,18 @@ export const Registry = {
     getToken() { return localStorage.getItem('tldraw_auth_token'); },
     getUsername() { return localStorage.getItem('tldraw_auth_username'); },
 
+    // Helper to get API URL (supports bundled mode)
+    apiUrl(path) {
+        return window.Config ? window.Config.apiUrl(path) : path;
+    },
+
     async sync() {
         const token = this.getToken();
         if (!token) return; // Anonymous users don't sync registry
 
         try {
             // 1. Fetch Cloud Registry
-            const res = await fetch('/api/color_rm/registry', {
+            const res = await fetch(this.apiUrl('/api/color_rm/registry'), {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (!res.ok) {
@@ -126,7 +131,7 @@ export const Registry = {
             baseFileName: project.baseFileName
         };
 
-        fetch('/api/color_rm/registry', {
+        fetch(this.apiUrl('/api/color_rm/registry'), {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -164,7 +169,7 @@ export const Registry = {
         const token = this.getToken();
         if (!token) return;
 
-        fetch(`/api/color_rm/registry/${projectId}`, {
+        fetch(this.apiUrl(`/api/color_rm/registry/${projectId}`), {
             method: 'DELETE',
             headers: { 'Authorization': `Bearer ${token}` }
         })

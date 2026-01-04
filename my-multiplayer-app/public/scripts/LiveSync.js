@@ -48,8 +48,13 @@ export class LiveSyncClient {
         console.log(`Liveblocks: Connecting to Owner Room: ${roomId}`);
 
         if (!this.client) {
+            // Get auth endpoint URL (supports bundled mode)
+            const authEndpoint = window.Config
+                ? window.Config.apiUrl('/api/liveblocks-auth')
+                : '/api/liveblocks-auth';
+
             this.client = createClient({
-                authEndpoint: "/api/liveblocks-auth",
+                authEndpoint: authEndpoint,
             });
         }
 

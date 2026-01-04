@@ -4,15 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target Environment (local, remote, hf)"
+        description: "Target Environment"
         required: true
-        default: "remote"
+        default: "bundled-cf"
         type: choice
         options:
-          - local
-          - remote
-          - hf
-          - cloudflare
+          - bundled-cf    # Bundled APK, API to Cloudflare (recommended)
+          - bundled-hf    # Bundled APK, API to HuggingFace
+          - local         # Dev: WebView loads from local server
+          - hf            # WebView loads from HuggingFace
+          - cloudflare    # WebView loads from Cloudflare
 
 jobs:
   build:
