@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { uniqueId } from 'tldraw'
 
+import { apiUrl } from '../config'
 import { generateBoardName } from '../utils/nameGenerator'
 import { saveRoom } from './storageUtils'
 import { useAuth } from '../hooks/useAuth'
@@ -44,7 +45,7 @@ export function Lobby() {
 
     useEffect(() => {
         if (isAuthenticated && token) {
-            fetch('/api/color_rm/registry', {
+            fetch(apiUrl('/api/color_rm/registry'), {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }

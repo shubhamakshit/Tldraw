@@ -13,7 +13,8 @@ export class ColorRmApp {
 
         this.state = {
             sessionId: null, images: [], idx: 0,
-            colors: [], strict: 15, tool: 'none', bg: 'transparent',
+            colors: [], customSwatches: JSON.parse(localStorage.getItem('crm_custom_colors') || '[]'),
+            strict: 15, tool: 'none', bg: 'transparent',
             penColor: '#ef4444', penSize: 3, eraserSize: 20, eraserType: 'stroke',
             textSize: 40,
             shapeType: 'rectangle', shapeBorder: '#3b82f6', shapeFill: 'transparent', shapeWidth: 3,
@@ -534,8 +535,15 @@ export class ColorRmApp {
         const pickerAction = this.getElement('pickerActionBtn');
         if(pickerAction) {
             pickerAction.onclick = () => {
+                const hex = this.iroP.color.hexString;
+
+                // Save to custom swatches history (max 14)
+                this.state.customSwatches = this.state.customSwatches.filter(c => c !== hex);
+                this.state.customSwatches.unshift(hex);
+                if(this.state.customSwatches.length > 14) this.state.customSwatches.pop();
+                localStorage.setItem('crm_custom_colors', JSON.stringify(this.state.customSwatches));
+
                 if(this.state.pickerMode==='remove') {
-                    const hex = this.iroP.color.hexString;
                     const i = parseInt(hex.slice(1), 16);
                     this.state.colors.push({hex, lab:this.rgbToLab((i>>16)&255,(i>>8)&255,i&255)});
                     this.renderSwatches();
@@ -1231,6 +1239,7 @@ export class ColorRmApp {
         this.state.pickerMode=m;
         const pb = this.getElement('pickerNoneBtn');
         if(pb) pb.style.display = (m==='shapeFill'||m==='selectionFill') ? 'block' : 'none';
+        this.renderPickerSwatches();
         const fp = this.getElement('floatingPicker');
         if(fp) fp.style.display='flex';
     }
@@ -1481,6 +1490,22 @@ export class ColorRmApp {
                 this.render();
                 this.saveSessionState();
                 if (this.liveSync) this.liveSync.updateColors(this.state.colors);
+            };
+            c.appendChild(d);
+        });
+    }
+
+    renderPickerSwatches() {
+        const c = this.getElement('pickerSwatches');
+        if (!c) return;
+        c.innerHTML = '';
+        this.state.customSwatches.forEach(color => {
+            const d = document.createElement('div');
+            d.style.width = '24px'; d.style.height = '24px';
+            d.style.borderRadius = '4px'; d.style.border = '1px solid #333';
+            d.style.cursor = 'pointer'; d.style.background = color;
+            d.onclick = () => {
+                if (this.iroP) this.iroP.color.set(color);
             };
             c.appendChild(d);
         });

@@ -18,7 +18,7 @@ import {
 import { useSync } from '@tldraw/sync'
 import { getBookmarkPreview } from '../getBookmarkPreview'
 import { multiplayerAssetStore } from '../multiplayerAssetStore'
-import { WS_URL, SERVER_URL } from '../config'
+import { WS_URL, SERVER_URL, apiUrl } from '../config'
 import { saveRoom } from './storageUtils'
 import { StatePersistence } from '../components/StatePersistence'
 import { NavigationDock } from '../components/NavigationDock'
@@ -150,7 +150,7 @@ export function RoomPage() {
 
     useEffect(() => {
         saveRoom(roomId)
-        const metaUrl = `${SERVER_URL}/api/meta/${roomId}`;
+        const metaUrl = apiUrl(`/api/meta/${roomId}`);
         console.log(`[Room] Fetching metadata from: ${metaUrl}`);
         
         fetch(metaUrl)

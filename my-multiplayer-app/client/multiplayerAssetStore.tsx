@@ -1,6 +1,6 @@
 import { TLAssetStore, uniqueId } from 'tldraw'
 // 1. IMPORT CONFIG
-import { SERVER_URL } from './config'
+import { apiUrl } from './config'
 
 export const multiplayerAssetStore: TLAssetStore = {
     async upload(_asset, file) {
@@ -8,7 +8,7 @@ export const multiplayerAssetStore: TLAssetStore = {
         const objectName = `${id}-${file.name}`.replace(/[^a-zA-Z0-9.]/g, '-')
         
         // 2. USE CONFIG
-        const url = `${SERVER_URL}/api/uploads/${objectName}`
+        const url = apiUrl(`/api/uploads/${objectName}`)
 
         const response = await fetch(url, {
             method: 'POST',

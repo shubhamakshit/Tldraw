@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { colors } from '../constants/theme'
+import { apiUrl } from '../config'
 
 interface AuthModalProps {
     isOpen: boolean
@@ -25,7 +26,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
         try {
             const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register'
 
-            const res = await fetch(endpoint, {
+            const res = await fetch(apiUrl(endpoint), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })

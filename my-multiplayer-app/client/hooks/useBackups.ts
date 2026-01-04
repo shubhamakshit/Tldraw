@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useAuth } from './useAuth'
-import { SERVER_URL } from '../config'
+import { apiUrl } from '../config'
 
 export interface BackupItem {
     key: string
@@ -22,7 +22,7 @@ export function useBackups() {
         setIsLoading(true)
         setError(null)
         try {
-            const res = await fetch(`${SERVER_URL}/api/backups`, {
+            const res = await fetch(apiUrl('/api/backups'), {
                 headers: { 'Authorization': `Bearer ${token}` }
             })
             if (!res.ok) throw new Error('Failed to fetch backups')
@@ -39,7 +39,7 @@ export function useBackups() {
         if (!isAuthenticated || !token) throw new Error('Not authenticated')
 
         try {
-            const res = await fetch(`${SERVER_URL}/api/backup`, {
+            const res = await fetch(apiUrl('/api/backup'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -62,7 +62,7 @@ export function useBackups() {
 
         try {
             const encodedKey = encodeURIComponent(key)
-            const res = await fetch(`${SERVER_URL}/api/backup/${encodedKey}`, {
+            const res = await fetch(apiUrl(`/api/backup/${encodedKey}`), {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             })
@@ -85,7 +85,7 @@ export function useBackups() {
         // The server expects encoded key in param: /api/backup/:key
         const encodedKey = encodeURIComponent(key)
 
-        const res = await fetch(`${SERVER_URL}/api/backup/${encodedKey}`, {
+        const res = await fetch(apiUrl(`/api/backup/${encodedKey}`), {
             headers: { 'Authorization': `Bearer ${token}` }
         })
 
