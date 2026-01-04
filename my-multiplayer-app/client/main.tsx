@@ -6,6 +6,10 @@ import { RoomPage as Room } from './pages/RoomPage'
 import { Lobby } from './pages/Lobby' // Import Lobby
 import { AuthProvider } from './hooks/useAuth'
 
+// Initialize global logger
+import { initLogger } from './utils/logger'
+initLogger()
+
 // --- NUCLEAR CLEAN (DISABLED) ---
 // Wipes all local data to guarantee a fresh start
 // try {

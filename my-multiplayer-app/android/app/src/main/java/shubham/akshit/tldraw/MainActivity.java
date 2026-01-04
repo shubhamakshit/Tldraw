@@ -182,6 +182,57 @@ public class MainActivity extends BridgeActivity {
                         e.printStackTrace();
                     }
                 }
+
+                @JavascriptInterface
+                public void writeLog(String level, String message) {
+                    // Write to Android logcat
+                    String tag = "ColorRM";
+                    switch (level) {
+                        case "ERROR":
+                        case "UNCAUGHT":
+                        case "PROMISE":
+                            android.util.Log.e(tag, message);
+                            break;
+                        case "WARN":
+                            android.util.Log.w(tag, message);
+                            break;
+                        case "DEBUG":
+                            android.util.Log.d(tag, message);
+                            break;
+                        default:
+                            android.util.Log.i(tag, message);
+                    }
+
+                    // Also append to log file
+                    try {
+                        File logDir = new File(getExternalFilesDir(null), "logs");
+                        if (!logDir.exists()) logDir.mkdirs();
+
+                        File logFile = new File(logDir, "colorrm.log");
+
+                        // Rotate log if too large (>5MB)
+                        if (logFile.exists() && logFile.length() > 5 * 1024 * 1024) {
+                            File oldLog = new File(logDir, "colorrm.old.log");
+                            if (oldLog.exists()) oldLog.delete();
+                            logFile.renameTo(oldLog);
+                            logFile = new File(logDir, "colorrm.log");
+                        }
+
+                        java.io.FileWriter fw = new java.io.FileWriter(logFile, true);
+                        String timestamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(new java.util.Date());
+                        fw.write("[" + timestamp + "] [" + level + "] " + message + "\n");
+                        fw.close();
+                    } catch (Exception e) {
+                        android.util.Log.e(tag, "Failed to write log file: " + e.getMessage());
+                    }
+                }
+
+                @JavascriptInterface
+                public String getLogFilePath() {
+                    File logDir = new File(getExternalFilesDir(null), "logs");
+                    File logFile = new File(logDir, "colorrm.log");
+                    return logFile.getAbsolutePath();
+                }
             }, "AndroidNative");
         }
     }

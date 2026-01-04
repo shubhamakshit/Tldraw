@@ -6,6 +6,7 @@ import { CommonPdfImport } from './CommonPdfImport.js';
 import { SplitView } from './SplitView.js';
 import { PDFLibrary } from './PDFLibrary.js';
 import { Config } from './config.js';
+import { Logger } from './Logger.js';
 
 // Expose globals for compatibility and debugging
 window.UI = UI;
@@ -13,6 +14,7 @@ window.Registry = Registry;
 window.CommonPdfImport = CommonPdfImport;
 window.PDFLibrary = PDFLibrary;
 window.Config = Config;
+window.Logger = Logger;
 
 // Initialize the main application instance
 const app = new ColorRmApp({ isMain: true });
