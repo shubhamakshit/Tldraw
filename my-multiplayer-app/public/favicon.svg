@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512"><svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512"><svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 1. Main Fill Gradient (Blue -> Violet) -->
+    <linearGradient id="mainGradient" x1="256" y1="99" x2="256" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0070F3"></stop>
+      <stop offset="100%" stop-color="#A855F7"></stop>
+    </linearGradient>
+
+    <!-- 2. NEW: Border Highlight Gradient (Bright Top -> Faded Bottom) -->
+    <linearGradient id="borderGradient" x1="256" y1="99" x2="256" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="1.0"></stop> <!-- Bright Tip -->
+      <stop offset="60%" stop-color="#FFFFFF" stop-opacity="0.3"></stop> <!-- Mid fade -->
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.1"></stop> <!-- Subtle Base -->
+    </linearGradient>
+
+    <!-- 3. Grid Pattern -->
+    <pattern id="gridPattern" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.5" fill="#555555" fill-opacity="0.3"></circle>
+    </pattern>
+
+    <!-- 4. Subtle Shadow -->
+    <filter id="subtleShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur"></feGaussianBlur>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0   0 0 0 0 0   0 0 0 0 0  0 0 0 0.4 0"></feColorMatrix>
+      <feOffset dx="0" dy="4" result="offsetBlur"></feOffset>
+      <feMerge>
+        <feMergeNode in="offsetBlur"></feMergeNode>
+        <feMergeNode in="SourceGraphic"></feMergeNode>
+      </feMerge>
+    </filter>
+
+    <circle id="geoCircle" cx="256" cy="266" r="110"></circle>
+    <path id="geoTriangle" d="M256 99 L383.1 319.2 H128.9 Z"></path>
+  </defs>
+
+  <!-- BASE -->
+  <rect width="512" height="512" rx="128" fill="#050505"></rect>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="url(#gridPattern)"></rect>
+
+  <!-- LAYER 1: Blueprint Circle (Dashed, Bright, Thicker) -->
+  <use href="#geoCircle" stroke="white" stroke-width="2.5" stroke-dasharray="10 6" stroke-opacity="0.4" fill="none"></use>
+
+  <!-- LAYER 2: The Prism -->
+  <g filter="url(#subtleShadow)">
+      <!-- 2a. The Gradient Fill -->
+      <use href="#geoTriangle" fill="url(#mainGradient)"></use>
+      
+      <!-- 2b. The Prominent Border (Gradient Stroke) -->
+      <!-- Defined last so it sits ON TOP of the fill for sharpness -->
+      <use href="#geoTriangle" stroke="url(#borderGradient)" stroke-width="3" fill="none"></use>
+  </g>
+
+</svg></svg><style>@media (prefers-color-scheme: light) { :root { filter: none; } }
+@media (prefers-color-scheme: dark) { :root { filter: none; } }
+</style></svg>
