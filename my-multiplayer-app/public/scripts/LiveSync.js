@@ -12,6 +12,10 @@ export class LiveSyncClient {
         this.unsubscribes = [];
         this.isInitializing = true;
         this.root = null;
+
+        // Track recent local page changes to prevent sync conflicts
+        this.lastLocalPageChange = 0;
+        this.PAGE_CHANGE_GRACE_PERIOD = 2000; // 2 seconds grace period
     }
 
     async init(ownerId, projectId) {
@@ -252,8 +256,21 @@ export class LiveSyncClient {
         const titleEl = this.app.getElement('headerTitle');
         if(titleEl) titleEl.innerText = metadata.name;
 
+        // Only sync page index if:
+        // 1. We haven't made a local page change recently (grace period)
+        // 2. The remote change is from another user (not our own echo)
+        const timeSinceLocalChange = Date.now() - this.lastLocalPageChange;
+        const isWithinGracePeriod = timeSinceLocalChange < this.PAGE_CHANGE_GRACE_PERIOD;
+
         if (this.app.state.idx !== metadata.idx) {
-            this.app.loadPage(metadata.idx, false);
+            if (isWithinGracePeriod) {
+                // Skip - this is likely our own change echoing back
+                console.log(`Liveblocks: Ignoring remote idx=${metadata.idx}, local change was ${timeSinceLocalChange}ms ago`);
+            } else {
+                // Accept remote page change (from another user)
+                console.log(`Liveblocks: Accepting remote page change to idx=${metadata.idx}`);
+                this.app.loadPage(metadata.idx, false);
+            }
         }
 
         // AUTO-RETRY base file fetch if remote has pages but we don't

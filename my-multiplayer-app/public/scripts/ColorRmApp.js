@@ -224,6 +224,11 @@ export class ColorRmApp {
         // Invalidate cache when loading new page
         this.invalidateCache();
 
+        // Mark this as a local page change to prevent sync conflicts
+        if (broadcast && this.liveSync) {
+            this.liveSync.lastLocalPageChange = Date.now();
+        }
+
         if (this.liveSync) {
             const project = this.liveSync.getProject();
             if (project) {
