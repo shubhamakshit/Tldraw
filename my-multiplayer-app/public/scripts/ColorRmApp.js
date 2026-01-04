@@ -25,8 +25,20 @@ export class ColorRmApp {
             zoom: 1, pan: { x: 0, y: 0 }
         };
 
-        this.cache = { currentImg: null, lab: null };
+        this.cache = {
+            currentImg: null,
+            lab: null,
+            // Offscreen canvas for caching committed strokes
+            committedCanvas: null,
+            committedCtx: null,
+            lastHistoryLength: 0,  // Track when to invalidate cache
+            isDirty: true  // Flag to rebuild cache
+        };
         this.db = null;
+
+        // Performance flags
+        this.renderPending = false;
+        this.saveTimeout = null;
         this.ui = null;
         this.liveSync = null;
         this.registry = null;
@@ -204,6 +216,14 @@ export class ColorRmApp {
     async loadPage(i, broadcast = true) {
         if(i<0 || i>=this.state.images.length) return;
 
+        // Auto-compact current page before switching (if leaving a page)
+        if (this.state.idx !== i && this.state.images[this.state.idx]) {
+            this.checkAutoCompact();
+        }
+
+        // Invalidate cache when loading new page
+        this.invalidateCache();
+
         if (this.liveSync) {
             const project = this.liveSync.getProject();
             if (project) {
@@ -234,8 +254,15 @@ export class ColorRmApp {
         this.renderBookmarks();
 
         if(!item.history) item.history = [];
+
+        // Revoke old page blob URL to prevent memory leak
+        if (this.currentPageBlobUrl) {
+            URL.revokeObjectURL(this.currentPageBlobUrl);
+        }
+
         const img = new Image();
-        img.src = URL.createObjectURL(item.blob);
+        this.currentPageBlobUrl = URL.createObjectURL(item.blob);
+        img.src = this.currentPageBlobUrl;
         return new Promise((resolve) => {
             img.onload = () => {
                 this.cache.currentImg = img;
@@ -263,6 +290,53 @@ export class ColorRmApp {
                 resolve();
             };
         });
+    }
+
+    // Invalidate the cached canvas (call when history changes)
+    invalidateCache() {
+        this.cache.isDirty = true;
+    }
+
+    // Request a render on next animation frame (throttled to 60fps)
+    requestRender() {
+        if (this.renderPending) return;
+        this.renderPending = true;
+        requestAnimationFrame(() => {
+            this.render();
+            this.renderPending = false;
+        });
+    }
+
+    // Build the cached canvas with all committed strokes
+    buildCommittedCache(ctx, currentImg) {
+        if (!this.cache.isDirty && this.cache.committedCanvas) {
+            return;  // Cache is valid
+        }
+
+        const activeHistory = currentImg?.history?.filter(st => !st.deleted) || [];
+
+        // Create or resize offscreen canvas
+        if (!this.cache.committedCanvas ||
+            this.cache.committedCanvas.width !== this.state.viewW ||
+            this.cache.committedCanvas.height !== this.state.viewH) {
+            this.cache.committedCanvas = document.createElement('canvas');
+            this.cache.committedCanvas.width = this.state.viewW;
+            this.cache.committedCanvas.height = this.state.viewH;
+            this.cache.committedCtx = this.cache.committedCanvas.getContext('2d');
+        }
+
+        const cacheCtx = this.cache.committedCtx;
+        cacheCtx.clearRect(0, 0, this.state.viewW, this.state.viewH);
+
+        // Draw all non-selected, committed strokes to cache
+        activeHistory.forEach((st, idx) => {
+            // Skip items being dragged (they'll be drawn live)
+            if (this.state.selection.includes(idx)) return;
+            this.renderObject(cacheCtx, st, 0, 0);
+        });
+
+        this.cache.isDirty = false;
+        this.cache.lastHistoryLength = currentImg?.history?.length || 0;
     }
 
     render() {
@@ -313,18 +387,30 @@ export class ColorRmApp {
         }
 
         const currentImg = this.state.images[this.state.idx];
-        if (currentImg && currentImg.history) {
-            currentImg.history.forEach((st, idx) => {
-                if (st.deleted) return;
-                let dx=0, dy=0;
-                if(this.state.selection.includes(idx) && this.dragOffset) {
-                    dx = this.dragOffset.x; dy = this.dragOffset.y;
+
+        // Build cached canvas if needed (only rebuilds when dirty)
+        this.buildCommittedCache(ctx, currentImg);
+
+        // Draw the cached committed strokes
+        if (this.cache.committedCanvas) {
+            ctx.drawImage(this.cache.committedCanvas, 0, 0);
+        }
+
+        // Draw selected items with drag offset (these are live, not cached)
+        if (currentImg && currentImg.history && this.state.selection.length > 0) {
+            this.state.selection.forEach(idx => {
+                const st = currentImg.history[idx];
+                if (!st || st.deleted) return;
+                let dx = 0, dy = 0;
+                if (this.dragOffset) {
+                    dx = this.dragOffset.x;
+                    dy = this.dragOffset.y;
                 }
                 this.renderObject(ctx, st, dx, dy);
             });
         }
 
-        // Active stroke
+        // Active stroke (being drawn right now)
         if (this.isDragging && this.currentStroke && this.currentStroke.length > 1 && ['pen','eraser'].includes(this.state.tool)) {
             ctx.save();
             ctx.lineCap='round'; ctx.lineJoin='round';
@@ -778,7 +864,7 @@ export class ColorRmApp {
                         }
                         if (hit) { st.deleted = true; st.lastMod = Date.now(); changed = true; }
                     }
-                    if (changed) { this.saveCurrentImg(); this.render(); }
+                    if (changed) { this.invalidateCache(); this.scheduleSave(); this.render(); }
                     return;
                 }
 
@@ -1173,6 +1259,7 @@ export class ColorRmApp {
         const tb = this.getElement('contextToolbar');
         if(tb) tb.style.display = 'none';
 
+        this.invalidateCache();
         this.saveCurrentImg();
         this.render();
     }
@@ -1213,6 +1300,64 @@ export class ColorRmApp {
             if (!skipRemoteSync && this.liveSync && !this.liveSync.isInitializing) {
                 this.liveSync.setHistory(this.state.idx, this.state.images[this.state.idx].history);
             }
+        }
+        // Invalidate cache since history changed
+        this.invalidateCache();
+    }
+
+    // Debounced save - call this instead of saveCurrentImg for frequent updates
+    scheduleSave(skipRemoteSync = false) {
+        if (this.saveTimeout) clearTimeout(this.saveTimeout);
+        this.saveTimeout = setTimeout(() => {
+            this.saveCurrentImg(skipRemoteSync);
+        }, 300);  // Save 300ms after last change
+    }
+
+    // Compact history by removing soft-deleted items
+    compactHistory(pageIdx = null) {
+        const idx = pageIdx !== null ? pageIdx : this.state.idx;
+        const img = this.state.images[idx];
+        if (!img || !img.history) return 0;
+
+        const before = img.history.length;
+        img.history = img.history.filter(st => !st.deleted);
+        const removed = before - img.history.length;
+
+        if (removed > 0) {
+            console.log(`Compacted history: removed ${removed} deleted items`);
+            // Clear selection since indices changed
+            this.state.selection = [];
+            this.invalidateCache();
+            this.saveCurrentImg();
+        }
+
+        return removed;
+    }
+
+    // Compact all pages
+    compactAllHistory() {
+        let totalRemoved = 0;
+        this.state.images.forEach((_, idx) => {
+            totalRemoved += this.compactHistory(idx);
+        });
+        if (totalRemoved > 0) {
+            this.ui.showToast(`Cleaned up ${totalRemoved} items`);
+        }
+        return totalRemoved;
+    }
+
+    // Auto-compact if history is getting large
+    checkAutoCompact() {
+        const img = this.state.images[this.state.idx];
+        if (!img || !img.history) return;
+
+        const deletedCount = img.history.filter(st => st.deleted).length;
+        const totalCount = img.history.length;
+
+        // Auto-compact if more than 100 deleted items or >30% are deleted
+        if (deletedCount > 100 || (totalCount > 50 && deletedCount / totalCount > 0.3)) {
+            console.log('Auto-compacting history...');
+            this.compactHistory();
         }
     }
 
@@ -1338,12 +1483,24 @@ export class ColorRmApp {
     renderPageSidebar() {
         const el = this.getElement('sbPageList');
         if (!el) return;
+
+        // Revoke old blob URLs to prevent memory leaks
+        if (this.pageThumbnailUrls) {
+            this.pageThumbnailUrls.forEach(url => URL.revokeObjectURL(url));
+        }
+        this.pageThumbnailUrls = [];
+
         el.innerHTML = '';
         this.state.images.forEach((img, i) => {
             const d = document.createElement('div');
             d.className = `sb-page-item ${i === this.state.idx ? 'active' : ''}`;
             d.onclick = () => this.loadPage(i);
-            const im = new Image(); im.src = URL.createObjectURL(img.blob);
+
+            const im = new Image();
+            const url = URL.createObjectURL(img.blob);
+            this.pageThumbnailUrls.push(url);
+            im.src = url;
+
             d.appendChild(im);
             const n = document.createElement('div');
             n.className = 'sb-page-num'; n.innerText = i + 1;
@@ -1483,29 +1640,49 @@ export class ColorRmApp {
     }
 
     // --- The Clipboard Box Feature ---
-    addToBox(x, y, w, h, src=null, pageIdx=null) {
-        let finalSrc = src;
-        if(!finalSrc) {
-            const cvs = this.getElement('canvas');
-            const ctx = cvs.getContext('2d');
-            const id = ctx.getImageData(x, y, w, h);
-            const tmp = document.createElement('canvas');
-            tmp.width = w; tmp.height = h;
-            tmp.getContext('2d').putImageData(id, 0, 0);
-            finalSrc = tmp.toDataURL();
+    // Now uses Blobs instead of base64 for ~10x memory savings
+    addToBox(x, y, w, h, srcOrBlob=null, pageIdx=null) {
+        const createItem = (blob) => {
+            if(!this.state.clipboardBox) this.state.clipboardBox = [];
+            this.state.clipboardBox.push({
+                id: Date.now() + Math.random(),
+                blob: blob,  // Store as Blob, not base64
+                blobUrl: null,  // Lazy-create URL when rendering
+                w: w, h: h,
+                pageIdx: (pageIdx !== null) ? pageIdx : this.state.idx
+            });
+
+            this.ui.showToast("Added to Box!");
+            this.saveSessionState();
+            if(this.state.activeSideTab === 'box') this.renderBox();
+        };
+
+        // If a Blob was passed directly
+        if (srcOrBlob instanceof Blob) {
+            createItem(srcOrBlob);
+            return;
         }
 
-        if(!this.state.clipboardBox) this.state.clipboardBox = [];
-        this.state.clipboardBox.push({
-            id: Date.now() + Math.random(),
-            src: finalSrc,
-            w: w, h: h,
-            pageIdx: (pageIdx !== null) ? pageIdx : this.state.idx
-        });
+        // If a base64 dataURL was passed (legacy support), convert to Blob
+        if (srcOrBlob && typeof srcOrBlob === 'string' && srcOrBlob.startsWith('data:')) {
+            fetch(srcOrBlob)
+                .then(res => res.blob())
+                .then(blob => createItem(blob));
+            return;
+        }
 
-        this.ui.showToast("Added to Box!");
-        this.saveSessionState();
-        if(this.state.activeSideTab === 'box') this.renderBox();
+        // Capture from canvas
+        const cvs = this.getElement('canvas');
+        const ctx = cvs.getContext('2d');
+        const id = ctx.getImageData(x, y, w, h);
+        const tmp = document.createElement('canvas');
+        tmp.width = w; tmp.height = h;
+        tmp.getContext('2d').putImageData(id, 0, 0);
+
+        // Use toBlob instead of toDataURL
+        tmp.toBlob(blob => {
+            createItem(blob);
+        }, 'image/jpeg', 0.85);
     }
 
     captureFullPage() {
@@ -1568,7 +1745,9 @@ export class ColorRmApp {
                 });
             }
 
-            this.addToBox(0, 0, cvs.width, cvs.height, cvs.toDataURL(), idx);
+            // Use toBlob instead of toDataURL for memory efficiency
+            const blob = await new Promise(r => cvs.toBlob(r, 'image/jpeg', 0.85));
+            this.addToBox(0, 0, cvs.width, cvs.height, blob, idx);
             await new Promise(r => setTimeout(r, 0));
         }
 
@@ -1579,6 +1758,13 @@ export class ColorRmApp {
     renderBox() {
         const el = this.getElement('boxList');
         if (!el) return;
+
+        // Revoke old blob URLs to prevent memory leaks
+        if (this.boxBlobUrls) {
+            this.boxBlobUrls.forEach(url => URL.revokeObjectURL(url));
+        }
+        this.boxBlobUrls = [];
+
         el.innerHTML = '';
         const countEl = this.getElement('boxCount');
         if (countEl) countEl.innerText = (this.state.clipboardBox || []).length;
@@ -1591,13 +1777,27 @@ export class ColorRmApp {
         this.state.clipboardBox.forEach((item, idx) => {
             const div = document.createElement('div');
             div.className = 'box-item';
-            const im = new Image(); im.src = item.src;
+            const im = new Image();
+
+            // Support both new Blob format and legacy base64 src format
+            if (item.blob) {
+                const url = URL.createObjectURL(item.blob);
+                this.boxBlobUrls.push(url);
+                im.src = url;
+            } else if (item.src) {
+                im.src = item.src;  // Legacy base64 support
+            }
+
             div.appendChild(im);
 
             const btn = document.createElement('button');
             btn.className = 'box-del';
             btn.innerHTML = '<i class="bi bi-trash"></i>';
             btn.onclick = () => {
+                // Revoke the URL for this item if it has one
+                if (item.blob && item.blobUrl) {
+                    URL.revokeObjectURL(item.blobUrl);
+                }
                 this.state.clipboardBox.splice(idx, 1);
                 this.saveSessionState();
                 this.renderBox();
@@ -1609,6 +1809,11 @@ export class ColorRmApp {
 
     clearBox() {
         if(confirm("Clear all items in Box?")) {
+            // Revoke all blob URLs
+            if (this.boxBlobUrls) {
+                this.boxBlobUrls.forEach(url => URL.revokeObjectURL(url));
+                this.boxBlobUrls = [];
+            }
             this.state.clipboardBox = [];
             this.saveSessionState();
             this.renderBox();
@@ -1721,8 +1926,18 @@ export class ColorRmApp {
                     else { imgY = currentY; labelY = currentY + finalH + 40; }
                 }
 
-                const img = new Image(); img.src = item.src;
+                const img = new Image();
+                // Support both Blob and legacy base64 src formats
+                if (item.blob) {
+                    img.src = URL.createObjectURL(item.blob);
+                } else if (item.src) {
+                    img.src = item.src;
+                }
                 await new Promise(r => img.onload = r);
+                // Revoke blob URL after loading
+                if (item.blob) {
+                    URL.revokeObjectURL(img.src);
+                }
 
                 ctx.drawImage(img, x, imgY, effectiveImgW, finalH);
 

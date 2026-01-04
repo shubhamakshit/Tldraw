@@ -708,6 +708,9 @@
                         <button class="btn btn-outline" style="justify-content:center; font-size:0.7rem; padding:10px;" onclick="window.App.render()">Redraw</button>
                         <button class="btn btn-outline" style="justify-content:center; font-size:0.7rem; padding:10px;" onclick="window.LiveSync.syncHistory(); window.App.render();">Sync Now</button>
                     </div>
+                    <button class="btn" style="width:100%; justify-content:center; margin-top:8px; font-size:0.7rem; padding:10px; border-color:#22c55e; color:#22c55e;" onclick="window.App.compactAllHistory()">
+                        <i class="bi bi-arrow-repeat"></i> Compact History
+                    </button>
                     <button class="btn btn-danger" style="width:100%; justify-content:center; margin-top:8px; font-size:0.7rem; padding:10px;" onclick="location.reload()">Force Hard Reload</button>
                 </div>
             </div>
