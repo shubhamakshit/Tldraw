@@ -130,7 +130,7 @@ export class LiveSyncClient {
         // Initialize presence for self
         this.room.updatePresence({
             userId: this.userId,
-            userName: "User " + this.userId.slice(-4),
+            userName: window.Registry?.getUsername() || this.userId,
             cursor: null,
             pageIdx: this.app.state.idx
         });
@@ -143,6 +143,7 @@ export class LiveSyncClient {
         this.room.updatePresence({
             cursor: pt,
             pageIdx: this.app.state.idx,
+            userName: window.Registry?.getUsername() || this.userId,
             tool: tool,
             isDrawing: isDrawing,
             color: color,
@@ -291,20 +292,22 @@ export class LiveSyncClient {
         if (!el) return;
 
         const others = this.room.getOthers();
+        const myName = window.Registry?.getUsername() || this.userId;
         let html = `
             <div class="user-item self">
                 <div class="user-dot" style="background:var(--primary)"></div>
-                <span>You (${this.userId.slice(-4)})</span>
+                <span>You (${myName})</span>
             </div>
         `;
 
         others.forEach(user => {
             const info = user.presence;
             if (!info || !info.userId) return;
+            const userName = info.userName || info.userId;
             html += `
                 <div class="user-item">
                     <div class="user-dot" style="background:var(--accent)"></div>
-                    <span>Collaborator (${info.userId.slice(-4)})</span>
+                    <span>${userName}</span>
                 </div>
             `;
         });
