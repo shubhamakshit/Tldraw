@@ -4,6 +4,7 @@ import { ColorRmBox } from './modules/ColorRmBox.js';
 import { ColorRmInput } from './modules/ColorRmInput.js';
 import { ColorRmUI } from './modules/ColorRmUI.js';
 import { ColorRmSession } from './modules/ColorRmSession.js';
+import { ColorRmExport } from './modules/ColorRmExport.js';
 
 export class ColorRmApp {
     constructor(config = {}) {
@@ -312,3 +313,4 @@ Object.assign(ColorRmApp.prototype, ColorRmBox);
 Object.assign(ColorRmApp.prototype, ColorRmInput);
 Object.assign(ColorRmApp.prototype, ColorRmUI);
 Object.assign(ColorRmApp.prototype, ColorRmSession);
+Object.assign(ColorRmApp.prototype, ColorRmExport);

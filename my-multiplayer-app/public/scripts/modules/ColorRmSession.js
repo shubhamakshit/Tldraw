@@ -502,5 +502,43 @@ export const ColorRmSession = {
         } else {
             alert("No local file to upload.");
         }
+    },
+
+    async shareSession() {
+        if (!this.state.sessionId || !this.liveSync) {
+            this.ui.showToast("No active session to share");
+            return;
+        }
+
+        const ownerId = this.liveSync.ownerId || this.state.ownerId;
+        const projectId = this.state.sessionId;
+
+        if (!ownerId) {
+            this.ui.showToast("Session not synced yet");
+            return;
+        }
+
+        // Build the share URL
+        const baseUrl = window.Config?.getApiBase() || window.location.origin;
+        const shareUrl = `${baseUrl}/color_rm.html#/color_rm/${ownerId}/${projectId}`;
+
+        try {
+            // Try native share first (works on mobile)
+            if (navigator.share) {
+                await navigator.share({
+                    title: this.state.projectName || 'ColorRM Session',
+                    text: 'Join my ColorRM session',
+                    url: shareUrl
+                });
+                return;
+            }
+
+            // Fallback to clipboard
+            await navigator.clipboard.writeText(shareUrl);
+            this.ui.showToast("Link copied to clipboard!");
+        } catch (e) {
+            // Final fallback: show URL in prompt
+            prompt("Share this URL:", shareUrl);
+        }
     }
 };
