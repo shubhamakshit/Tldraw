@@ -321,15 +321,19 @@ export const ColorRmInput = {
 
             const pt = getPt(e);
 
-            if (this.liveSync && !this.liveSync.isInitializing) {
-                const isDrawing = this.isDragging && ['pen', 'eraser'].includes(this.state.tool);
-                this.liveSync.updateCursor(
-                    pt,
-                    this.state.tool,
-                    isDrawing,
-                    this.state.penColor,
-                    this.state.tool === 'eraser' ? this.state.eraserSize : this.state.penSize
-                );
+            const now = Date.now();
+            if (now - this.lastCursorUpdateTime > this.cursorUpdateThrottle) {
+                this.lastCursorUpdateTime = now;
+                if (this.liveSync && !this.liveSync.isInitializing) {
+                    const isDrawing = this.isDragging && ['pen', 'eraser'].includes(this.state.tool);
+                    this.liveSync.updateCursor(
+                        pt,
+                        this.state.tool,
+                        isDrawing,
+                        this.state.penColor,
+                        this.state.tool === 'eraser' ? this.state.eraserSize : this.state.penSize
+                    );
+                }
             }
 
             if(isMovingSelection) { this.dragOffset = {x:pt.x-dragStart.x, y:pt.y-dragStart.y}; this.render(); return; }
@@ -487,7 +491,20 @@ export const ColorRmInput = {
                 this.state.selection.forEach(idx => { const st=this.state.images[this.state.idx].history[idx]; if(st.tool==='pen') st.pts.forEach(p=>{p.x+=this.dragOffset.x;p.y+=this.dragOffset.y}); else {st.x+=this.dragOffset.x;st.y+=this.dragOffset.y} });
                 this.dragOffset=null; this.saveCurrentImg(); this.render(); return;
             }
-            if(!this.isDragging) return; this.isDragging=false;
+            if(!this.isDragging) {
+                // Send a final update on pointer up even if not dragging, to clear drawing state
+                if (this.liveSync) {
+                    this.liveSync.updateCursor(getPt(e), this.state.tool, false, this.state.penColor, 0);
+                }
+                return;
+            }
+            this.isDragging=false;
+            
+            // Send a final update to clear the live trail for other users
+            if (this.liveSync) {
+                this.liveSync.updateCursor(getPt(e), this.state.tool, false, this.state.penColor, 0);
+            }
+
             const pt = getPt(e);
             if(this.state.tool==='lasso') {
                 let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;

@@ -50,6 +50,9 @@ export class ColorRmApp {
         this.liveSync = null;
         this.registry = null;
         this.iroP = null;
+
+        this.lastCursorUpdateTime = 0;
+        this.cursorUpdateThrottle = 30; // 30ms throttle, approx 33fps
     }
 
     async init(ui, registry, LiveSyncClient) {
