@@ -313,22 +313,82 @@ export const ColorRmBox = {
 
         this.ui.toggleLoader(false);
 
-        // 3. Export to PDF
-        // Note: Using window.jsPDF because it's loaded via script tag
-        if (!window.jspdf) {
-            alert("jsPDF library not loaded");
-            return;
-        }
-        const { jsPDF } = window.jspdf;
-        const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+        // --- IMPROVED EXPORT LOGIC FOR ANDROID ---
+        try {
+            if(pages.length === 1) {
+                const blob = await new Promise(r => pages[0].toBlob(r, 'image/png'));
+                const filename = `${this.state.projectName}_Sheet.png`;
 
-        for(let i=0; i<pages.length; i++) {
-            if(i > 0) pdf.addPage();
-            const data = pages[i].toDataURL('image/jpeg', 0.8);
-            pdf.addImage(data, 'JPEG', 0, 0, 210, 297);
-        }
+                if (this.saveBlobNative(blob, filename)) {
+                    // Handled by Android bridge
+                } else {
+                    const file = new File([blob], filename, { type: 'image/png' });
+                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                        await navigator.share({
+                            files: [file],
+                            title: 'Export Sheet',
+                            text: 'Here is the exported sheet.'
+                        });
+                    } else {
+                        const a = document.createElement('a');
+                        a.download = filename;
+                        a.href = URL.createObjectURL(blob);
+                        a.click();
+                    }
+                }
+            } else {
+                this.ui.toggleLoader(true, "Zipping...");
+                // Note: JSZip should be available globally
+                if (!window.JSZip) {
+                    throw new Error("JSZip library not loaded");
+                }
+                const zip = new window.JSZip();
 
-        pdf.save(`ColorRM_Sheet_${Date.now()}.pdf`);
+                // Use JPEG for smaller file sizes (especially on Android)
+                const useJpeg = pages.length > 2 || (window.Capacitor !== undefined);
+                const format = useJpeg ? 'image/jpeg' : 'image/png';
+                const ext = useJpeg ? 'jpg' : 'png';
+                const quality = useJpeg ? 0.85 : undefined;
+
+                for(let i=0; i<pages.length; i++) {
+                    this.ui.updateProgress((i/pages.length)*100, `Compressing ${i+1}/${pages.length}...`);
+                    const blob = await new Promise(r => pages[i].toBlob(r, format, quality));
+                    zip.file(`${this.state.projectName}_Sheet_${i+1}.${ext}`, blob);
+                    await new Promise(r => setTimeout(r, 0));
+                }
+
+                this.ui.updateProgress(100, "Generating zip...");
+                const content = await zip.generateAsync({
+                    type: "blob",
+                    compression: "DEFLATE",
+                    compressionOptions: { level: 6 }
+                });
+                
+                const filename = `${this.state.projectName}_Sheets.zip`;
+
+                if (this.saveBlobNative(content, filename)) {
+                    // Handled by Android bridge
+                } else {
+                    const file = new File([content], filename, { type: 'application/zip' });
+                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                        await navigator.share({
+                            files: [file],
+                            title: 'Export Sheets',
+                            text: 'Here are the exported sheets.'
+                        });
+                    } else {
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(content);
+                        a.download = filename;
+                        a.click();
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Export failed:", e);
+            alert("Export failed: " + e.message);
+        }
+        this.ui.toggleLoader(false);
     },
 
     drawHeaderFooter(ctx, w, h) {

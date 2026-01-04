@@ -171,6 +171,19 @@ public class MainActivity extends BridgeActivity {
                         os.write(fileData);
                         os.close();
 
+                        // Index the file so it appears in Downloads app immediately
+                        android.media.MediaScannerConnection.scanFile(MainActivity.this,
+                                new String[]{file.toString()}, null, null);
+
+                        // Forceful Toast to show path
+                        final String savedPath = file.getAbsolutePath();
+                        MainActivity.this.runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                android.widget.Toast.makeText(MainActivity.this, "FILE SAVED: " + savedPath, android.widget.Toast.LENGTH_LONG).show();
+                            }
+                        });
+
                         // Notify system & Open
                         Intent intent = new Intent(Intent.ACTION_VIEW);
                         Uri uri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".fileprovider", file);
