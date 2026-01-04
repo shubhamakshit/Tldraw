@@ -19,62 +19,73 @@ export const ColorRmSession = {
     async loadSessionList() {
         const userIdEl = this.getElement('dashUserId');
         const projIdEl = this.getElement('dashProjId');
-        if (userIdEl) userIdEl.innerText = this.liveSync.userId;
-        if (projIdEl) projIdEl.innerText = this.state.sessionId;
+        if (userIdEl) userIdEl.innerText = this.liveSync ? this.liveSync.userId : 'local';
+        if (projIdEl) projIdEl.innerText = this.state.sessionId || 'None';
 
         this.state.selectedSessions = new Set(); // Reset selection
 
-        const tx = this.db.transaction('sessions', 'readonly');
-        const req = tx.objectStore('sessions').getAll();
-        req.onsuccess = () => {
-            const l = this.getElement('sessionList');
-            if (!l) return;
-            l.innerHTML = '';
+        try {
+            const tx = this.db.transaction('sessions', 'readonly');
+            const req = tx.objectStore('sessions').getAll();
+            req.onsuccess = () => {
+                const l = this.getElement('sessionList');
+                if (!l) return;
+                l.innerHTML = '';
 
-            if(!req.result || req.result.length === 0) {
-                l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
+                if(!req.result || req.result.length === 0) {
+                    l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
+                    const editBtn = this.getElement('dashEditBtn');
+                    if (editBtn) editBtn.style.display = 'none';
+                    return;
+                }
+
                 const editBtn = this.getElement('dashEditBtn');
-                if (editBtn) editBtn.style.display = 'none';
-                return;
-            }
+                if (editBtn) editBtn.style.display = 'block';
 
-            const editBtn = this.getElement('dashEditBtn');
-            if (editBtn) editBtn.style.display = 'block';
+                const userId = this.liveSync ? this.liveSync.userId : 'local';
 
-            req.result.sort((a,b) => b.lastMod - a.lastMod).forEach(s => {
-                const isMine = s.ownerId === this.liveSync.userId;
-                const badge = isMine ? '<span class="owner-badge">Owner</span>' : `<span class="other-badge">Shared</span>`;
-                const cloudIcon = s.isCloudBackedUp ? '<i class="bi bi-cloud-check-fill" style="color:var(--success); margin-left:6px;" title="Backed up to Cloud"></i>' : '';
+                req.result.sort((a,b) => b.lastMod - a.lastMod).forEach(s => {
+                    const isMine = s.ownerId === userId;
+                    const badge = isMine ? '<span class="owner-badge">Owner</span>' : `<span class="other-badge">Shared</span>`;
+                    const cloudIcon = s.isCloudBackedUp ? '<i class="bi bi-cloud-check-fill" style="color:var(--success); margin-left:6px;" title="Backed up to Cloud"></i>' : '';
 
-                const item = document.createElement('div');
-                item.className = 'session-item';
-                item.id = `sess_${s.id}`;
-                item.onclick = (e) => {
-                    if (this.state.isMultiSelect) {
-                        e.stopPropagation();
-                        this.toggleSessionSelection(s.id);
-                    } else {
-                        this.switchProject(s.ownerId, s.id);
-                    }
-                };
+                    const item = document.createElement('div');
+                    item.className = 'session-item';
+                    item.id = `sess_${s.id}`;
+                    item.onclick = (e) => {
+                        if (this.state.isMultiSelect) {
+                            e.stopPropagation();
+                            this.toggleSessionSelection(s.id);
+                        } else {
+                            this.switchProject(s.ownerId, s.id);
+                        }
+                    };
 
-                item.innerHTML = `
-                    <input type="checkbox" class="session-checkbox" onclick="event.stopPropagation()" onchange="window.location.hash.includes('${s.id}') ? null : this.checked = !this.checked">
-                    <div>
-                        <div style="font-weight:600; color:white;">${s.name} ${badge} ${cloudIcon}</div>
-                        <div style="font-size:0.7rem; color:#666; font-family:monospace;">${s.id}</div>
-                    </div>
-                    <div style="font-size:0.7rem; color:#888;">${s.pageCount} pgs</div>
-                `;
+                    item.innerHTML = `
+                        <input type="checkbox" class="session-checkbox" onclick="event.stopPropagation()">
+                        <div>
+                            <div style="font-weight:600; color:white;">${s.name} ${badge} ${cloudIcon}</div>
+                            <div style="font-size:0.7rem; color:#666; font-family:monospace;">${s.id}</div>
+                        </div>
+                        <div style="font-size:0.7rem; color:#888;">${s.pageCount} pgs</div>
+                    `;
 
-                // Re-bind checkbox change properly since innerHTML kills listeners
-                const cb = item.querySelector('.session-checkbox');
-                if (cb) cb.onchange = () => this.toggleSessionSelection(s.id);
+                    // Re-bind checkbox change
+                    const cb = item.querySelector('.session-checkbox');
+                    if (cb) cb.onchange = () => this.toggleSessionSelection(s.id);
 
-                l.appendChild(item);
-            });
-            this.updateMultiSelectUI();
-        };
+                    l.appendChild(item);
+                });
+                this.updateMultiSelectUI();
+            };
+            req.onerror = (e) => {
+                console.error("Failed to load sessions:", e);
+                const l = this.getElement('sessionList');
+                if (l) l.innerHTML = '<div style="color:#ff4d4d;text-align:center;padding:10px">Error loading database.</div>';
+            };
+        } catch (e) {
+            console.error("Dashboard render error:", e);
+        }
     },
 
     toggleMultiSelect() {
@@ -119,7 +130,9 @@ export const ColorRmSession = {
         const items = list.querySelectorAll('.session-item');
         items.forEach(el => {
             const idStr = el.id.replace('sess_', '');
-            const isSelected = this.state.selectedSessions.has(idStr) || (!isNaN(idStr) && this.state.selectedSessions.has(Number(idStr)));
+            // Support both string and numeric IDs in the set
+            const isSelected = this.state.selectedSessions.has(idStr) || 
+                               (!isNaN(Number(idStr)) && this.state.selectedSessions.has(Number(idStr)));
 
             el.classList.toggle('selected', isSelected);
             const cb = el.querySelector('.session-checkbox');
