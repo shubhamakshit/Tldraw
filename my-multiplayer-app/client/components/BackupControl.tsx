@@ -3,6 +3,7 @@ import { useEditor, TldrawUiMenuItem, uniqueId } from 'tldraw'
 import { useAuth } from '../hooks/useAuth'
 import { useBackups } from '../hooks/useBackups'
 import { exportToImage } from '../utils/exportUtils'
+import { triggerSvgImport } from '../utils/svgImport'
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 import { Capacitor } from '@capacitor/core'
@@ -253,6 +254,24 @@ export function PdfExportMenuItem({ roomId }: { roomId: string }) {
             readonlyOk
             onSelect={handleExport}
             disabled={isExporting}
+        />
+    )
+}
+
+export function ImportSvgMenuItem() {
+    const editor = useEditor()
+
+    const handleImport = () => {
+        triggerSvgImport(editor)
+    }
+
+    return (
+        <TldrawUiMenuItem
+            id="import-svg"
+            label="Import from SVG"
+            icon="image"
+            readonlyOk
+            onSelect={handleImport}
         />
     )
 }

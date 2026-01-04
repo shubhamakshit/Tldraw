@@ -33,7 +33,7 @@ import { BrushManager } from '../components/BrushManager'
 import { EquationRenderer } from '../components/EquationRendererSimple'
 import { getEraserSettings } from '../utils/eraserUtils'
 import { EquationShapeUtil } from '../shapes/EquationShapeUtil'
-import { BackupMenuItem, DownloadMenuItem, RestoreMenuItem, RestoreFileHandler, PdfExportMenuItem } from '../components/BackupControl'
+import { BackupMenuItem, DownloadMenuItem, RestoreMenuItem, RestoreFileHandler, PdfExportMenuItem, ImportSvgMenuItem } from '../components/BackupControl'
 
 const customShapeUtils = [
     ...defaultShapeUtils.filter(u => u.type !== 'geo'),
@@ -244,6 +244,7 @@ export function RoomPage() {
                 <TldrawUiMenuGroup id="file">
                     <DownloadMenuItem roomId={roomId} />
                     <RestoreMenuItem />
+                    <ImportSvgMenuItem />
                     <PdfExportMenuItem roomId={roomId} />
                 </TldrawUiMenuGroup>
                 <TldrawUiMenuGroup id="share">
