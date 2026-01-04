@@ -137,7 +137,7 @@ export class ColorRmApp {
         // 5. Sync Base File (only for collaborative mode)
         if (this.config.collaborative) {
             try {
-                const res = await fetch(`/api/color_rm/base_file/${projectId}`, { method: 'GET' });
+                const res = await fetch(window.Config?.apiUrl(`/api/color_rm/base_file/${projectId}`) || `/api/color_rm/base_file/${projectId}`, { method: 'GET' });
                 if (res.ok) {
                     if (this.state.images.length === 0) {
                         console.log("Liveblocks: Downloading base file from server...");
@@ -1669,7 +1669,7 @@ export class ColorRmApp {
         if (this.isFetchingBase) return;
         this.isFetchingBase = true;
         try {
-            const res = await fetch(`/api/color_rm/base_file/${this.state.sessionId}`);
+            const res = await fetch(window.Config?.apiUrl(`/api/color_rm/base_file/${this.state.sessionId}`) || `/api/color_rm/base_file/${this.state.sessionId}`);
             if (res.ok) {
                 const blob = await res.blob();
                 await this.importBaseFile(blob);
@@ -2657,7 +2657,7 @@ export class ColorRmApp {
             console.log('ColorRM Sync: Uploading base file to server for ID:', this.state.sessionId);
             this.ui.toggleLoader(true, "Uploading to server...");
             try {
-                const uploadRes = await fetch(`/api/color_rm/upload/${this.state.sessionId}`, {
+                const uploadRes = await fetch(window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`, {
                     method: 'POST',
                     body: files[0],
                     headers: {
@@ -2852,7 +2852,7 @@ export class ColorRmApp {
         if (this.state.images.length > 0 && this.state.images[0].blob) {
             this.ui.showToast("Re-uploading base...");
             try {
-                await fetch(`/api/color_rm/upload/${this.state.sessionId}`, {
+                await fetch(window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`, {
                     method: 'POST',
                     body: this.state.images[0].blob,
                     headers: { 'Content-Type': this.state.images[0].blob.type }

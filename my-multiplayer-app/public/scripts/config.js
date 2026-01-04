@@ -22,6 +22,18 @@ export const Config = {
         if (window.location.protocol === 'file:' &&
             window.location.href.includes('capacitor')) return true;
 
+        // Check for http:// on localhost with empty or file-like path (Android WebView bundled)
+        if (window.location.protocol === 'http:' &&
+            window.location.host === 'localhost' &&
+            window.location.pathname.startsWith('/')) {
+            // This could be bundled Capacitor or local dev - check for Capacitor later
+            return false;
+        }
+
+        // Check for https:// on localhost (Android secure WebView)
+        if (window.location.protocol === 'https:' &&
+            window.location.host.includes('localhost')) return true;
+
         return false;
     },
 
@@ -29,11 +41,24 @@ export const Config = {
     isRemoteMode() {
         if (typeof window === 'undefined') return false;
         const host = window.location.host || '';
+
+        // If host is empty or file-based, not remote mode
+        if (!host || host === '') return false;
+
         return host.includes('hf.space') ||
                host.includes('workers.dev') ||
                host.includes('duckdns.org') ||
-               host.includes('localhost') ||
                host.includes('192.168.');
+        // Note: removed 'localhost' - it should trigger bundled mode detection
+    },
+
+    // Force bundled mode check - called after Capacitor is definitely loaded
+    isBundledMode() {
+        // If Capacitor is present and we're not pointing to a remote server, we're bundled
+        if (window.Capacitor && !this.isRemoteMode()) {
+            return true;
+        }
+        return false;
     },
 
     // Get the API base URL
@@ -45,16 +70,16 @@ export const Config = {
             return '';
         }
 
-        // Web browser (not Capacitor): relative URLs work
-        if (!this.isCapacitor()) {
-            return '';
+        // Bundled Capacitor mode: need absolute URL to backend
+        if (this.isBundledMode() || this.isCapacitor()) {
+            const preferredBackend = localStorage.getItem('color_rm_backend') || 'cloudflare';
+            const base = this.BACKENDS[preferredBackend] || this.BACKENDS.cloudflare;
+            console.log('[Config] Bundled mode - using backend:', base);
+            return base;
         }
 
-        // Bundled Capacitor mode: need absolute URL to backend
-        const preferredBackend = localStorage.getItem('color_rm_backend') || 'cloudflare';
-        const base = this.BACKENDS[preferredBackend] || this.BACKENDS.cloudflare;
-        console.log('[Config] Using backend:', base);
-        return base;
+        // Web browser: relative URLs work
+        return '';
     },
 
     // Helper to make API URL
@@ -79,9 +104,11 @@ export const Config = {
     getDebugInfo() {
         return {
             isCapacitor: this.isCapacitor(),
+            isBundledMode: this.isBundledMode(),
             isRemoteMode: this.isRemoteMode(),
             protocol: window.location.protocol,
             host: window.location.host,
+            href: window.location.href,
             apiBase: this.getApiBase(),
             preferredBackend: localStorage.getItem('color_rm_backend') || 'cloudflare'
         };
