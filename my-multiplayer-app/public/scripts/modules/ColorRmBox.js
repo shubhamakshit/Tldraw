@@ -313,6 +313,60 @@ export const ColorRmBox = {
 
         this.ui.toggleLoader(false);
 
+        const format = this.getElement('boxExportFormat') ? this.getElement('boxExportFormat').value : 'zip';
+
+        if (format === 'pdf') {
+             if (!window.jspdf) return alert("jsPDF library not loaded");
+             this.ui.toggleLoader(true, "Generating PDF...");
+
+             // A4 Size in mm: 210 x 297. Canvas is 2480x3508 (approx 300dpi for A4)
+             const pdf = new window.jspdf.jsPDF({
+                 orientation: 'p',
+                 unit: 'mm',
+                 format: 'a4',
+                 compress: true
+             });
+
+             const pdfW = 210;
+             const pdfH = 297;
+
+             for(let i=0; i<pages.length; i++) {
+                 this.ui.updateProgress((i/pages.length)*100, `Adding Page ${i+1}/${pages.length}...`);
+                 if (i > 0) pdf.addPage();
+                 
+                 const pCanvas = pages[i];
+                 const imgData = pCanvas.toDataURL('image/jpeg', 0.85);
+                 pdf.addImage(imgData, 'JPEG', 0, 0, pdfW, pdfH);
+                 
+                 await new Promise(r => setTimeout(r, 0));
+             }
+             
+             const filename = `${this.state.projectName}_Sheets.pdf`;
+             
+             try {
+                 const blob = pdf.output('blob');
+                 if (this.saveBlobNative(blob, filename)) {
+                    // Handled by Android
+                 } else {
+                     const file = new File([blob], filename, { type: 'application/pdf' });
+                     if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                        await navigator.share({
+                            files: [file],
+                            title: 'Export PDF',
+                            text: 'Here is your exported PDF.'
+                        });
+                     } else {
+                         pdf.save(filename);
+                     }
+                 }
+             } catch(e) {
+                 console.error(e);
+                 pdf.save(filename);
+             }
+             this.ui.toggleLoader(false);
+             return;
+        }
+
         // --- IMPROVED EXPORT LOGIC FOR ANDROID ---
         try {
             if(pages.length === 1) {

@@ -182,6 +182,7 @@ export const ColorRmUI = {
         if (zoomBtn) zoomBtn.onclick = () => this.resetZoom();
 
         this.renderCustomSwatches();
+        this.setupDragAndDrop();
     },
 
     setEraserMode(checked) { this.state.eraserType = checked ? 'stroke' : 'standard'; },
@@ -379,6 +380,56 @@ export const ColorRmUI = {
             div.appendChild(del);
             el.appendChild(div);
         });
+    },
+
+    setupDragAndDrop() {
+        const zone = document.body;
+
+        zone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            zone.style.boxShadow = 'inset 0 0 0 4px var(--accent)';
+        });
+
+        zone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            zone.style.boxShadow = 'none';
+        });
+
+        zone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            zone.style.boxShadow = 'none';
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                this.handleExternalFiles(e.dataTransfer.files);
+            }
+        });
+
+        document.addEventListener('paste', (e) => {
+            if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+                e.preventDefault();
+                this.handleExternalFiles(e.clipboardData.files);
+            }
+        });
+    },
+
+    async handleExternalFiles(files) {
+        this.ui.toggleLoader(true, `Importing ${files.length} projects...`);
+        
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            this.ui.updateProgress((i / files.length) * 100, `Creating project ${i + 1} of ${files.length}...`);
+            
+            // For each file, we trigger handleImport with lazy=true to skip image processing
+            await this.handleImport({ target: { files: [file] } }, false, true);
+        }
+        
+        this.ui.toggleLoader(false);
+        this.ui.showToast(`Imported ${files.length} projects`);
+        
+        // After importing multiple, show the dashboard so the user can see the new projects
+        this.ui.showDashboard();
     },
 
     renderSwatches() {

@@ -62,11 +62,12 @@ export class ColorRmApp {
 
         // 1. Initialize Database (use configured DB name)
         this.db = await new Promise(r => {
-            const req = indexedDB.open(this.config.dbName, 1);
+            const req = indexedDB.open(this.config.dbName, 2);
             req.onupgradeneeded = e => {
                 const d = e.target.result;
                 if(!d.objectStoreNames.contains('sessions')) d.createObjectStore('sessions', { keyPath: 'id' });
                 if(!d.objectStoreNames.contains('pages')) d.createObjectStore('pages', { keyPath: 'id' }).createIndex('sessionId','sessionId');
+                if(!d.objectStoreNames.contains('folders')) d.createObjectStore('folders', { keyPath: 'id' });
             };
             req.onsuccess = e => r(e.target.result);
         });
