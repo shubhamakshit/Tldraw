@@ -278,6 +278,7 @@
             <div style="display:flex; gap:10px; margin-bottom:15px;">
                 <input type="text" id="newProjectName" placeholder="New Project Name" style="flex:1; background:var(--bg-body); border:1px solid var(--border); padding:10px; color:white; border-radius:6px;">
                 <button class="btn btn-primary" onclick="window.App.createNewProject()">Create</button>
+                <button class="btn" onclick="window.App.createFolder()" title="New Folder" style="width:40px; justify-content:center;"><i class="bi bi-folder-plus"></i></button>
             </div>
             <button class="btn" onclick="window.PDFLibrary?.show((pdf) => { const file = new File([pdf.blob], pdf.name + '.pdf', { type: 'application/pdf' }); window.App?.handleImport({ target: { files: [file] } }, false); })" style="width:100%; margin-bottom:15px; justify-content:center; border-color:#444;">
                 <i class="bi bi-folder-plus"></i> Open PDF Library
@@ -297,6 +298,7 @@
                 <span id="multiDeleteCount" style="font-size:0.8rem; color:#ef4444; font-weight:600;">0 selected</span>
                 <div style="display:flex; gap:8px;">
                     <button class="btn btn-sm" onclick="window.App.selectAllSessions()" style="background:none; border-color:#444;">All</button>
+                    <button class="btn btn-sm" onclick="const fid=prompt('Enter Folder ID (or leave empty for root):'); if(fid!==null) window.App.moveSelectedToFolder(fid || null);" style="background:none; border-color:#444;">Move</button>
                     <button class="btn btn-sm" onclick="window.App.deleteSelectedSessions()" style="background:#ef4444; border-color:#ef4444; color:white;">Delete</button>
                 </div>
             </div>
@@ -639,6 +641,13 @@
                             <label class="switch" style="transform:scale(0.6)"><input type="checkbox" id="boxFooterOn"><span class="slider-switch"></span></label>
                          </div>
                          <input type="text" id="boxFooterTxt" class="opt-input" placeholder="Sheet Footer" style="width:100%">
+                    </div>
+                     <div style="margin-bottom:10px;">
+                         <span style="font-size:0.8rem; color:#aaa">Export Format</span>
+                         <select id="boxExportFormat" class="opt-input" style="width:100%; margin-top:2px;">
+                             <option value="pdf">PDF Document</option>
+                             <option value="zip">ZIP Archive (Images)</option>
+                         </select>
                     </div>
                     <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="window.App.generateBoxImage()">Export Sheet</button>
                 </div>

@@ -16,6 +16,72 @@ export const ColorRmSession = {
         }
     },
 
+    // --- Folder Management ---
+    async createFolder() {
+        this.ui.showInput("New Folder", "Folder Name", async (name) => {
+            if (!name) return;
+            const folder = {
+                id: `folder_${Date.now()}_${Math.random().toString(36).substring(2,5)}`,
+                name: name,
+                parentId: this.state.currentFolderId || null,
+                ownerId: this.state.ownerId || this.liveSync?.userId || 'local'
+            };
+            await this.dbPut('folders', folder);
+            if (this.registry) this.registry.saveFolder(folder);
+            this.loadSessionList();
+        });
+    },
+
+    async deleteFolder(folderId) {
+        if (!confirm("Delete folder? Projects inside will be moved to root.")) return;
+        
+        // 1. Move contents to root (or parent)
+        const sessions = await this.dbGetAll('sessions');
+        const contents = sessions.filter(s => s.folderId === folderId);
+        
+        for (const s of contents) {
+            s.folderId = null; // Move to root for safety
+            await this.dbPut('sessions', s);
+            if (this.registry) this.registry.upsert(s);
+        }
+        
+        // 2. Delete Folder
+        const tx = this.db.transaction('folders', 'readwrite');
+        tx.objectStore('folders').delete(folderId);
+        if (this.registry) this.registry.deleteFolder(folderId);
+        
+        tx.oncomplete = () => this.loadSessionList();
+    },
+
+    async openFolder(folderId) {
+        this.state.currentFolderId = folderId;
+        this.loadSessionList();
+    },
+
+    navigateUp() {
+        // Simple 1-level for now, or fetch parent from DB if nested
+        this.state.currentFolderId = null; 
+        this.loadSessionList();
+    },
+    
+    async moveSelectedToFolder(folderId) {
+        if (!this.state.selectedSessions || this.state.selectedSessions.size === 0) return;
+        
+        for (const id of this.state.selectedSessions) {
+            const session = await this.dbGet('sessions', id);
+            if (session) {
+                session.folderId = folderId;
+                await this.dbPut('sessions', session);
+                if (this.registry) this.registry.upsert(session);
+            }
+        }
+        this.state.isMultiSelect = false;
+        this.state.selectedSessions.clear();
+        this.toggleMultiSelect(); // Reset UI
+        this.loadSessionList();
+    },
+    // -------------------------
+
     async loadSessionList() {
         const userIdEl = this.getElement('dashUserId');
         const projIdEl = this.getElement('dashProjId');
@@ -25,26 +91,77 @@ export const ColorRmSession = {
         this.state.selectedSessions = new Set(); // Reset selection
 
         try {
-            const tx = this.db.transaction('sessions', 'readonly');
-            const req = tx.objectStore('sessions').getAll();
-            req.onsuccess = () => {
-                const l = this.getElement('sessionList');
-                if (!l) return;
-                l.innerHTML = '';
+            const tx = this.db.transaction(['sessions', 'folders'], 'readonly');
+            const sessionsReq = tx.objectStore('sessions').getAll();
+            const foldersReq = tx.objectStore('folders').getAll();
+            
+            // Wait for both
+            await new Promise(resolve => {
+                let completed = 0;
+                const check = () => { if (++completed === 2) resolve(); };
+                sessionsReq.onsuccess = check;
+                foldersReq.onsuccess = check;
+            });
 
-                if(!req.result || req.result.length === 0) {
-                    l.innerHTML = '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
-                    const editBtn = this.getElement('dashEditBtn');
-                    if (editBtn) editBtn.style.display = 'none';
-                    return;
-                }
+            const l = this.getElement('sessionList');
+            if (!l) return;
+            l.innerHTML = '';
+            
+            // Render Navigation Header
+            if (this.state.currentFolderId) {
+                const backBtn = document.createElement('div');
+                backBtn.className = 'session-item folder-back';
+                backBtn.innerHTML = `<i class="bi bi-arrow-return-left"></i> Back to Root`;
+                backBtn.onclick = () => this.navigateUp();
+                l.appendChild(backBtn);
+            }
 
+            // Filter Folders
+            const folders = (foldersReq.result || []).filter(f => {
+                // Only show folders in current path
+                return (f.parentId || null) === (this.state.currentFolderId || null);
+            });
+            
+            folders.forEach(f => {
+                 const item = document.createElement('div');
+                 item.className = 'session-item folder-item';
+                 item.innerHTML = `
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <i class="bi bi-folder-fill" style="color:#fbbf24; font-size:1.2rem;"></i>
+                        <span style="font-weight:600; color:white;">${f.name}</span>
+                    </div>
+                    <button class="btn btn-sm" style="background:none; border:none; color:#666;"><i class="bi bi-trash"></i></button>
+                 `;
+                 
+                 // Click to open
+                 item.onclick = (e) => {
+                     if (e.target.closest('button')) {
+                         this.deleteFolder(f.id);
+                     } else {
+                         this.openFolder(f.id);
+                     }
+                 };
+                 l.appendChild(item);
+            });
+
+
+            const sessions = sessionsReq.result || [];
+            if(sessions.length === 0 && folders.length === 0) {
+                l.innerHTML += '<div style="color:#666;text-align:center;padding:10px">No projects found.</div>';
                 const editBtn = this.getElement('dashEditBtn');
-                if (editBtn) editBtn.style.display = 'block';
+                if (editBtn) editBtn.style.display = 'none';
+                return;
+            }
 
-                const userId = this.liveSync ? this.liveSync.userId : 'local';
+            const editBtn = this.getElement('dashEditBtn');
+            if (editBtn) editBtn.style.display = 'block';
 
-                req.result.sort((a,b) => b.lastMod - a.lastMod).forEach(s => {
+            const userId = this.liveSync ? this.liveSync.userId : 'local';
+
+            // Filter Sessions by Folder
+            sessions.filter(s => (s.folderId || null) === (this.state.currentFolderId || null))
+                    .sort((a,b) => b.lastMod - a.lastMod).forEach(s => {
+                    
                     const isMine = s.ownerId === userId;
                     const badge = isMine ? '<span class="owner-badge">Owner</span>' : `<span class="other-badge">Shared</span>`;
                     const cloudIcon = s.isCloudBackedUp ? '<i class="bi bi-cloud-check-fill" style="color:var(--success); margin-left:6px;" title="Backed up to Cloud"></i>' : '';
@@ -77,11 +194,6 @@ export const ColorRmSession = {
                     l.appendChild(item);
                 });
                 this.updateMultiSelectUI();
-            };
-            req.onerror = (e) => {
-                console.error("Failed to load sessions:", e);
-                const l = this.getElement('sessionList');
-                if (l) l.innerHTML = '<div style="color:#ff4d4d;text-align:center;padding:10px">Error loading database.</div>';
             };
         } catch (e) {
             console.error("Dashboard render error:", e);
@@ -217,6 +329,11 @@ export const ColorRmSession = {
                 const pageTotal = this.getElement('pageTotal');
                 if (pageTotal) pageTotal.innerText = '/ ' + this.state.images.length;
 
+                if(this.state.images.length === 0) {
+                    // Try to fetch base from server if pages are missing
+                    this.retryBaseFetch();
+                }
+
                 if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
                 if(this.state.images.length > 0 && !this.cache.currentImg) this.loadPage(0);
                 resolve();
@@ -243,7 +360,7 @@ export const ColorRmSession = {
         }
     },
 
-    async handleImport(e, skipUpload = false) {
+    async handleImport(e, skipUpload = false, lazy = false) {
         const files = e.target.files;
         if(!files || !files.length) return;
 
@@ -359,6 +476,28 @@ export const ColorRmSession = {
                 ownerId: this.state.ownerId,
                 fileHash: fileHash
             });
+        }
+
+        if (lazy) {
+            // If lazy, we just get page count and stop
+            let pageCount = 1;
+            if (files[0].type.includes('pdf')) {
+                try {
+                    const d = await files[0].arrayBuffer();
+                    const pdf = await pdfjsLib.getDocument(d).promise;
+                    pageCount = pdf.numPages;
+                } catch(e) { console.error("PDF metadata failed", e); }
+            }
+            
+            const session = await this.dbGet('sessions', this.state.sessionId);
+            if (session) {
+                session.pageCount = pageCount;
+                await this.dbPut('sessions', session);
+                if (this.registry) this.registry.upsert(session);
+            }
+            this.isUploading = false;
+            this.ui.toggleLoader(false);
+            return;
         }
 
         const processQueue = Array.from(files);

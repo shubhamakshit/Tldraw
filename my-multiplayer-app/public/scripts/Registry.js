@@ -38,9 +38,11 @@ export const Registry = {
             }
             const data = await res.json();
             console.log('Registry Sync Data:', data);
+            
             const cloudProjects = data.projects || [];
-            console.log('Cloud Projects:', cloudProjects);
+            const cloudFolders = data.folders || [];
             const cloudIds = new Set(cloudProjects.map(p => p.id));
+            const cloudFolderIds = new Set(cloudFolders.map(f => f.id));
 
             // 2. Merge into Local DB
             const app = this.getApp();
@@ -49,12 +51,14 @@ export const Registry = {
                 return;
             }
 
-            const tx = app.db.transaction('sessions', 'readwrite');
-            const store = tx.objectStore('sessions');
+            // --- SYNC SESSIONS ---
+            const tx = app.db.transaction(['sessions', 'folders'], 'readwrite');
+            const sessionStore = tx.objectStore('sessions');
+            const folderStore = tx.objectStore('folders');
 
             // Get all local first to compare
             const localRequest = await new Promise((resolve) => {
-                const r = store.getAll();
+                const r = sessionStore.getAll();
                 r.onsuccess = () => resolve(r.result);
             });
 
@@ -76,6 +80,7 @@ export const Registry = {
                         bookmarks: [],
                         clipboardBox: [],
                         state: null,
+                        folderId: cp.folderId || null, // Sync folderId
                         isCloudBackedUp: true
                     });
                 } else {
@@ -86,6 +91,7 @@ export const Registry = {
                         local.pageCount = cp.pageCount;
                         local.lastMod = cp.lastMod;
                         local.ownerId = cp.ownerId;
+                        local.folderId = cp.folderId || null; // Update folderId
                         changed = true;
                     }
                     // Mark as backed up
@@ -97,6 +103,24 @@ export const Registry = {
                     if (changed) await app.dbPut('sessions', local);
                 }
             }
+
+            // --- SYNC FOLDERS ---
+            const localFoldersReq = await new Promise(r => {
+                const req = folderStore.getAll();
+                req.onsuccess = () => r(req.result);
+            });
+            const localFolderMap = new Map(localFoldersReq.map(f => [f.id, f]));
+
+            for (const cf of cloudFolders) {
+                const lf = localFolderMap.get(cf.id);
+                if (!lf) {
+                    await app.dbPut('folders', cf);
+                } else {
+                    // Simple overwrite for now (last write wins on server usually)
+                    await app.dbPut('folders', cf);
+                }
+            }
+            // --------------------
 
             // Optional: Mark locals as NOT backed up if they are missing from cloud list?
             // Only do this if we are sure the list is complete.
@@ -128,7 +152,8 @@ export const Registry = {
             pageCount: project.pageCount,
             lastMod: project.lastMod,
             ownerId: project.ownerId,
-            baseFileName: project.baseFileName
+            baseFileName: project.baseFileName,
+            folderId: project.folderId || null
         };
 
         fetch(this.apiUrl('/api/color_rm/registry'), {
@@ -163,6 +188,38 @@ export const Registry = {
             }
         })
         .catch(e => console.warn("Registry upsert failed:", e));
+    },
+
+    async saveFolder(folder) {
+        const token = this.getToken();
+        if (!token) return;
+        
+        // Payload for folder update
+        const payload = {
+             id: folder.id,
+             name: folder.name,
+             parentId: folder.parentId || null,
+             ownerId: folder.ownerId
+        };
+
+        fetch(this.apiUrl('/api/color_rm/registry/folder'), {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ folder: payload })
+        }).catch(e => console.warn("Folder save failed:", e));
+    },
+
+    async deleteFolder(folderId) {
+        const token = this.getToken();
+        if (!token) return;
+        
+        fetch(this.apiUrl(`/api/color_rm/registry/folder/${folderId}`), {
+             method: 'DELETE',
+             headers: { 'Authorization': `Bearer ${token}` }
+        }).catch(e => console.warn("Folder delete failed:", e));
     },
 
     async delete(projectId) {
