@@ -256,6 +256,19 @@
         </div>
     </div>
     
+    <!-- Move Modal -->
+    <div id="moveModal" class="overlay" style="z-index:260">
+        <div class="card" style="max-width:350px;">
+            <h3 style="margin:0 0 15px 0">Move Projects</h3>
+            <p style="font-size:0.8rem; color:#aaa; margin-top:0;">Select destination folder:</p>
+            <select id="moveFolderSelect" class="opt-input" style="width:100%; margin-bottom:20px;"></select>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button class="btn" onclick="document.getElementById('moveModal').style.display='none'">Cancel</button>
+                <button class="btn btn-primary" id="moveConfirmBtn">Move</button>
+            </div>
+        </div>
+    </div>
+    
     <!-- Dashboard -->
     <div id="dashboardModal" class="overlay">
         <div class="card" style="max-width: 450px;">
@@ -280,9 +293,14 @@
                 <button class="btn btn-primary" onclick="window.App.createNewProject()">Create</button>
                 <button class="btn" onclick="window.App.createFolder()" title="New Folder" style="width:40px; justify-content:center;"><i class="bi bi-folder-plus"></i></button>
             </div>
-            <button class="btn" onclick="window.PDFLibrary?.show((pdf) => { const file = new File([pdf.blob], pdf.name + '.pdf', { type: 'application/pdf' }); window.App?.handleImport({ target: { files: [file] } }, false); })" style="width:100%; margin-bottom:15px; justify-content:center; border-color:#444;">
-                <i class="bi bi-folder-plus"></i> Open PDF Library
-            </button>
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <button id="importBtn" class="btn" style="flex:1; justify-content:center; border-color:#444;">
+                    <i class="bi bi-file-earmark-plus"></i> Import Files
+                </button>
+                <button class="btn" onclick="window.PDFLibrary?.show((pdf) => { const file = new File([pdf.blob], pdf.name + '.pdf', { type: 'application/pdf' }); window.App?.handleImport({ target: { files: [file] } }, false); })" style="flex:1; justify-content:center; border-color:#444;">
+                    <i class="bi bi-folder-plus"></i> Open Library
+                </button>
+            </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <h4 style="color:var(--text-muted); font-size:0.7rem; text-transform:uppercase; margin:0;">Recent Projects</h4>
@@ -298,7 +316,7 @@
                 <span id="multiDeleteCount" style="font-size:0.8rem; color:#ef4444; font-weight:600;">0 selected</span>
                 <div style="display:flex; gap:8px;">
                     <button class="btn btn-sm" onclick="window.App.selectAllSessions()" style="background:none; border-color:#444;">All</button>
-                    <button class="btn btn-sm" onclick="const fid=prompt('Enter Folder ID (or leave empty for root):'); if(fid!==null) window.App.moveSelectedToFolder(fid || null);" style="background:none; border-color:#444;">Move</button>
+                    <button class="btn btn-sm" onclick="window.App.showMoveModal()" style="background:none; border-color:#444;">Move</button>
                     <button class="btn btn-sm" onclick="window.App.deleteSelectedSessions()" style="background:#ef4444; border-color:#ef4444; color:white;">Delete</button>
                 </div>
             </div>
@@ -770,6 +788,7 @@
 
     <!-- Load config first for API base URL detection -->
     <script type="module" src="./scripts/config.js"></script>
+    <script type="module" src="./scripts/Logger.js"></script>
     <script type="module" src="./scripts/main.js"></script>
 </body>
 </html> 

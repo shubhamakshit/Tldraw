@@ -142,7 +142,7 @@ export const ColorRmInput = {
                 return;
             }
             if((e.ctrlKey||e.metaKey) && key==='z') { e.preventDefault(); if(e.shiftKey) this.redo(); else this.undo(); }
-            if(key==='v') this.setTool('none'); if(key==='l') this.setTool('lasso'); if(key==='p') this.setTool('pen');
+            if(key==='v' && !e.ctrlKey && !e.metaKey) this.setTool('none'); if(key==='l') this.setTool('lasso'); if(key==='p') this.setTool('pen');
             if(key==='e') this.setTool('eraser'); if(key==='s') this.setTool('shape'); if(key==='t') this.setTool('text');
             if(key==='b') this.setTool('capture'); if(key==='h') this.setTool('hand');
             if(e.key==='ArrowLeft') this.loadPage(this.state.idx-1); if(e.key==='ArrowRight') this.loadPage(this.state.idx+1); if(e.key==='Delete' || e.key==='Backspace') this.deleteSelected();
@@ -511,7 +511,7 @@ export const ColorRmInput = {
                 lassoPath.forEach(p=>{minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y);});
                 this.state.selection=[];
                 this.state.images[this.state.idx].history.forEach((st,i)=>{
-                    if(st.locked) return; let cx,cy; if(st.tool==='pen'){cx=st.pts[0].x;cy=st.pts[0].y} else {cx=st.x+st.w/2;cy=st.y+st.h/2}
+                    if(st.locked || st.deleted) return; let cx,cy; if(st.tool==='pen'){cx=st.pts[0].x;cy=st.pts[0].y} else {cx=st.x+st.w/2;cy=st.y+st.h/2}
                     if(cx>=minX && cx<=maxX && cy>=minY && cy<=maxY) this.state.selection.push(i);
                 });
                 syncSidebarToSelection();

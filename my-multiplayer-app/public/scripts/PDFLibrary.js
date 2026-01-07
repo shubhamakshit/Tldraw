@@ -241,7 +241,7 @@ export const PDFLibrary = {
             await this.upload(file);
             await this.refreshList();
         } catch (err) {
-            alert('Upload failed: ' + err.message);
+            if (window.UI?.showToast) window.UI.showToast('Upload failed: ' + err.message);
         }
     },
 
@@ -292,7 +292,10 @@ export const PDFLibrary = {
             // Delete button
             item.querySelector('.pdf-delete-btn').onclick = async (e) => {
                 e.stopPropagation();
-                if (confirm(`Delete "${pdf.name}"?`)) {
+                const confirmed = window.UI?.showConfirm
+                    ? await window.UI.showConfirm('Delete PDF', `Delete "${pdf.name}"?`)
+                    : confirm(`Delete "${pdf.name}"?`);
+                if (confirmed) {
                     await this.delete(pdf.id);
                     await this.refreshList();
                 }

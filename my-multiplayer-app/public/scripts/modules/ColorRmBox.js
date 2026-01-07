@@ -52,7 +52,10 @@ export const ColorRmBox = {
 
     async addRangeToBox() {
         const txt = this.getElement('boxRangeInput').value.trim();
-        if(!txt) return alert("Please enter a range (e.g. 1, 3-5)");
+        if(!txt) {
+            this.ui.showToast("Please enter a range (e.g. 1, 3-5)");
+            return;
+        }
 
         const indices = [];
         const set = new Set();
@@ -64,7 +67,10 @@ export const ColorRmBox = {
         });
         indices.push(...Array.from(set).sort((a,b)=>a-b));
 
-        if(indices.length === 0) return alert("No valid pages found in range");
+        if(indices.length === 0) {
+            this.ui.showToast("No valid pages found in range");
+            return;
+        }
 
         this.ui.toggleLoader(true, "Capturing Pages...");
         const cvs = document.createElement('canvas');
@@ -167,8 +173,9 @@ export const ColorRmBox = {
         });
     },
 
-    clearBox() {
-        if(confirm("Clear all items in Box?")) {
+    async clearBox() {
+        const confirmed = await this.ui.showConfirm("Clear Box", "Clear all items in Box?");
+        if(confirmed) {
             // Revoke all blob URLs
             if (this.boxBlobUrls) {
                 this.boxBlobUrls.forEach(url => URL.revokeObjectURL(url));
@@ -201,12 +208,15 @@ export const ColorRmBox = {
     },
 
     async generateBoxImage() {
-        if(!this.state.clipboardBox || this.state.clipboardBox.length === 0) return alert("Box is empty");
+        if(!this.state.clipboardBox || this.state.clipboardBox.length === 0) {
+            this.ui.showToast("Box is empty");
+            return;
+        }
 
         this.ui.toggleLoader(true, "Generating Sheets...");
 
         const cols = parseInt(this.getElement('boxCols').value);
-        const pad = 30;
+        const pad = 50;
         const A4W = 2480;
         const A4H = 3508;
         const colW = (A4W - (pad * (cols + 1))) / cols;
@@ -316,7 +326,10 @@ export const ColorRmBox = {
         const format = this.getElement('boxExportFormat') ? this.getElement('boxExportFormat').value : 'zip';
 
         if (format === 'pdf') {
-             if (!window.jspdf) return alert("jsPDF library not loaded");
+             if (!window.jspdf) {
+                 this.ui.showToast("jsPDF library not loaded");
+                 return;
+             }
              this.ui.toggleLoader(true, "Generating PDF...");
 
              // A4 Size in mm: 210 x 297. Canvas is 2480x3508 (approx 300dpi for A4)
@@ -440,7 +453,7 @@ export const ColorRmBox = {
             }
         } catch (e) {
             console.error("Export failed:", e);
-            alert("Export failed: " + e.message);
+            this.ui.showToast("Export failed: " + e.message);
         }
         this.ui.toggleLoader(false);
     },

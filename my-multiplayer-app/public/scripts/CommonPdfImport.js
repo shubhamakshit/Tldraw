@@ -40,7 +40,7 @@ export const CommonPdfImport = {
                 await this.importIntoApp(splitApp, file, pdf.name);
             } else {
                 console.warn('CommonPdfImport: Split view app not available');
-                alert('Split View is not ready.');
+                if (window.UI?.showToast) window.UI.showToast('Split View is not ready');
             }
         } else {
             // Import into main app
@@ -49,7 +49,7 @@ export const CommonPdfImport = {
                 await mainApp.handleImport({ target: { files: [file] } }, false);
             } else {
                 console.warn('CommonPdfImport: Main app not available');
-                alert('Main app is not ready.');
+                if (window.UI?.showToast) window.UI.showToast('Main app is not ready');
             }
         }
     },
@@ -93,7 +93,7 @@ export const CommonPdfImport = {
             console.log('CommonPdfImport: Imported into app:', name);
         } catch (error) {
             console.error('CommonPdfImport: Import failed:', error);
-            alert('Import failed: ' + error.message);
+            if (window.UI?.showToast) window.UI.showToast('Import failed: ' + error.message);
         }
     },
 

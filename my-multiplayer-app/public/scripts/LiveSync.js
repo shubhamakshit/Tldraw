@@ -78,7 +78,38 @@ export class LiveSyncClient {
             if (this.app.renderDebug) this.app.renderDebug();
         });
 
-        const { root } = await room.getStorage();
+        // Retry logic for storage initialization
+        let root;
+        let attempts = 0;
+        const maxAttempts = 3;
+
+        while (!root && attempts < maxAttempts) {
+            attempts++;
+            try {
+                 // Add simple timeout wrapper around storage fetch
+                 const storagePromise = room.getStorage();
+                 const timeoutPromise = new Promise((_, reject) =>
+                     setTimeout(() => reject(new Error("Storage fetch timed out")), 8000)
+                 );
+
+                 const result = await Promise.race([storagePromise, timeoutPromise]);
+                 root = result.root;
+            } catch(e) {
+                 console.warn(`Liveblocks: Storage fetch attempt ${attempts} failed:`, e);
+                 if (attempts === maxAttempts) {
+                     this.app.ui.showToast("Connection weak - Sync might be incomplete");
+                 } else {
+                     await new Promise(r => setTimeout(r, 1000)); // Wait 1s before retry
+                 }
+            }
+        }
+
+        if (!root) {
+            console.error("Liveblocks: Critical failure - could not load storage.");
+            this.isInitializing = false;
+            return;
+        }
+
         this.root = root;
 
         await this.setupProjectSync(projectId);
@@ -96,6 +127,7 @@ export class LiveSyncClient {
 
         // Ensure the project structure exists
         if (!projects.has(projectId)) {
+            console.log(`Liveblocks: Creating new project ${projectId} with name "${this.app.state.projectName}"`);
             projects.set(projectId, new LiveObject({
                 metadata: new LiveObject({
                     name: this.app.state.projectName || "Untitled",
@@ -109,6 +141,18 @@ export class LiveSyncClient {
                 bookmarks: new LiveList([]),
                 colors: new LiveList([])
             }));
+        } else {
+             // Project exists.
+             // Safeguard: If I am the owner, and the remote name is "Untitled" or empty, but my local name is set...
+             // This fixes the issue where a project might be initialized with default data and overwrite the local name.
+             const remoteProject = projects.get(projectId);
+             const remoteMeta = remoteProject.get("metadata");
+             const remoteName = remoteMeta.get("name");
+
+             if (this.ownerId === this.userId && (remoteName === "Untitled" || !remoteName) && this.app.state.projectName && this.app.state.projectName !== "Untitled") {
+                 console.log(`Liveblocks: Remote name is "${remoteName}", pushing local name: "${this.app.state.projectName}"`);
+                 remoteMeta.update({ name: this.app.state.projectName });
+             }
         }
 
         this.syncStorageToLocal();
@@ -350,13 +394,29 @@ export class LiveSyncClient {
         const metadata = project.get("metadata").toObject();
         console.log(`Liveblocks Sync: Remote PageCount=${metadata.pageCount}, Local PageCount=${this.app.state.images.length}`);
 
-        this.app.state.projectName = metadata.name;
+        // Intelligent Name Sync:
+        // If I am the owner, and remote is Untitled, but I have a name -> Update Remote
+        // Otherwise -> Accept Remote
+
+        console.log(`[LiveSync] Name Sync Check: Owner=${this.ownerId}, User=${this.userId}`);
+        console.log(`[LiveSync] Remote Name: "${metadata.name}", Local Name: "${this.app.state.projectName}"`);
+
+        if (this.ownerId === this.userId && (metadata.name === "Untitled" || !metadata.name) && this.app.state.projectName && this.app.state.projectName !== "Untitled") {
+             console.log(`[LiveSync] DECISION: Correcting remote 'Untitled' name with local: "${this.app.state.projectName}"`);
+             project.get("metadata").update({ name: this.app.state.projectName });
+        } else {
+             if (this.app.state.projectName !== metadata.name) {
+                 console.log(`[LiveSync] DECISION: Accepting remote name: "${metadata.name}" (replacing "${this.app.state.projectName}")`);
+             }
+             this.app.state.projectName = metadata.name;
+        }
+
         this.app.state.baseFileName = metadata.baseFileName || null;
         this.app.state.pageLocked = metadata.pageLocked;
         this.app.state.ownerId = metadata.ownerId;
 
         const titleEl = this.app.getElement('headerTitle');
-        if(titleEl) titleEl.innerText = metadata.name;
+        if(titleEl) titleEl.innerText = this.app.state.projectName;
 
         // Only sync page index if:
         // 1. We haven't made a local page change recently (grace period)

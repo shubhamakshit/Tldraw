@@ -46,7 +46,8 @@ export const ColorRmRenderer = {
         this.cache.lastHistoryLength = currentImg?.history?.length || 0;
     },
 
-    render() {
+    render(tempHex) {
+        if(typeof tempHex === 'string') this.tempHex = tempHex; else this.tempHex = null;
         if(!this.cache.currentImg) return;
         const c = this.getElement('canvas');
         if (!c) return;

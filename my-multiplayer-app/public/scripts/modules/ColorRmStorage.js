@@ -1,7 +1,9 @@
 export const ColorRmStorage = {
     async dbPut(s, v) { return new Promise(r=>{const t=this.db.transaction(s,'readwrite'); t.objectStore(s).put(v); t.oncomplete=()=>r()}); },
-    
+
     async dbGet(s, k) { return new Promise(r=>{const q=this.db.transaction(s,'readonly').objectStore(s).get(k);q.onsuccess=()=>r(q.result)}); },
+
+    async dbGetAll(s) { return new Promise(r=>{const q=this.db.transaction(s,'readonly').objectStore(s).getAll();q.onsuccess=()=>r(q.result||[]);q.onerror=()=>r([])}); },
 
     async saveSessionState() {
         if(!this.state.sessionId || (this.liveSync && this.liveSync.isInitializing) || this.isUploading) return;

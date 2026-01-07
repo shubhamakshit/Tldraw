@@ -3,8 +3,31 @@ export const Registry = {
     // App instance reference - set by the main app during initialization
     app: null,
 
+    // Track recently deleted items to avoid re-syncing them (KV eventual consistency workaround)
+    recentlyDeleted: new Set(),
+
     setApp(appInstance) {
         this.app = appInstance;
+        // Load recently deleted from localStorage
+        try {
+            const deleted = JSON.parse(localStorage.getItem('crm_recently_deleted') || '[]');
+            // Only keep items deleted in the last 5 minutes
+            const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+            const valid = deleted.filter(d => d.time > fiveMinutesAgo);
+            this.recentlyDeleted = new Set(valid.map(d => d.id));
+            localStorage.setItem('crm_recently_deleted', JSON.stringify(valid));
+        } catch (e) {
+            this.recentlyDeleted = new Set();
+        }
+    },
+
+    markAsDeleted(id) {
+        this.recentlyDeleted.add(id);
+        try {
+            const deleted = JSON.parse(localStorage.getItem('crm_recently_deleted') || '[]');
+            deleted.push({ id, time: Date.now() });
+            localStorage.setItem('crm_recently_deleted', JSON.stringify(deleted));
+        } catch (e) {}
     },
 
     getApp() {
@@ -38,11 +61,20 @@ export const Registry = {
             }
             const data = await res.json();
             console.log('Registry Sync Data:', data);
-            
+
             const cloudProjects = data.projects || [];
             const cloudFolders = data.folders || [];
-            const cloudIds = new Set(cloudProjects.map(p => p.id));
-            const cloudFolderIds = new Set(cloudFolders.map(f => f.id));
+
+            // Filter out recently deleted items (KV eventual consistency workaround)
+            const filteredProjects = cloudProjects.filter(p => !this.recentlyDeleted.has(p.id));
+            const filteredFolders = cloudFolders.filter(f => !this.recentlyDeleted.has(f.id));
+
+            if (filteredProjects.length !== cloudProjects.length) {
+                console.log(`Registry: Filtered out ${cloudProjects.length - filteredProjects.length} recently deleted projects`);
+            }
+
+            const cloudIds = new Set(filteredProjects.map(p => p.id));
+            const cloudFolderIds = new Set(filteredFolders.map(f => f.id));
 
             // 2. Merge into Local DB
             const app = this.getApp();
@@ -51,20 +83,17 @@ export const Registry = {
                 return;
             }
 
-            // --- SYNC SESSIONS ---
-            const tx = app.db.transaction(['sessions', 'folders'], 'readwrite');
-            const sessionStore = tx.objectStore('sessions');
-            const folderStore = tx.objectStore('folders');
-
-            // Get all local first to compare
-            const localRequest = await new Promise((resolve) => {
-                const r = sessionStore.getAll();
-                r.onsuccess = () => resolve(r.result);
+            // --- SYNC SESSIONS (use separate transaction) ---
+            const localSessions = await new Promise((resolve) => {
+                const tx = app.db.transaction('sessions', 'readonly');
+                const r = tx.objectStore('sessions').getAll();
+                r.onsuccess = () => resolve(r.result || []);
+                r.onerror = () => resolve([]);
             });
 
-            const localMap = new Map(localRequest.map(p => [p.id, p]));
+            const localMap = new Map(localSessions.map(p => [p.id, p]));
 
-            for (const cp of cloudProjects) {
+            for (const cp of filteredProjects) {
                 const local = localMap.get(cp.id);
 
                 if (!local) {
@@ -104,14 +133,16 @@ export const Registry = {
                 }
             }
 
-            // --- SYNC FOLDERS ---
-            const localFoldersReq = await new Promise(r => {
-                const req = folderStore.getAll();
-                req.onsuccess = () => r(req.result);
+            // --- SYNC FOLDERS (use separate transaction) ---
+            const localFolders = await new Promise(r => {
+                const tx = app.db.transaction('folders', 'readonly');
+                const req = tx.objectStore('folders').getAll();
+                req.onsuccess = () => r(req.result || []);
+                req.onerror = () => r([]);
             });
-            const localFolderMap = new Map(localFoldersReq.map(f => [f.id, f]));
+            const localFolderMap = new Map(localFolders.map(f => [f.id, f]));
 
-            for (const cf of cloudFolders) {
+            for (const cf of filteredFolders) {
                 const lf = localFolderMap.get(cf.id);
                 if (!lf) {
                     await app.dbPut('folders', cf);
@@ -122,17 +153,36 @@ export const Registry = {
             }
             // --------------------
 
-            // Optional: Mark locals as NOT backed up if they are missing from cloud list?
-            // Only do this if we are sure the list is complete.
+            // --- Clean up local projects that were deleted from cloud ---
+            // Only do this for projects owned by this user
             const userId = localStorage.getItem('color_rm_user_id') || (app.liveSync && app.liveSync.userId);
 
             for (const [id, local] of localMap) {
+                // If project was synced to cloud but now missing, delete locally
                 if (local.isCloudBackedUp && !cloudIds.has(id)) {
-                     // Verify ownership before unmarking
-                     if (local.ownerId === userId) {
-                         local.isCloudBackedUp = false;
-                         await app.dbPut('sessions', local);
-                     }
+                    // Verify ownership before deleting
+                    if (local.ownerId === userId) {
+                        console.log("Registry: Removing orphaned local project:", id);
+                        // Delete session
+                        await new Promise(r => {
+                            const tx = app.db.transaction('sessions', 'readwrite');
+                            tx.objectStore('sessions').delete(id);
+                            tx.oncomplete = () => r();
+                            tx.onerror = () => r();
+                        });
+                        // Delete pages
+                        try {
+                            const tx = app.db.transaction('pages', 'readwrite');
+                            const store = tx.objectStore('pages');
+                            const index = store.index('sessionId');
+                            const pages = await new Promise(r => {
+                                const req = index.getAll(id);
+                                req.onsuccess = () => r(req.result || []);
+                                req.onerror = () => r([]);
+                            });
+                            pages.forEach(pg => store.delete(pg.id));
+                        } catch (e) {}
+                    }
                 }
             }
 
@@ -215,26 +265,52 @@ export const Registry = {
     async deleteFolder(folderId) {
         const token = this.getToken();
         if (!token) return;
-        
-        fetch(this.apiUrl(`/api/color_rm/registry/folder/${folderId}`), {
-             method: 'DELETE',
-             headers: { 'Authorization': `Bearer ${token}` }
-        }).catch(e => console.warn("Folder delete failed:", e));
+
+        // Mark as deleted locally FIRST to prevent re-sync
+        this.markAsDeleted(folderId);
+
+        try {
+            const res = await fetch(this.apiUrl(`/api/color_rm/registry/folder/${folderId}`), {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (res.ok) {
+                console.log("Registry: Folder deleted from cloud:", folderId);
+            }
+        } catch (e) {
+            console.warn("Folder delete failed:", e);
+        }
     },
 
     async delete(projectId) {
         const token = this.getToken();
         if (!token) return;
 
-        fetch(this.apiUrl(`/api/color_rm/registry/${projectId}`), {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
-        })
-        .then(res => {
+        // Mark as deleted locally FIRST to prevent re-sync
+        this.markAsDeleted(projectId);
+
+        try {
+            // 1. Delete from registry (KV)
+            const res = await fetch(this.apiUrl(`/api/color_rm/registry/${projectId}`), {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             if (res.status === 401) {
                 console.warn("Registry: Auth token expired on delete.");
+            } else if (res.ok) {
+                console.log("Registry: Project deleted from cloud registry:", projectId);
             }
-        })
-        .catch(e => console.warn("Registry delete failed:", e));
+
+            // 2. Delete base file from R2 bucket
+            const baseRes = await fetch(this.apiUrl(`/api/color_rm/base_file/${projectId}`), {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (baseRes.ok) {
+                console.log("Registry: Base file deleted from R2:", projectId);
+            }
+        } catch (e) {
+            console.warn("Registry delete failed:", e);
+        }
     }
 };

@@ -64,6 +64,141 @@ export const UI = {
         t.classList.add('show');
         setTimeout(() => t.classList.remove('show'), 2000);
     },
+    showConfirm: (title, message, onConfirm, onCancel = null) => {
+        return new Promise((resolve) => {
+            // Check for existing confirm modal or create one dynamically
+            let modal = document.getElementById('confirmModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'confirmModal';
+                modal.className = 'overlay';
+                modal.innerHTML = `
+                    <div class="card" style="max-width:360px;">
+                        <h3 id="confirmTitle" style="margin:0 0 12px 0"></h3>
+                        <p id="confirmMessage" style="margin:0 0 20px 0; color:#888; font-size:0.9rem; line-height:1.5;"></p>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button class="btn" id="confirmCancelBtn">Cancel</button>
+                            <button class="btn" id="confirmOkBtn" style="background:#ef4444; border-color:#ef4444; color:white;">Confirm</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+
+            const titleEl = document.getElementById('confirmTitle');
+            const msgEl = document.getElementById('confirmMessage');
+            const okBtn = document.getElementById('confirmOkBtn');
+            const cancelBtn = document.getElementById('confirmCancelBtn');
+
+            if (titleEl) titleEl.innerText = title;
+            if (msgEl) msgEl.innerText = message;
+            modal.style.display = 'flex';
+
+            const cleanup = () => {
+                modal.style.display = 'none';
+                okBtn.onclick = null;
+                cancelBtn.onclick = null;
+            };
+
+            okBtn.onclick = () => {
+                cleanup();
+                if (onConfirm) onConfirm();
+                resolve(true);
+            };
+            cancelBtn.onclick = () => {
+                cleanup();
+                if (onCancel) onCancel();
+                resolve(false);
+            };
+        });
+    },
+    showAlert: (title, message) => {
+        return new Promise((resolve) => {
+            let modal = document.getElementById('alertModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'alertModal';
+                modal.className = 'overlay';
+                modal.innerHTML = `
+                    <div class="card" style="max-width:360px;">
+                        <h3 id="alertTitle" style="margin:0 0 12px 0"></h3>
+                        <p id="alertMessage" style="margin:0 0 20px 0; color:#888; font-size:0.9rem; line-height:1.5;"></p>
+                        <div style="display:flex; justify-content:flex-end;">
+                            <button class="btn btn-primary" id="alertOkBtn">OK</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+
+            const titleEl = document.getElementById('alertTitle');
+            const msgEl = document.getElementById('alertMessage');
+            const okBtn = document.getElementById('alertOkBtn');
+
+            if (titleEl) titleEl.innerText = title;
+            if (msgEl) msgEl.innerText = message;
+            modal.style.display = 'flex';
+
+            okBtn.onclick = () => {
+                modal.style.display = 'none';
+                resolve();
+            };
+        });
+    },
+    showPrompt: (title, placeholder, defaultValue = '') => {
+        return new Promise((resolve) => {
+            let modal = document.getElementById('promptModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'promptModal';
+                modal.className = 'overlay';
+                modal.innerHTML = `
+                    <div class="card" style="max-width:360px;">
+                        <h3 id="promptTitle" style="margin:0 0 12px 0"></h3>
+                        <input type="text" id="promptInput" class="opt-input" style="width:100%; margin-bottom:16px;">
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button class="btn" id="promptCancelBtn">Cancel</button>
+                            <button class="btn btn-primary" id="promptOkBtn">OK</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+
+            const titleEl = document.getElementById('promptTitle');
+            const inputEl = document.getElementById('promptInput');
+            const okBtn = document.getElementById('promptOkBtn');
+            const cancelBtn = document.getElementById('promptCancelBtn');
+
+            if (titleEl) titleEl.innerText = title;
+            if (inputEl) {
+                inputEl.placeholder = placeholder;
+                inputEl.value = defaultValue;
+            }
+            modal.style.display = 'flex';
+            inputEl.focus();
+
+            const cleanup = () => {
+                modal.style.display = 'none';
+                okBtn.onclick = null;
+                cancelBtn.onclick = null;
+                inputEl.onkeydown = null;
+            };
+
+            const submit = () => {
+                const val = inputEl.value;
+                cleanup();
+                resolve(val);
+            };
+
+            okBtn.onclick = submit;
+            cancelBtn.onclick = () => {
+                cleanup();
+                resolve(null);
+            };
+            inputEl.onkeydown = (e) => { if(e.key==='Enter') submit(); };
+        });
+    },
     setSyncStatus: (status) => {
         const el = document.getElementById('syncStatus');
         if (!el) return;

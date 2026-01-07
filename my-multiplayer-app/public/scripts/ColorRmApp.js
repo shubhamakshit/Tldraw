@@ -102,6 +102,9 @@ export class ColorRmApp {
                 this.liveSync.userId = `user_${Math.random().toString(36).substring(2, 9)}`;
                 localStorage.setItem('color_rm_user_id', this.liveSync.userId);
             }
+        } else {
+             // Ensure LiveSync is null if not collaborative
+             this.liveSync = null;
         }
 
         if (this.config.isMain) {
