@@ -13,7 +13,7 @@ const env = process.env.CAPACITOR_SERVER_IP_ENV || 'bundled-cf';
 // Backend URLs for API calls when using bundled assets
 const BACKENDS = {
   hf: 'https://jaimodiji-my-multiplayer-app.hf.space',
-  cloudflare: 'https://multiplayer-template.bossemail.workers.dev'
+  hf: 'https://multiplayer-template.bossemail.workers.dev'
 };
 
 const getConfig = (): CapacitorConfig => {
