@@ -13,8 +13,28 @@ const SplitViewUI = {
     hideDashboard() {},
     showToast(msg) { console.log('SplitView:', msg); },
     showInput(title, placeholder, callback) {
-        const text = prompt(title);
-        if (text) callback(text);
+        // Use window.UI.showPrompt if available, otherwise fallback
+        if (window.UI && window.UI.showPrompt) {
+            window.UI.showPrompt(title, placeholder).then(text => {
+                if (text) callback(text);
+            });
+        } else {
+            const text = prompt(title);
+            if (text) callback(text);
+        }
+    },
+    showConfirm(title, message) {
+        if (window.UI && window.UI.showConfirm) {
+            return window.UI.showConfirm(title, message);
+        }
+        return Promise.resolve(confirm(message));
+    },
+    showAlert(title, message) {
+        if (window.UI && window.UI.showAlert) {
+            return window.UI.showAlert(title, message);
+        }
+        alert(message);
+        return Promise.resolve();
     },
     showExportModal() {},
     showLoader() {},
@@ -605,7 +625,7 @@ export const SplitView = {
 
         } catch (error) {
             console.error('SplitView: Error importing PDF:', error);
-            alert('Error importing PDF: ' + error.message);
+            SplitViewUI.showAlert('Import Error', 'Error importing PDF: ' + error.message);
         }
     },
 
@@ -766,7 +786,8 @@ export const SplitView = {
      * Delete project
      */
     async deleteProject(projectId) {
-        if (!confirm('Delete this project?')) return;
+        const confirmed = await SplitViewUI.showConfirm('Delete Project', 'Delete this project?');
+        if (!confirmed) return;
 
         // Delete from project list DB
         if (this.rightDB) {

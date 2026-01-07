@@ -1,7 +1,7 @@
 import { handleUnfurlRequest } from 'cloudflare-workers-unfurl'
 import { AutoRouter, error, IRequest } from 'itty-router'
 import { handleAssetDownload, handleAssetUpload } from './assetUploads'
-import { handleColorRmDownload, handleColorRmUpload } from './colorRmAssets'
+import { handleColorRmDownload, handleColorRmUpload, handleColorRmDelete } from './colorRmAssets'
 import { Liveblocks } from '@liveblocks/node'
 
 // make sure our sync durable object is made available to cloudflare
@@ -168,9 +168,20 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
             session.allow(room, session.FULL_ACCESS);
         }
 
-		const { status, body } = await session.authorize()
-		return new Response(body, { status })
-	})
+        try {
+            // Race condition to prevent worker hanging indefinitely
+            const authPromise = session.authorize();
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Auth timed out")), 5000)
+            );
+
+            const { status, body } = await Promise.race([authPromise, timeoutPromise]) as any;
+            return new Response(body, { status });
+        } catch (e: any) {
+            console.error("Liveblocks Auth Error:", e);
+            return new Response(JSON.stringify({ error: e.message || "Auth Failed" }), { status: 500 });
+        }
+    })
 
     // --- Authentication Routes ---
 
@@ -322,8 +333,24 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	// New routes for color_rm base file sync
 	.post('/api/color_rm/upload/:roomId', handleColorRmUpload)
 	.get('/api/color_rm/base_file/:roomId', handleColorRmDownload)
+	.delete('/api/color_rm/base_file/:roomId', handleColorRmDelete)
 
     // --- Color RM Registry Routes ---
+
+    // Clear all projects from registry (for debugging/maintenance)
+    .delete('/api/color_rm/registry', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        try {
+            const registryKey = `registry:${auth.username}`;
+            await env.TLDRAW_USERS_KV.put(registryKey, JSON.stringify([]));
+            console.log('Registry cleared for user:', auth.username);
+            return new Response(JSON.stringify({ success: true, message: 'Registry cleared' }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
 
     .get('/api/color_rm/registry', async (request, env) => {
         const auth = await authenticate(request, env);
@@ -332,7 +359,11 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
         try {
             const registryStr = await env.TLDRAW_USERS_KV.get(`registry:${auth.username}`);
             const registry = registryStr ? JSON.parse(registryStr) : [];
-            return new Response(JSON.stringify({ projects: registry }), { headers: { 'Content-Type': 'application/json' }});
+
+            const foldersStr = await env.TLDRAW_USERS_KV.get(`folders:${auth.username}`);
+            const folders = foldersStr ? JSON.parse(foldersStr) : [];
+
+            return new Response(JSON.stringify({ projects: registry, folders: folders }), { headers: { 'Content-Type': 'application/json' }});
         } catch (e: any) {
             return new Response(JSON.stringify({ error: e.message }), { status: 500 });
         }
@@ -368,18 +399,81 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
         if (!auth) return new Response('Unauthorized', { status: 401 });
 
         const projectId = request.params.projectId;
+        console.log('DELETE registry request for project:', projectId, 'user:', auth.username);
 
         try {
             const registryKey = `registry:${auth.username}`;
             const registryStr = await env.TLDRAW_USERS_KV.get(registryKey);
-            if (!registryStr) return new Response(JSON.stringify({ success: true })); // Already empty
+
+            if (!registryStr) {
+                console.log('Registry already empty for user:', auth.username);
+                return new Response(JSON.stringify({ success: true, message: 'Registry already empty' }));
+            }
 
             let registry = JSON.parse(registryStr);
             const initialLength = registry.length;
             registry = registry.filter((p: any) => p.id !== projectId);
 
+            console.log('Registry before:', initialLength, 'after:', registry.length);
+
             if (registry.length !== initialLength) {
                 await env.TLDRAW_USERS_KV.put(registryKey, JSON.stringify(registry));
+                console.log('Registry updated for user:', auth.username);
+            } else {
+                console.log('Project not found in registry:', projectId);
+            }
+
+            return new Response(JSON.stringify({ success: true, deleted: initialLength !== registry.length }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            console.error('Delete error:', e);
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    // --- Folder Registry Routes ---
+
+    .post('/api/color_rm/registry/folder', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        try {
+            const { folder } = await request.json() as any;
+            if (!folder || !folder.id) return new Response('Invalid folder data', { status: 400 });
+
+            const foldersKey = `folders:${auth.username}`;
+            const foldersStr = await env.TLDRAW_USERS_KV.get(foldersKey);
+            let folders = foldersStr ? JSON.parse(foldersStr) : [];
+
+            // Upsert: Remove existing entry with same ID if present
+            folders = folders.filter((f: any) => f.id !== folder.id);
+            // Add new/updated folder
+            folders.push(folder);
+
+            await env.TLDRAW_USERS_KV.put(foldersKey, JSON.stringify(folders));
+
+            return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' }});
+        } catch (e: any) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+    })
+
+    .delete('/api/color_rm/registry/folder/:folderId', async (request, env) => {
+        const auth = await authenticate(request, env);
+        if (!auth) return new Response('Unauthorized', { status: 401 });
+
+        const folderId = request.params.folderId;
+
+        try {
+            const foldersKey = `folders:${auth.username}`;
+            const foldersStr = await env.TLDRAW_USERS_KV.get(foldersKey);
+            if (!foldersStr) return new Response(JSON.stringify({ success: true })); // Already empty
+
+            let folders = JSON.parse(foldersStr);
+            const initialLength = folders.length;
+            folders = folders.filter((f: any) => f.id !== folderId);
+
+            if (folders.length !== initialLength) {
+                await env.TLDRAW_USERS_KV.put(foldersKey, JSON.stringify(folders));
             }
 
             return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' }});

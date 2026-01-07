@@ -66,7 +66,10 @@ export const ColorRmExport = {
             }
         }
 
-        if(indices.length===0) return alert("No pages selected");
+        if(indices.length===0) {
+            this.ui.showToast("No pages selected");
+            return;
+        }
 
         const exportModal = this.getElement('exportModal');
         if (exportModal) exportModal.style.display='none';
@@ -108,7 +111,7 @@ export const ColorRmExport = {
         const hexToRgb = (hex) => { const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return r ? [parseInt(r[1], 16), parseInt(r[2], 16), parseInt(r[3], 16)] : [0,0,0]; };
 
         if (!window.jspdf) {
-            alert("jsPDF library not loaded");
+            this.ui.showToast("jsPDF library not loaded");
             this.ui.toggleLoader(false);
             return;
         }

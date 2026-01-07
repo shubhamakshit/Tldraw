@@ -33,7 +33,71 @@ export const ColorRmUI = {
         }
 
         const fileIn = this.getElement('fileIn');
-        if (fileIn) fileIn.onchange = (e) => this.handleImport(e);
+        if (fileIn) {
+            fileIn.onchange = (e) => {
+                if (e.target.files && e.target.files.length > 1) {
+                    this.handleExternalFiles(e.target.files);
+                } else {
+                    this.handleImport(e);
+                }
+            };
+        }
+
+        const importBtn = this.getElement('importBtn');
+        if (importBtn) {
+            // Add tooltip explaining Ctrl+V support
+            importBtn.title = "Click to import files, or press Ctrl+V anywhere on the page";
+
+            importBtn.onclick = async () => {
+                try {
+                    // Explicitly check for clipboard-read permission if supported
+                    if (navigator.permissions && navigator.permissions.query) {
+                        try {
+                            // Note: 'clipboard-read' support varies by browser (e.g. Firefox might throw)
+                            const status = await navigator.permissions.query({ name: 'clipboard-read' });
+                            if (status.state === 'denied') {
+                                console.log("Clipboard access denied by permission, opening picker...");
+                                this.ui.showToast("Clipboard permission denied");
+                                fileIn.click();
+                                return;
+                            }
+                        } catch (pe) {
+                            // Permission query failed or not supported for this API
+                            console.debug("Clipboard permission query skipped:", pe);
+                        }
+                    }
+
+                    // Try to read from clipboard first (check support)
+                    if (navigator.clipboard && navigator.clipboard.read) {
+                        const clipboardItems = await navigator.clipboard.read();
+                        const files = [];
+                        for (const item of clipboardItems) {
+                             // Look for PDF or Images
+                             const type = item.types.find(t => t === 'application/pdf' || t.startsWith('image/'));
+                             if (type) {
+                                 const blob = await item.getType(type);
+                                 const file = new File([blob], "clipboard_import." + (type === 'application/pdf' ? 'pdf' : 'png'), { type: type });
+                                 files.push(file);
+                             }
+                        }
+
+                        if (files.length > 0) {
+                            this.ui.showToast(`Found ${files.length} file(s) in clipboard!`);
+                            this.handleExternalFiles(files);
+                            return;
+                        }
+                    }
+
+                    // Fallback to file picker if clipboard not supported or empty
+                    console.log("Clipboard empty or not supported, opening picker...");
+                    fileIn.click();
+                } catch (e) {
+                    // Clipboard access denied or empty, fallback to picker
+                    console.warn("Clipboard read failed or empty, opening picker...", e);
+                    fileIn.click();
+                }
+            };
+        }
 
         const pickerBtn = this.getElement('openColorPicker');
         if(pickerBtn) pickerBtn.onclick = () => this.openPicker('remove');
@@ -183,6 +247,40 @@ export const ColorRmUI = {
 
         this.renderCustomSwatches();
         this.setupDragAndDrop();
+    },
+
+    showMoveModal() {
+        const modal = this.getElement('moveModal');
+        const select = this.getElement('moveFolderSelect');
+        const confirmBtn = this.getElement('moveConfirmBtn');
+        
+        if (!modal || !select || !confirmBtn) return;
+        
+        // Populate folders
+        select.innerHTML = '<option value="">(Root)</option>';
+        
+        const tx = this.db.transaction('folders', 'readonly');
+        tx.objectStore('folders').getAll().onsuccess = (e) => {
+            const folders = e.target.result || [];
+            folders.forEach(f => {
+                // Don't allow moving into itself if we were moving folders (not supported yet, but good practice)
+                const opt = document.createElement('option');
+                opt.value = f.id;
+                opt.innerText = f.name;
+                select.appendChild(opt);
+            });
+            
+            // Set current folder as default if applicable, or root
+            select.value = this.state.currentFolderId || "";
+            
+            modal.style.display = 'flex';
+        };
+        
+        confirmBtn.onclick = () => {
+            const folderId = select.value || null;
+            this.moveSelectedToFolder(folderId);
+            modal.style.display = 'none';
+        };
     },
 
     setEraserMode(checked) { this.state.eraserType = checked ? 'stroke' : 'standard'; },
@@ -406,30 +504,111 @@ export const ColorRmUI = {
             }
         });
 
-        document.addEventListener('paste', (e) => {
+        document.addEventListener('paste', async (e) => {
+            console.log("[Paste Debug] Event fired", e);
+
+            // 1. Check for standard files (e.g. from File Explorer)
             if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+                console.log("[Paste Debug] Files detected in clipboardData.files");
                 e.preventDefault();
+                e.stopPropagation();
                 this.handleExternalFiles(e.clipboardData.files);
+                return;
             }
+
+            // 2. Check for items (e.g. Screenshots, Image Copy)
+            if (e.clipboardData && e.clipboardData.items && e.clipboardData.items.length > 0) {
+                const extractedFiles = [];
+                let hasString = false;
+
+                for (let i = 0; i < e.clipboardData.items.length; i++) {
+                    const item = e.clipboardData.items[i];
+                    console.log(`[Paste Debug] Item ${i}: kind=${item.kind}, type=${item.type}`);
+
+                    if (item.kind === 'file') {
+                        const f = item.getAsFile();
+                        if (f) extractedFiles.push(f);
+                    } else if (item.kind === 'string') {
+                        hasString = true;
+                        // Check if string is a path
+                        item.getAsString((str) => {
+                             console.log(`[Paste Debug] String content: "${str}"`);
+                             // Check for common local path signatures
+                             if ((str.includes(':\\') || str.startsWith('/') || str.startsWith('file://')) && (str.toLowerCase().endsWith('.pdf') || str.match(/\.(png|jpg|jpeg|webp)$/i))) {
+                                 this.ui.showToast("Cannot read local file path. Opening picker...");
+                                 this.ui.showAlert("Security Restriction", "Browsers cannot access local files pasted as paths. Please use the file picker.");
+                                 const fileIn = this.getElement('fileIn');
+                                 if (fileIn) fileIn.click();
+                             }
+                        });
+                    }
+                }
+
+                if (extractedFiles.length > 0) {
+                    console.log(`[Paste Debug] Extracted ${extractedFiles.length} files from items`);
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.handleExternalFiles(extractedFiles);
+                    return;
+                }
+
+                // If we only found strings (no files) and not in an input, try Async API fallback
+                if (hasString && extractedFiles.length === 0 && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+                     console.log("[Paste Debug] Only found strings. Attempting Async Clipboard API fallback...");
+                }
+            }
+
+            // 3. Fallback: Try Async Clipboard API (Permission based)
+            // This catches cases where the 'paste' event doesn't expose the file but the async API does
+            if (navigator.clipboard && navigator.clipboard.read && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+                try {
+                    const clipboardItems = await navigator.clipboard.read();
+                    const files = [];
+                    for (const item of clipboardItems) {
+                         const type = item.types.find(t => t === 'application/pdf' || t.startsWith('image/'));
+                         if (type) {
+                             const blob = await item.getType(type);
+                             const file = new File([blob], "clipboard_import." + (type === 'application/pdf' ? 'pdf' : 'png'), { type: type });
+                             files.push(file);
+                         }
+                    }
+                    if (files.length > 0) {
+                        console.log(`[Paste Debug] Async API found ${files.length} files!`);
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.handleExternalFiles(files);
+                        return;
+                    }
+                } catch(err) {
+                    // Ignore errors here, as it might just be permission denied or empty
+                    console.log("[Paste Debug] Async fallback failed or empty:", err);
+                }
+            }
+
+            // Never hijack text paste if user is typing in an input
+            if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
         });
     },
 
     async handleExternalFiles(files) {
         this.ui.toggleLoader(true, `Importing ${files.length} projects...`);
-        
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            this.ui.updateProgress((i / files.length) * 100, `Creating project ${i + 1} of ${files.length}...`);
-            
-            // For each file, we trigger handleImport with lazy=true to skip image processing
-            await this.handleImport({ target: { files: [file] } }, false, true);
+        this.isBulkImporting = true; 
+
+        try {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                this.ui.updateProgress((i / files.length) * 100, `Creating project ${i + 1} of ${files.length}...`);
+                await this.handleImport({ target: { files: [file] } }, false, true);
+            }
+        } catch(e) {
+            console.error("Bulk import failed:", e);
+            this.ui.showToast("Import error occurred");
+        } finally {
+            this.isBulkImporting = false;
+            this.ui.toggleLoader(false);
+            this.ui.showToast(`Imported ${files.length} projects`);
+            this.ui.showDashboard();
         }
-        
-        this.ui.toggleLoader(false);
-        this.ui.showToast(`Imported ${files.length} projects`);
-        
-        // After importing multiple, show the dashboard so the user can see the new projects
-        this.ui.showDashboard();
     },
 
     renderSwatches() {

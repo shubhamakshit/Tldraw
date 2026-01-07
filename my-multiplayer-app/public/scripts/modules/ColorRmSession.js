@@ -33,23 +33,29 @@ export const ColorRmSession = {
     },
 
     async deleteFolder(folderId) {
-        if (!confirm("Delete folder? Projects inside will be moved to root.")) return;
-        
+        const confirmed = await this.ui.showConfirm(
+            "Delete Folder",
+            "Delete this folder? Projects inside will be moved to root."
+        );
+        if (!confirmed) return;
+
         // 1. Move contents to root (or parent)
         const sessions = await this.dbGetAll('sessions');
         const contents = sessions.filter(s => s.folderId === folderId);
-        
+
         for (const s of contents) {
             s.folderId = null; // Move to root for safety
             await this.dbPut('sessions', s);
             if (this.registry) this.registry.upsert(s);
         }
-        
-        // 2. Delete Folder
+
+        // 2. Delete Folder from cloud first
+        if (this.registry) await this.registry.deleteFolder(folderId);
+
+        // 3. Delete Folder locally
         const tx = this.db.transaction('folders', 'readwrite');
         tx.objectStore('folders').delete(folderId);
-        if (this.registry) this.registry.deleteFolder(folderId);
-        
+
         tx.oncomplete = () => this.loadSessionList();
     },
 
@@ -66,7 +72,7 @@ export const ColorRmSession = {
     
     async moveSelectedToFolder(folderId) {
         if (!this.state.selectedSessions || this.state.selectedSessions.size === 0) return;
-        
+
         for (const id of this.state.selectedSessions) {
             const session = await this.dbGet('sessions', id);
             if (session) {
@@ -79,6 +85,17 @@ export const ColorRmSession = {
         this.state.selectedSessions.clear();
         this.toggleMultiSelect(); // Reset UI
         this.loadSessionList();
+    },
+
+    async showMoveDialog() {
+        const fid = await this.ui.showPrompt(
+            "Move to Folder",
+            "Enter destination Folder ID (leave blank for root)",
+            this.state.currentFolderId || ''
+        );
+        if (fid !== null) {
+            this.moveSelectedToFolder(fid || null);
+        }
     },
     // -------------------------
 
@@ -194,7 +211,6 @@ export const ColorRmSession = {
                     l.appendChild(item);
                 });
                 this.updateMultiSelectUI();
-            };
         } catch (e) {
             console.error("Dashboard render error:", e);
         }
@@ -255,13 +271,26 @@ export const ColorRmSession = {
     async deleteSelectedSessions() {
         const count = this.state.selectedSessions.size;
         if (count === 0) return;
-        if (!confirm(`Permanently delete ${count} project(s) and ALL their drawing data? This cannot be undone.`)) return;
+
+        const confirmed = await this.ui.showConfirm(
+            "Delete Projects",
+            `Permanently delete ${count} project(s) and ALL their drawing data? This cannot be undone.`
+        );
+        if (!confirmed) return;
 
         this.ui.toggleLoader(true, "Deleting...");
 
-        const deletePromises = Array.from(this.state.selectedSessions).map(async (id) => {
-            if (this.registry) this.registry.delete(id);
-            return new Promise((resolve) => {
+        // Delete SEQUENTIALLY to avoid KV race conditions
+        const ids = Array.from(this.state.selectedSessions);
+        for (let i = 0; i < ids.length; i++) {
+            const id = ids[i];
+            this.ui.toggleLoader(true, `Deleting ${i + 1}/${ids.length}...`);
+
+            // Delete from cloud registry first (await it)
+            if (this.registry) await this.registry.delete(id);
+
+            // Then delete locally
+            await new Promise((resolve) => {
                 // 1. Delete Pages
                 const pagesTx = this.db.transaction('pages', 'readwrite');
                 const pagesStore = pagesTx.objectStore('pages');
@@ -277,9 +306,7 @@ export const ColorRmSession = {
                     sessTx.oncomplete = () => resolve();
                 };
             });
-        });
-
-        await Promise.all(deletePromises);
+        }
 
         const deletedActive = this.state.selectedSessions.has(this.state.sessionId);
 
@@ -349,13 +376,14 @@ export const ColorRmSession = {
     },
 
     async computeFileHash(file) {
+        if (!window.crypto || !window.crypto.subtle) return null;
         try {
             const buffer = await file.arrayBuffer();
             const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
             const hashArray = Array.from(new Uint8Array(hashBuffer));
             return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         } catch (e) {
-            console.error("Hash calculation failed", e);
+            console.warn("Hash calculation failed", e);
             return null;
         }
     },
@@ -378,7 +406,11 @@ export const ColorRmSession = {
                     });
                     const existing = sessions.find(s => s.fileHash === fileHash);
                     if (existing) {
-                        if (confirm(`This PDF already exists as "${existing.name}". Load it instead?`)) {
+                        const loadExisting = await this.ui.showConfirm(
+                            "Duplicate PDF",
+                            `This PDF already exists as "${existing.name}". Load it instead?`
+                        );
+                        if (loadExisting) {
                             this.switchProject(existing.ownerId || this.liveSync?.userId || 'local', existing.id);
                             return;
                         }
@@ -389,36 +421,50 @@ export const ColorRmSession = {
 
         this.isUploading = true; // Set flag
 
+        const nameInput = this.getElement('newProjectName');
+        let pName = (nameInput && nameInput.value.trim());
+
+        console.log(`[Import] Initial pName from input: "${pName}"`);
+        console.log(`[Import] Files length: ${files.length}, Bulk: ${this.isBulkImporting}`);
+
+        // Priority: 1. Manual Input (only if single file and NOT bulk importing), 2. File Name, 3. Fallback
+        // Reset name for bulk imports to avoid carrying over previous project names
+        if (!pName || files.length > 1 || this.isBulkImporting) {
+            pName = files[0].name.replace(/\.[^/.]+$/, "");
+            console.log(`[Import] Derived pName from file: "${pName}"`);
+            if (pName.includes("base_document_blob")) {
+                 console.log(`[Import] Detected base blob. Current project name: "${this.state.projectName}"`);
+                 // Only overwrite if we don't have a valid project name already
+                 if (this.state.projectName && this.state.projectName !== "Untitled" && this.state.projectName !== "Untitled Project") {
+                      pName = this.state.projectName;
+                      console.log(`[Import] Preserving existing name: "${pName}"`);
+                 } else {
+                      pName = "Untitled Project";
+                      console.log(`[Import] Fallback to Untitled Project (no valid existing name)`);
+                 }
+            }
+        }
+        if(!pName || pName === "Untitled") {
+            pName = "Untitled Project";
+            console.log(`[Import] Final fallback to Untitled Project`);
+        }
+
+        console.log(`[Import] FINAL pName to be used: "${pName}"`);
+
         // --- CRITICAL: FORCE UNIQUE PROJECT FOR EVERY NEW UPLOAD ---
         const localUserId = this.liveSync?.userId || 'local';
         if (!skipUpload) {
             const newProjectId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
             console.log("ColorRM: Forcing new unique project key for upload:", newProjectId);
-            await this.createNewProject(false, newProjectId, localUserId);
+            // Pass lazy as skipSync to avoid connecting to room during bulk import
+            await this.createNewProject(false, newProjectId, localUserId, pName, lazy);
         } else if (!this.state.sessionId) {
             // Sync case: only create if missing (Legacy support)
-            await this.createNewProject(false, this.state.sessionId, this.liveSync?.ownerId || localUserId);
+            await this.createNewProject(false, this.state.sessionId, this.liveSync?.ownerId || localUserId, pName, lazy);
         }
 
         this.ui.hideDashboard();
         this.ui.toggleLoader(true, "Initializing...");
-
-        const nameInput = this.getElement('newProjectName');
-        let pName = (nameInput && nameInput.value.trim());
-
-        // Priority: 1. Manual Input, 2. Existing State, 3. File Name, 4. Fallback
-        if (!pName) {
-            if (this.state.projectName && this.state.projectName !== "Untitled" && !files[0].name.includes("base_document_blob")) {
-                pName = this.state.projectName;
-            } else {
-                pName = files[0].name.replace(/\\.[^/.]+$/, "");
-                // If it's the dummy blob name, try to use existing state name or fallback
-                if (pName.includes("base_document_blob")) {
-                    pName = (this.state.projectName && this.state.projectName !== "Untitled") ? this.state.projectName : "Untitled Project";
-                }
-            }
-        }
-        if(!pName || pName === "Untitled") pName = "Untitled Project";
 
         // --- Sync to Server ---
         if (!skipUpload && this.state.sessionId) {
@@ -438,11 +484,11 @@ export const ColorRmSession = {
                 } else {
                     const errTxt = await uploadRes.text();
                     console.error('ColorRM Sync: Upload failed:', errTxt);
-                    alert(`Upload Failed: ${errTxt}\nCollaborators won't see the document background.`);
+                    this.ui.showToast("Upload failed - collaborators won't see background");
                 }
             } catch (err) {
                 console.error('ColorRM Sync: Error uploading base file:', err);
-                alert("Network Error: Could not upload base file to server. Collaboration will be limited.");
+                this.ui.showToast("Network error - collaboration limited");
             }
         }
         // -----------------------
@@ -460,6 +506,10 @@ export const ColorRmSession = {
             session.name = pName;
             session.baseFileName = this.state.baseFileName;
             session.ownerId = this.state.ownerId;
+            // Keep existing folder if updating, or assign current if new
+            if (!session.folderId && this.state.currentFolderId) {
+                session.folderId = this.state.currentFolderId;
+            }
             if (fileHash) session.fileHash = fileHash;
             await this.dbPut('sessions', session);
         } else {
@@ -474,7 +524,8 @@ export const ColorRmSession = {
                 bookmarks: [],
                 clipboardBox: [],
                 ownerId: this.state.ownerId,
-                fileHash: fileHash
+                fileHash: fileHash,
+                folderId: this.state.currentFolderId || null // Assign current folder
             });
         }
 
@@ -575,7 +626,7 @@ export const ColorRmSession = {
                              this.ui.updateProgress(((i/pdf.numPages)*100), `Processing Page ${i}/${pdf.numPages}`);
                              await new Promise(r => setTimeout(r, 0));
                          }
-                     } catch(e) { console.error(e); alert("Failed to load PDF"); }
+                     } catch(e) { console.error(e); this.ui.showToast("Failed to load PDF"); }
                 } else {
                     const pageObj = { id:`${this.state.sessionId}_${idx}`, sessionId:this.state.sessionId, pageIndex:idx, blob:f, history:[] };
                     await this.dbPut('pages', pageObj);
@@ -590,7 +641,7 @@ export const ColorRmSession = {
         });
     },
 
-    async createNewProject(openPicker = true, forceId = null, forceOwnerId = null) {
+    async createNewProject(openPicker = true, forceId = null, forceOwnerId = null, initialName = null, skipSync = false) {
         // Determine IDs (One PDF -> One Project Key in User Room)
         const regUser = this.registry ? this.registry.getUsername() : null;
         const ownerId = forceOwnerId || regUser || this.liveSync?.userId || 'local';
@@ -607,7 +658,7 @@ export const ColorRmSession = {
         }
 
         const nameInput = this.getElement('newProjectName');
-        const name = (nameInput && nameInput.value) || "Untitled";
+        const name = initialName || (nameInput && nameInput.value) || "Untitled";
         this.state.projectName = name;
         const titleEl = this.getElement('headerTitle');
         if (titleEl) titleEl.innerText = name;
@@ -633,7 +684,7 @@ export const ColorRmSession = {
         }
 
         // Initialize LiveSync with the Owner's Room and this Project Key
-        if (this.liveSync) {
+        if (this.liveSync && !skipSync) {
             await this.liveSync.init(ownerId, projectId);
         }
     },
@@ -652,7 +703,7 @@ export const ColorRmSession = {
                 this.ui.showToast("Restore failed");
             }
         } else {
-            alert("No local file to upload.");
+            this.ui.showToast("No local file to upload");
         }
     },
 
@@ -689,8 +740,8 @@ export const ColorRmSession = {
             await navigator.clipboard.writeText(shareUrl);
             this.ui.showToast("Link copied to clipboard!");
         } catch (e) {
-            // Final fallback: show URL in prompt
-            prompt("Share this URL:", shareUrl);
+            // Final fallback: show URL in custom prompt
+            this.ui.showAlert("Share URL", shareUrl);
         }
     }
 };
