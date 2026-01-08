@@ -2,6 +2,28 @@ import { useEffect } from 'react'
 import { useEditor, react } from 'tldraw'
 import { toolBrushStylesAtom } from '../utils/brushUtils'
 
+// Helper: Fast shallow comparison to avoid JSON.stringify
+function stylesEqual(a: any, b: any): boolean {
+    if (a === b) return true
+    if (!a || !b) return false
+
+    const keysA = Object.keys(a)
+    const keysB = Object.keys(b)
+
+    if (keysA.length !== keysB.length) return false
+
+    for (const key of keysA) {
+        if (a[key] !== b[key]) return false
+    }
+
+    return true
+}
+
+// Helper: Shallow clone
+function cloneStyles(styles: any): any {
+    return { ...styles }
+}
+
 export function BrushManager() {
     const editor = useEditor()
 
@@ -30,20 +52,20 @@ export function BrushManager() {
             if (DRAWING_TOOLS.includes(toolId)) {
                 if (toolChanged) {
                     // Just switched to this tool - don't capture, just record current state
-                    previousStyles[toolId] = JSON.parse(JSON.stringify(activeStyles))
+                    previousStyles[toolId] = cloneStyles(activeStyles)
                     return
                 }
                 
                 // Already on this tool - check if user changed something
                 const prevForThisTool = previousStyles[toolId]
-                if (prevForThisTool && JSON.stringify(prevForThisTool) !== JSON.stringify(activeStyles)) {
+                if (prevForThisTool && !stylesEqual(prevForThisTool, activeStyles)) {
                     // User actively changed the style! Save it.
                     const currentStored = toolBrushStylesAtom.get()
                     toolBrushStylesAtom.set({
                         ...currentStored,
-                        [toolId]: JSON.parse(JSON.stringify(activeStyles))
+                        [toolId]: cloneStyles(activeStyles)
                     })
-                    previousStyles[toolId] = JSON.parse(JSON.stringify(activeStyles))
+                    previousStyles[toolId] = cloneStyles(activeStyles)
                 }
                 return
             }
@@ -51,10 +73,10 @@ export function BrushManager() {
             // For non-drawing tools: capture when no selection
             if (selection.length === 0) {
                 const currentStored = toolBrushStylesAtom.get()
-                if (JSON.stringify(currentStored[toolId]) !== JSON.stringify(activeStyles)) {
+                if (!stylesEqual(currentStored[toolId], activeStyles)) {
                     toolBrushStylesAtom.set({
                         ...currentStored,
-                        [toolId]: JSON.parse(JSON.stringify(activeStyles))
+                        [toolId]: cloneStyles(activeStyles)
                     })
                 }
             }
@@ -94,8 +116,8 @@ export function BrushManager() {
                 restoreBrush()
             }
             if (e.name === 'pointer_up') {
-                // Wait for tldraw to finish its own sync-to-selection
-                setTimeout(restoreBrush, 20)
+                // Optimization: Use requestAnimationFrame instead of setTimeout
+                requestAnimationFrame(restoreBrush)
             }
         }
 
@@ -133,15 +155,22 @@ export function BrushManager() {
                     const storedStyles = toolBrushStylesAtom.get()[toolId]
                     if (storedStyles && Object.keys(storedStyles).length > 0) {
                         // Multiple aggressive restores to override tldraw's sync
-                        for (let i = 0; i < 3; i++) {
-                            setTimeout(() => {
-                                editor.run(() => {
-                                    for (const [id, value] of Object.entries(storedStyles)) {
-                                        editor.setStyleForNextShapes({ id } as any, value, { history: 'ignore' })
-                                    }
-                                }, { history: 'ignore' })
-                            }, i * 10)
-                        }
+                        // Using requestAnimationFrame chain for better timing
+                         const restore = () => {
+                             editor.run(() => {
+                                for (const [id, value] of Object.entries(storedStyles)) {
+                                    editor.setStyleForNextShapes({ id } as any, value, { history: 'ignore' })
+                                }
+                            }, { history: 'ignore' })
+                         }
+
+                        requestAnimationFrame(() => {
+                            restore();
+                            requestAnimationFrame(() => {
+                                restore();
+                                requestAnimationFrame(restore);
+                            });
+                        });
                     }
                 }
             }
