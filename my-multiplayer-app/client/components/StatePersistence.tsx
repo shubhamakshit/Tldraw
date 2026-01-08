@@ -6,6 +6,7 @@ export function StatePersistence({ roomId }: { roomId: string }) {
     const editor = useEditor()
     
     // Create a debounced save function that persists across renders
+    // Added maxWait: 5000 to ensure we save at least every 5 seconds during continuous activity
     const saveRoomState = useMemo(() => debounce((editorInstance: any, key: string) => {
         try {
             const { x, y, z } = editorInstance.getCamera()
@@ -43,7 +44,7 @@ export function StatePersistence({ roomId }: { roomId: string }) {
         } catch (e) {
             // Ignore errors
         }
-    }, 2000), []) // Debounce for 2 seconds
+    }, 2000, { maxWait: 5000 }), [])
 
     useEffect(() => {
         if (!editor) return
