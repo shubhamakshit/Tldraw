@@ -59,6 +59,8 @@ export class TldrawDurableObject extends DurableObject {
 	// load it once.
 	private roomPromise: Promise<TLSocketRoom<TLRecord, void>> | null = null
 
+    private lastPersistedSnapshot: string = ''
+
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env)
 		this.r2 = env.TLDRAW_BUCKET
@@ -111,6 +113,7 @@ export class TldrawDurableObject extends DurableObject {
             // Force reload on next connect
             this.roomPromise = null;
             this.roomId = null;
+            this.lastPersistedSnapshot = '';
             return new Response(JSON.stringify({ success: true }));
         })
 
@@ -169,17 +172,26 @@ export class TldrawDurableObject extends DurableObject {
 		return this.roomPromise
 	}
 
-	// we throttle persistance so it only happens every 10 seconds
+	// we throttle persistance so it only happens every 5 seconds (reduced from 10)
+    // because we are now using non-blocking waitUntil
 	schedulePersistToR2 = throttle(async () => {
 		if (!this.roomPromise || !this.roomId) return
 		const room = await this.getRoom()
 
-		// convert the room to JSON and upload it to R2
+		// convert the room to JSON
 		const snapshot = JSON.stringify(room.getCurrentSnapshot())
+
+        // Optimization: Skip if nothing changed
+        if (snapshot === this.lastPersistedSnapshot) return
+        this.lastPersistedSnapshot = snapshot
+
         const name = await this.ctx.storage.get('meta_name') as string || 'Untitled Board'
         
-		await this.r2.put(`rooms/${this.roomId}`, snapshot, {
-            customMetadata: { name }
-        })
-	}, 10_000)
+        // Optimization: Use waitUntil to allow the DO to continue processing while R2 writes
+		this.ctx.waitUntil(
+            this.r2.put(`rooms/${this.roomId}`, snapshot, {
+                customMetadata: { name }
+            })
+        )
+	}, 5_000)
 }

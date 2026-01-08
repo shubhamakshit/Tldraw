@@ -1,12 +1,12 @@
 import { useEffect, useMemo } from 'react'
 import { useEditor } from 'tldraw'
-import throttle from 'lodash.throttle'
+import debounce from 'lodash.debounce'
 
 export function StatePersistence({ roomId }: { roomId: string }) {
     const editor = useEditor()
     
-    // Create a throttled save function that persists across renders
-    const saveRoomState = useMemo(() => throttle((editorInstance: any, key: string) => {
+    // Create a debounced save function that persists across renders
+    const saveRoomState = useMemo(() => debounce((editorInstance: any, key: string) => {
         try {
             const { x, y, z } = editorInstance.getCamera()
             const instanceState = editorInstance.getInstanceState()
@@ -21,11 +21,29 @@ export function StatePersistence({ roomId }: { roomId: string }) {
                 exportBackground: instanceState.exportBackground
             }
             
-            localStorage.setItem(key, JSON.stringify(stateToSave))
+            // Use requestIdleCallback for non-critical writes if available
+            if (typeof requestIdleCallback !== 'undefined') {
+                requestIdleCallback(() => {
+                    try {
+                        localStorage.setItem(key, JSON.stringify(stateToSave))
+                    } catch (e) {
+                        console.warn('localStorage quota exceeded:', e)
+                    }
+                }, { timeout: 2000 })
+            } else {
+                // Fallback for environments without requestIdleCallback
+                setTimeout(() => {
+                     try {
+                        localStorage.setItem(key, JSON.stringify(stateToSave))
+                    } catch (e) {
+                        console.warn('localStorage quota exceeded:', e)
+                    }
+                }, 0)
+            }
         } catch (e) {
             // Ignore errors
         }
-    }, 1000), [])
+    }, 2000), []) // Debounce for 2 seconds
 
     useEffect(() => {
         if (!editor) return
@@ -100,11 +118,30 @@ export function StatePersistence({ roomId }: { roomId: string }) {
         
         // 3. Setup Listeners to Save State
         const cleanupUser = editor.store.listen(() => {
-            localStorage.setItem('tldraw_global_prefs', JSON.stringify(editor.user.getUserPreferences()))
+            // Optimization: Defer user pref save
+             if (typeof requestIdleCallback !== 'undefined') {
+                requestIdleCallback(() => {
+                     localStorage.setItem('tldraw_global_prefs', JSON.stringify(editor.user.getUserPreferences()))
+                }, { timeout: 2000 })
+             } else {
+                 setTimeout(() => {
+                    localStorage.setItem('tldraw_global_prefs', JSON.stringify(editor.user.getUserPreferences()))
+                 }, 0)
+             }
         })
         
-        const cleanupRoom = editor.store.listen(() => {
-            saveRoomState(editor, roomStateKey)
+        const cleanupRoom = editor.store.listen((change) => {
+             // Optimization: Only save if relevant fields changed
+            // Using 'any' cast to avoid TS errors with strict typing of changes
+            const changes = (change as any).changes;
+            if (changes && (changes.camera || changes.page || changes.instance_page_state)) {
+                saveRoomState(editor, roomStateKey)
+            } else if (!changes) {
+                 // Fallback if changes object isn't as expected, but event fired
+                 saveRoomState(editor, roomStateKey);
+            }
+        }, {
+            scope: 'document',
         })
         
         return () => {
