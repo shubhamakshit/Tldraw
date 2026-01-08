@@ -1,6 +1,8 @@
 // --- SINGLE SOURCE OF TRUTH ---
 const VITE_PREVIEW_URL = import.meta.env.VITE_PREVIEW_URL
 
+declare const __DEFAULT_BACKEND__: string;
+
 const BACKENDS = {
     hf: 'https://jaimodiji-my-multiplayer-app.hf.space',
     cloudflare: 'https://multiplayer-template.bossemail.workers.dev'
@@ -35,8 +37,9 @@ if (VITE_PREVIEW_URL) {
     origin = VITE_PREVIEW_URL.replace(/\/$/, '')
 } else if (isCapacitor() && !isRemoteMode()) {
     // We are likely in bundled mode on a device
-    const preferredBackend = localStorage.getItem('color_rm_backend') || 'cloudflare';
-    origin = (BACKENDS as any)[preferredBackend] || BACKENDS.cloudflare;
+    const defaultBackend = typeof __DEFAULT_BACKEND__ !== 'undefined' ? __DEFAULT_BACKEND__ : 'cloudflare';
+    const preferredBackend = localStorage.getItem('color_rm_backend') || defaultBackend;
+    origin = (BACKENDS as any)[preferredBackend] || (BACKENDS as any)[defaultBackend];
     console.log(`[Config] Capacitor bundled mode detected. Using backend: ${origin}`);
 }
 
