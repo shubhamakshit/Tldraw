@@ -19,6 +19,8 @@ import android.content.Intent;
 import android.net.Uri;
 import androidx.core.content.FileProvider;
 import android.webkit.WebView;
+import android.webkit.WebSettings;
+import android.os.Looper;
 
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -147,6 +149,24 @@ public class MainActivity extends BridgeActivity {
 
     private void setupNativeInterface() {
         if (getBridge() != null && getBridge().getWebView() != null) {
+            WebView webView = getBridge().getWebView();
+
+            // PERFORMANCE OPTIMIZATIONS
+            // 1. Hardware acceleration (usually on by default, but explicit is safer)
+            webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+
+            // 2. High render priority
+            WebSettings settings = webView.getSettings();
+            settings.setRenderPriority(WebSettings.RenderPriority.HIGH);
+
+            // 3. Cache mode optimization for drawing app (less disk I/O during interaction)
+            // settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+
+            // 4. Low latency mode for autofill (Android O+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                webView.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+            }
+
             getBridge().getWebView().addJavascriptInterface(new Object() {
                 @JavascriptInterface
                 public void saveBlob(String base64Data, String filename, String mimeType) {
@@ -349,10 +369,16 @@ public class MainActivity extends BridgeActivity {
 
     private void notifyBridge(String eventName) {
         if (getBridge() != null && getBridge().getWebView() != null) {
-            getBridge().getWebView().post(() -> {
+            // PERFORMANCE FIX: Check if we are already on UI thread to avoid post() latency
+            if (Looper.myLooper() == Looper.getMainLooper()) {
                 getBridge().getWebView().evaluateJavascript(
                         "window.dispatchEvent(new CustomEvent('" + eventName + "'));", null);
-            });
+            } else {
+                getBridge().getWebView().post(() -> {
+                    getBridge().getWebView().evaluateJavascript(
+                            "window.dispatchEvent(new CustomEvent('" + eventName + "'));", null);
+                });
+            }
         }
     }
 }
