@@ -72,8 +72,9 @@ export const Config = {
 
         // Bundled Capacitor mode: need absolute URL to backend
         if (this.isBundledMode() || this.isCapacitor()) {
-            const preferredBackend = localStorage.getItem('color_rm_backend') || 'cloudflare';
-            const base = this.BACKENDS[preferredBackend] || this.BACKENDS.cloudflare;
+            const defaultBackend = 'cloudflare'; // REPLACED_BY_BUILD_SCRIPT
+            const preferredBackend = localStorage.getItem('color_rm_backend') || defaultBackend;
+            const base = this.BACKENDS[preferredBackend] || this.BACKENDS[defaultBackend];
             console.log('[Config] Bundled mode - using backend:', base);
             return base;
         }
@@ -102,6 +103,7 @@ export const Config = {
 
     // Debug info
     getDebugInfo() {
+        const defaultBackend = 'cloudflare'; // REPLACED_BY_BUILD_SCRIPT
         return {
             isCapacitor: this.isCapacitor(),
             isBundledMode: this.isBundledMode(),
@@ -110,7 +112,7 @@ export const Config = {
             host: window.location.host,
             href: window.location.href,
             apiBase: this.getApiBase(),
-            preferredBackend: localStorage.getItem('color_rm_backend') || 'cloudflare'
+            preferredBackend: localStorage.getItem('color_rm_backend') || defaultBackend
         };
     }
 };

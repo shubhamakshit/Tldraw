@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "concurrently \"cross-env VITE_APP_ENV=local vite\" \"tsc --watch\"",
 		"auto-dev": "node cmd/dev_auto_update.mjs",
-		"build": "node -e \"const env = process.env.CAPACITOR_SERVER_IP_ENV || 'remote'; console.log('Building for ' + env.toUpperCase() + '...');\" && concurrently \"tsc\" \"vite build\"",
+		"build": "node -e \"const env = process.env.CAPACITOR_SERVER_IP_ENV || 'remote'; console.log('Building for ' + env.toUpperCase() + '...');\" && concurrently \"tsc\" \"vite build\" && node cmd/update_public_config.mjs",
 		"build:local": "cross-env VITE_APP_ENV=local npm run build",
 		"build:remote": "cross-env VITE_APP_ENV=remote npm run build",
 		"preview": "vite preview",
