@@ -15,6 +15,9 @@ export function useSPen(editor: Editor) {
     // BUG FIX: Track when the pointer went down to detect accidental strokes
     const pointerDownTimeRef = useRef<number>(0)
 
+    // PERFORMANCE: Throttle pointer event tracking
+    const lastUpdateTimeRef = useRef<number>(0)
+
     // 0. Keep track of the "main" tool (the one we want to revert to)
     useEffect(() => {
         // Optimized: Use sideEffects to track tool changes instead of global event listener
@@ -49,6 +52,16 @@ export function useSPen(editor: Editor) {
             // Only care about the pen
             if (e.pointerType !== 'pen' || !e.isTrusted) return
 
+            // PERFORMANCE: Always update on down/up/cancel, but throttle move
+            if (e.type === 'pointermove') {
+                const now = Date.now()
+                // Update at most ~120Hz (8ms)
+                if (now - lastUpdateTimeRef.current < 8) {
+                    return
+                }
+                lastUpdateTimeRef.current = now
+            }
+
             lastEventRef.current = e
 
             if (e.type === 'pointerdown') {
@@ -73,7 +86,9 @@ export function useSPen(editor: Editor) {
                         // and once to undo the actual action you wanted to undo.
                         // (If the first tap didn't erase anything, tldraw ignores the extra undo safely)
                         editor.undo()
-                        setTimeout(() => editor.undo(), 50)
+
+                        // PERFORMANCE: Use queueMicrotask instead of setTimeout for tighter timing
+                        queueMicrotask(() => editor.undo())
 
                         return // Stop processing
                     }
@@ -125,7 +140,10 @@ export function useSPen(editor: Editor) {
             const isDrawingTool = ['draw', 'highlight', 'eraser', 'laser', 'scribble'].includes(newTool)
 
             if (isDrawingTool) {
-                setTimeout(() => {
+                // PERFORMANCE: Remove setTimeout delays (use synchronous switching or microtask)
+                // Using queueMicrotask allows the engine to finish the current event loop (tool switch)
+                // before processing the new pointerdown, but without the min ~4ms delay of setTimeout.
+                queueMicrotask(() => {
                     target.dispatchEvent(new PointerEvent('pointerdown', {
                         bubbles: true, cancelable: true, view: window,
                         clientX: lastEvent.clientX, clientY: lastEvent.clientY,
@@ -134,7 +152,7 @@ export function useSPen(editor: Editor) {
                         pressure: lastEvent.pressure || 0.5,
                         tiltX: lastEvent.tiltX, tiltY: lastEvent.tiltY
                     }))
-                }, 0)
+                })
             }
         }
 
@@ -162,6 +180,9 @@ export function useSPen(editor: Editor) {
         window.addEventListener('spen-button-up', onButtonUp)
         
         // Capture phase (true) is critical to intercept the double tap before tldraw
+        // PERFORMANCE: Using capture phase is good.
+        // We attach to window to catch everything, but tracking move can be expensive.
+        // We added throttling above to mitigate.
         window.addEventListener('pointerdown', trackPointer, { capture: true })
         window.addEventListener('pointerup', trackPointer, { capture: true })
         window.addEventListener('pointercancel', trackPointer, { capture: true })
