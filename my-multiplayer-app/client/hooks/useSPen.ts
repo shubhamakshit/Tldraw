@@ -18,25 +18,29 @@ export function useSPen(editor: Editor) {
     // PERFORMANCE: Throttle pointer event tracking
     const lastUpdateTimeRef = useRef<number>(0)
 
+    // INPUT INTELLIGENCE: Finger vs Pen
+    const lastPenActivityTimeRef = useRef<number>(0)
+    const intendedToolRef = useRef<string>('draw')
+    const isTouchModeRef = useRef<boolean>(false)
+
     // 0. Keep track of the "main" tool (the one we want to revert to)
     useEffect(() => {
         // Optimized: Use sideEffects to track tool changes instead of global event listener
         // This avoids processing every single pointer event
         const cleanup = editor.sideEffects.registerAfterChangeHandler('instance_page_state', (prev, next) => {
             // Check if tool changed (checking standard prop names for Tldraw records)
-            // @ts-ignore - 'toolId' or 'selectedToolId' depending on version, checking changes blindly is safer via getter if needed,
-            // but we can just check if the ID implies a tool change.
-            // Actually, simplest is to just check editor.getCurrentToolId() which is fast.
-
+            // @ts-ignore - 'toolId' or 'selectedToolId' depending on version
             const prevTool = (prev as any).selectedToolId ?? (prev as any).toolId
             const nextTool = (next as any).selectedToolId ?? (next as any).toolId
 
             if (prevTool !== nextTool) {
                 const current = nextTool
-                // If we are NOT in button mode, and the new tool isn't the temporary eraser,
+                // If we are NOT in button mode AND NOT in forced touch (hand) mode,
+                // and the new tool isn't the temporary eraser,
                 // update our memory of the "previous" (intended) tool.
-                if (!isInButtonModeRef.current && current !== 'eraser') {
+                if (!isInButtonModeRef.current && !isTouchModeRef.current && current !== 'eraser' && current !== 'hand') {
                     previousToolRef.current = current
+                    intendedToolRef.current = current
                 }
             }
         })
@@ -49,7 +53,47 @@ export function useSPen(editor: Editor) {
 
         // 1. Independent Pointer State Tracker & Double Tap Detector
         const trackPointer = (e: PointerEvent) => {
-            // Only care about the pen
+            // TRACK PEN ACTIVITY
+            if (e.pointerType === 'pen') {
+                lastPenActivityTimeRef.current = Date.now()
+
+                // If we were in forced touch mode (hand), and pen comes back,
+                // revert to the intended drawing tool immediately.
+                if (e.type === 'pointerdown' && isTouchModeRef.current) {
+                     // Check if current is hand (it should be)
+                     if (editor.getCurrentToolId() === 'hand') {
+                         editor.setCurrentTool(intendedToolRef.current)
+                     }
+                     isTouchModeRef.current = false
+                }
+            }
+            // INPUT INTELLIGENCE: FINGER NAVIGATION
+            else if (e.pointerType === 'touch' && e.type === 'pointerdown') {
+                const now = Date.now()
+                // If pen was active recently (1s) AND pen is not currently down (to allow multitouch gestures if supported)
+                // Note: If pen IS down, tldraw handles gestures separately, but we shouldn't switch tool mid-stroke.
+                const penRecentlyActive = (now - lastPenActivityTimeRef.current) < 1000
+
+                if (penRecentlyActive && !isPenDownRef.current) {
+                    const currentTool = editor.getCurrentToolId()
+                    // If we are in a drawing tool, switch to hand for this touch
+                    if (['draw', 'highlight', 'eraser'].includes(currentTool)) {
+                        intendedToolRef.current = currentTool
+                        editor.setCurrentTool('hand')
+                        isTouchModeRef.current = true
+                        // We don't need to prevent default; Tldraw will now see 'hand' tool and pan instead of draw
+                    }
+                } else if (!penRecentlyActive && isTouchModeRef.current) {
+                    // Pen not active for a while, revert to intended tool if we were in touch mode
+                    // This allows finger drawing if user puts pen down for >1s
+                    // However, we only do this if we are initiating a new touch.
+                    // If we are "stuck" in hand mode, revert.
+                     editor.setCurrentTool(intendedToolRef.current)
+                     isTouchModeRef.current = false
+                }
+            }
+
+            // Only care about the pen for specific S Pen logic below
             if (e.pointerType !== 'pen' || !e.isTrusted) return
 
             // PERFORMANCE: Always update on down/up/cancel, but throttle move
@@ -82,9 +126,6 @@ export function useSPen(editor: Editor) {
                         e.preventDefault()
                         
                         // 2. Perform Undo
-                        // We undo twice: once to remove the 'dot' from the first tap, 
-                        // and once to undo the actual action you wanted to undo.
-                        // (If the first tap didn't erase anything, tldraw ignores the extra undo safely)
                         editor.undo()
 
                         // PERFORMANCE: Use queueMicrotask instead of setTimeout for tighter timing
@@ -117,9 +158,6 @@ export function useSPen(editor: Editor) {
             const target = document.elementFromPoint(lastEvent.clientX, lastEvent.clientY) || window
 
             // A. End current stroke
-            // BUG FIX: If we are switching FROM eraser TO draw, and the stroke was very short (< 250ms),
-            // it's likely an "accidental" eraser stroke caused by race conditions (Pen Down before Button Up).
-            // In this case, use 'pointercancel' to revert the erasure instead of 'pointerup' which commits it.
             const currentTool = editor.getCurrentToolId()
             const strokeDuration = Date.now() - pointerDownTimeRef.current
             const isAccidentalEraser = currentTool === 'eraser' && newTool !== 'eraser' && strokeDuration < 250
@@ -135,14 +173,9 @@ export function useSPen(editor: Editor) {
             editor.setCurrentTool(newTool)
 
             // C. Start new stroke (delayed slightly for state machine)
-            // CRITICAL FIX: Only restart stroke for drawing tools.
-            // Restarting stroke for 'select' or 'hand' causes unwanted clicks/drags.
             const isDrawingTool = ['draw', 'highlight', 'eraser', 'laser', 'scribble'].includes(newTool)
 
             if (isDrawingTool) {
-                // PERFORMANCE: Remove setTimeout delays (use synchronous switching or microtask)
-                // Using queueMicrotask allows the engine to finish the current event loop (tool switch)
-                // before processing the new pointerdown, but without the min ~4ms delay of setTimeout.
                 queueMicrotask(() => {
                     target.dispatchEvent(new PointerEvent('pointerdown', {
                         bubbles: true, cancelable: true, view: window,
@@ -180,9 +213,7 @@ export function useSPen(editor: Editor) {
         window.addEventListener('spen-button-up', onButtonUp)
         
         // Capture phase (true) is critical to intercept the double tap before tldraw
-        // PERFORMANCE: Using capture phase is good.
-        // We attach to window to catch everything, but tracking move can be expensive.
-        // We added throttling above to mitigate.
+        // And also to intercept touch events for navigation mode
         window.addEventListener('pointerdown', trackPointer, { capture: true })
         window.addEventListener('pointerup', trackPointer, { capture: true })
         window.addEventListener('pointercancel', trackPointer, { capture: true })
