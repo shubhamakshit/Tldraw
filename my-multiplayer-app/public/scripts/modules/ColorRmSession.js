@@ -970,10 +970,10 @@ export const ColorRmSession = {
         }
 
         // Update canvas dimensions to match new page size
-        const canvas = this.getElement('canvas');
-        if (canvas) {
-            canvas.width = width;
-            canvas.height = height;
+        const displayCanvas = this.getElement('canvas');
+        if (displayCanvas) {
+            displayCanvas.width = width;
+            displayCanvas.height = height;
             // Update the view dimensions as well
             this.state.viewW = width;
             this.state.viewH = height;
@@ -1082,10 +1082,10 @@ export const ColorRmSession = {
         }
 
         // Update canvas dimensions to match new page size
-        const canvas = this.getElement('canvas');
-        if (canvas) {
-            canvas.width = width;
-            canvas.height = height;
+        const displayCanvas = this.getElement('canvas');
+        if (displayCanvas) {
+            displayCanvas.width = width;
+            displayCanvas.height = height;
             // Update the view dimensions as well
             this.state.viewW = width;
             this.state.viewH = height;
@@ -1262,10 +1262,10 @@ export const ColorRmSession = {
         this.state.viewH = newHeight;
 
         // Update canvas dimensions to match new page size
-        const canvas = this.getElement('canvas');
-        if (canvas) {
-            canvas.width = newWidth;
-            canvas.height = newHeight;
+        const displayCanvas = this.getElement('canvas');
+        if (displayCanvas) {
+            displayCanvas.width = newWidth;
+            displayCanvas.height = newHeight;
             // Update the view dimensions as well
             this.state.viewW = newWidth;
             this.state.viewH = newHeight;
@@ -1429,10 +1429,10 @@ export const ColorRmSession = {
         }
 
         // Update canvas dimensions to match new page size
-        const canvas = this.getElement('canvas');
-        if (canvas) {
-            canvas.width = width;
-            canvas.height = height;
+        const displayCanvas = this.getElement('canvas');
+        if (displayCanvas) {
+            displayCanvas.width = width;
+            displayCanvas.height = height;
             // Update the view dimensions as well
             this.state.viewW = width;
             this.state.viewH = height;
@@ -1584,10 +1584,10 @@ export const ColorRmSession = {
         }
 
         // Update canvas dimensions to match new page size
-        const canvas = this.getElement('canvas');
-        if (canvas) {
-            canvas.width = width;
-            canvas.height = height;
+        const displayCanvas = this.getElement('canvas');
+        if (displayCanvas) {
+            displayCanvas.width = width;
+            displayCanvas.height = height;
             // Update the view dimensions as well
             this.state.viewW = width;
             this.state.viewH = height;
