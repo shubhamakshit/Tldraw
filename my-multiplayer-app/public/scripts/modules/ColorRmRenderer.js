@@ -156,6 +156,9 @@ export const ColorRmRenderer = {
                 ctx.stroke();
                 ctx.restore();
             }
+
+            // Temporary shapes are drawn directly in the input handler during drag
+            // to avoid duplication issues. No need to draw them here.
         } catch (e) {
             console.error("Render error:", e);
         } finally {

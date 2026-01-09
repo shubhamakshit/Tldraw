@@ -355,12 +355,14 @@ export const ColorRmBox = {
                  await new Promise(r => setTimeout(r, 0));
              }
              
-             const filename = `${this.state.projectName}_Sheets.pdf`;
-             
+             // Use the export module's sanitizeFilename method
+             const sanitizedProjectName = this.sanitizeFilename ? this.sanitizeFilename(this.state.projectName) : this.state.projectName.replace(/[^a-z0-9]/gi, '_');
+             const filename = `${sanitizedProjectName}_Sheets.pdf`;
+
              try {
                  const blob = pdf.output('blob');
                  if (this.saveBlobNative(blob, filename)) {
-                    // Handled by Android
+                    // Handled by Android bridge
                  } else {
                      const file = new File([blob], filename, { type: 'application/pdf' });
                      if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -383,9 +385,12 @@ export const ColorRmBox = {
 
         // --- IMPROVED EXPORT LOGIC FOR ANDROID ---
         try {
+            // Use the export module's sanitizeFilename method
+            const sanitizedProjectName = this.sanitizeFilename ? this.sanitizeFilename(this.state.projectName) : this.state.projectName.replace(/[^a-z0-9]/gi, '_');
+
             if(pages.length === 1) {
                 const blob = await new Promise(r => pages[0].toBlob(r, 'image/png'));
-                const filename = `${this.state.projectName}_Sheet.png`;
+                const filename = `${sanitizedProjectName}_Sheet.png`;
 
                 if (this.saveBlobNative(blob, filename)) {
                     // Handled by Android bridge
@@ -421,7 +426,7 @@ export const ColorRmBox = {
                 for(let i=0; i<pages.length; i++) {
                     this.ui.updateProgress((i/pages.length)*100, `Compressing ${i+1}/${pages.length}...`);
                     const blob = await new Promise(r => pages[i].toBlob(r, format, quality));
-                    zip.file(`${this.state.projectName}_Sheet_${i+1}.${ext}`, blob);
+                    zip.file(`${sanitizedProjectName}_Sheet_${i+1}.${ext}`, blob);
                     await new Promise(r => setTimeout(r, 0));
                 }
 
@@ -431,8 +436,8 @@ export const ColorRmBox = {
                     compression: "DEFLATE",
                     compressionOptions: { level: 6 }
                 });
-                
-                const filename = `${this.state.projectName}_Sheets.zip`;
+
+                const filename = `${sanitizedProjectName}_Sheets.zip`;
 
                 if (this.saveBlobNative(content, filename)) {
                     // Handled by Android bridge

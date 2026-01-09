@@ -203,15 +203,15 @@ export const ColorRmExport = {
             await new Promise(r => setTimeout(r, 0));
         }
 
-        const fName = (this.state.projectName || "Export").replace(/[^a-z0-9]/gi, '_');
+        const sanitizedProjectName = this.sanitizeFilename(this.state.projectName || "Export");
 
         try {
             const blob = pdfDoc.output('blob');
 
-            if (this.saveBlobNative(blob, `${fName}.pdf`)) {
+            if (this.saveBlobNative(blob, `${sanitizedProjectName}.pdf`)) {
                 // Handled by Android
             } else {
-                const file = new File([blob], `${fName}.pdf`, { type: 'application/pdf' });
+                const file = new File([blob], `${sanitizedProjectName}.pdf`, { type: 'application/pdf' });
 
                 if (navigator.canShare && navigator.canShare({ files: [file] })) {
                     await navigator.share({
@@ -220,14 +220,24 @@ export const ColorRmExport = {
                         text: 'Here is your exported PDF.'
                     });
                 } else {
-                    pdfDoc.save(`${fName}.pdf`);
+                    pdfDoc.save(`${sanitizedProjectName}.pdf`);
                 }
             }
         } catch (e) {
             console.error("PDF Export failed:", e);
-            pdfDoc.save(`${fName}.pdf`);
+            pdfDoc.save(`${sanitizedProjectName}.pdf`);
         }
 
         this.ui.toggleLoader(false);
+    },
+
+    sanitizeFilename(name) {
+        // Remove problematic characters and replace with underscores
+        return name
+            .replace(/[<>:"/\\|?*]/g, '_')  // Replace illegal characters
+            .replace(/\s+/g, '_')           // Replace spaces with underscores
+            .replace(/[\u0000-\u001F\u007F]/g, '') // Remove control characters
+            .trim()
+            .substring(0, 100); // Limit length
     }
 };

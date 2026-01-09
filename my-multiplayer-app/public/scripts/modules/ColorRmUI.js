@@ -392,15 +392,26 @@ export const ColorRmUI = {
         this.pageThumbnailUrls = [];
 
         el.innerHTML = '';
+
+        // Just display pages normally
         this.state.images.forEach((img, i) => {
             const d = document.createElement('div');
             d.className = `sb-page-item ${i === this.state.idx ? 'active' : ''}`;
             d.onclick = () => this.loadPage(i);
 
             const im = new Image();
-            const url = URL.createObjectURL(img.blob);
-            this.pageThumbnailUrls.push(url);
-            im.src = url;
+            // Check if img.blob is a Promise and handle accordingly
+            if (img.blob instanceof Promise) {
+                img.blob.then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    this.pageThumbnailUrls.push(url);
+                    im.src = url;
+                });
+            } else {
+                const url = URL.createObjectURL(img.blob);
+                this.pageThumbnailUrls.push(url);
+                im.src = url;
+            }
 
             d.appendChild(im);
             const n = document.createElement('div');

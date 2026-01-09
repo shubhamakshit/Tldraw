@@ -16,6 +16,7 @@ window.PDFLibrary = PDFLibrary;
 window.Config = Config;
 window.Logger = Logger;
 
+
 // Initialize the main application instance
 const app = new ColorRmApp({ isMain: true });
 
@@ -54,3 +55,4 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     console.log("ColorRM Initialized.");
 });
+
