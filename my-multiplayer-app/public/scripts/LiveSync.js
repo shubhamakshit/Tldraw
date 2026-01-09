@@ -159,15 +159,38 @@ export class LiveSyncClient {
 
         // Refresh project-specific subscription
         this.unsubscribes.forEach(unsub => unsub());
+
+        // Keep track of other users' page structure versions
+        this.otherUserVersions = {};
+
         this.unsubscribes = [
             this.room.subscribe(projects.get(projectId), () => {
                 this.syncProjectData();
                 if (this.app.renderDebug) this.app.renderDebug();
             }, { isDeep: true }),
             // Subscribe to Presence (Others)
-            this.room.subscribe("others", () => {
+            this.room.subscribe("others", (others) => {
                 this.renderUsers();
                 this.renderCursors();
+
+                // Check if any other user has updated their page structure version
+                others.forEach(user => {
+                    const presence = user.presence;
+                    if (presence && presence.pageStructureVersion !== undefined &&
+                        presence.pageCount !== undefined) {
+
+                        const userId = user.connectionId || user.id;
+                        const currentVersion = this.otherUserVersions[userId];
+
+                        // If this user's version is newer than what we last saw
+                        if (!currentVersion || currentVersion < presence.pageStructureVersion) {
+                            this.otherUserVersions[userId] = presence.pageStructureVersion;
+
+                            // Another user made a page structure change
+                            this.handlePageStructureChange(presence);
+                        }
+                    }
+                });
             })
         ];
 
@@ -176,7 +199,9 @@ export class LiveSyncClient {
             userId: this.userId,
             userName: window.Registry?.getUsername() || this.userId,
             cursor: null,
-            pageIdx: this.app.state.idx
+            pageIdx: this.app.state.idx,
+            pageStructureVersion: Date.now(),
+            pageCount: this.app.state.images.length
         });
 
         this.renderUsers();
@@ -191,7 +216,9 @@ export class LiveSyncClient {
             tool: tool,
             isDrawing: isDrawing,
             color: color,
-            size: size
+            size: size,
+            pageStructureVersion: Date.now(),
+            pageCount: this.app.state.images.length
         });
     }
 
@@ -257,6 +284,20 @@ export class LiveSyncClient {
                 return;
             }
 
+            // Check for page structure changes from this user
+            if (presence.pageStructureVersion !== undefined && presence.pageCount !== undefined) {
+                const userId = user.connectionId || user.id;
+                const currentVersion = this.otherUserVersions[userId];
+
+                // If this user's version is newer than what we last saw
+                if (!currentVersion || currentVersion < presence.pageStructureVersion) {
+                    this.otherUserVersions[userId] = presence.pageStructureVersion;
+
+                    // Another user made a page structure change
+                    this.handlePageStructureChange(presence);
+                }
+            }
+
             // --- Draw Live Trail ---
             if (presence.isDrawing && presence.tool === 'pen') {
                 hasActiveTrails = true;
@@ -281,7 +322,7 @@ export class LiveSyncClient {
                     ctx.lineCap = 'round';
                     ctx.lineJoin = 'round';
                     ctx.lineWidth = (presence.size || 3);
-                    
+
                     // Smooth transition: Use user's color with opacity
                     const hex = presence.color || '#000000';
                     let r=0, g=0, b=0;
@@ -295,7 +336,7 @@ export class LiveSyncClient {
                         b = parseInt(hex.slice(5,7), 16);
                     }
                     ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
-                    
+
                     ctx.stroke();
                     ctx.restore();
                 }
@@ -312,7 +353,7 @@ export class LiveSyncClient {
             // x_screen = (x_internal * zoom + pan) * (screen_width / internal_width)
             const scaleX = rect.width / this.app.state.viewW;
             const scaleY = rect.height / this.app.state.viewH;
-            
+
             const x = (presence.cursor.x * this.app.state.zoom + this.app.state.pan.x) * scaleX;
             const y = (presence.cursor.y * this.app.state.zoom + this.app.state.pan.y) * scaleY;
 
@@ -506,5 +547,155 @@ export class LiveSyncClient {
     updateColors(colors) {
         const project = this.getProject();
         if (project) project.set("colors", new LiveList(colors || []));
+    }
+
+    // Add new page to remote storage
+    addPage(pageIndex, pageData) {
+        const project = this.getProject();
+        if (!project) return;
+
+        const pagesHistory = project.get("pagesHistory");
+        const key = pageIndex.toString();
+
+        // Initialize with empty history for the new page
+        pagesHistory.set(key, new LiveList([]));
+
+        // Update page count in metadata
+        const currentMetadata = project.get("metadata").toObject();
+        project.get("metadata").update({
+            pageCount: Math.max(currentMetadata.pageCount, pageIndex + 1)
+        });
+    }
+
+    // Reorder pages in remote storage
+    reorderPages(fromIndex, toIndex) {
+        const project = this.getProject();
+        if (!project) return;
+
+        const pagesHistory = project.get("pagesHistory");
+        const fromKey = fromIndex.toString();
+        const toKey = toIndex.toString();
+
+        // Get the histories to swap
+        const fromHistory = pagesHistory.get(fromKey);
+        const toHistory = pagesHistory.get(toKey);
+
+        // If 'to' page doesn't exist, create empty history
+        if (!toHistory) {
+            pagesHistory.set(toKey, new LiveList([]));
+        }
+
+        // Swap histories
+        if (fromHistory) {
+            const fromArray = fromHistory.toArray();
+            const toArray = toHistory ? toHistory.toArray() : [];
+
+            pagesHistory.set(fromKey, new LiveList(toArray));
+            pagesHistory.set(toKey, new LiveList(fromArray));
+        } else {
+            pagesHistory.set(fromKey, new LiveList([]));
+        }
+    }
+
+    // Update page count in metadata
+    updatePageCount(count) {
+        const project = this.getProject();
+        if (project) {
+            project.get("metadata").update({ pageCount: count });
+        }
+    }
+
+    // Notify other users about page structure changes using presence
+    notifyPageStructureChange() {
+        // Update presence with a timestamp to notify other users of changes
+        if (this.room) {
+            this.room.updatePresence({
+                pageStructureVersion: Date.now(),
+                pageCount: this.app.state.images.length,
+                pageIdx: this.app.state.idx
+            });
+        }
+    }
+
+    // Handle page structure change notifications from other users
+    handlePageStructureChange(message) {
+        // Refresh the page structure from the server
+        console.log('Received page structure change notification, refreshing pages...');
+
+        // Update the page count in local state
+        if (this.app.state.images.length !== message.pageCount) {
+            // Reload the session pages to get the new structure
+            this.app.loadSessionPages(this.app.state.sessionId).then(() => {
+                // Update the page total display
+                const pt = this.app.getElement('pageTotal');
+                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+                // Update the page input if needed
+                const pageInput = this.app.getElement('pageInput');
+                if (pageInput) pageInput.value = this.app.state.idx + 1;
+
+                // Update the sidebar if it's showing pages
+                if (this.app.state.activeSideTab === 'pages') {
+                    this.app.renderPageSidebar();
+                }
+
+                // If the current page index is out of bounds, adjust it
+                if (this.app.state.idx >= this.app.state.images.length) {
+                    this.app.state.idx = Math.max(0, this.app.state.images.length - 1);
+                    if (this.app.state.idx >= 0) {
+                        this.app.loadPage(this.app.state.idx, false);
+                    }
+                }
+
+                // Update session metadata
+                this.app.dbGet('sessions', this.app.state.sessionId).then(session => {
+                    if (session) {
+                        session.pageCount = this.app.state.images.length;
+                        this.app.dbPut('sessions', session);
+                    }
+                });
+            });
+        }
+    }
+
+    // Handle page structure change notifications from other users
+    handlePageStructureChange(message) {
+        // Refresh the page structure from the server
+        console.log('Received page structure change notification, refreshing pages...');
+
+        // Update the page count in local state
+        if (this.app.state.images.length !== message.pageCount) {
+            // Reload the session pages to get the new structure
+            this.app.loadSessionPages(this.app.state.sessionId).then(() => {
+                // Update the page total display
+                const pt = this.app.getElement('pageTotal');
+                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+                // Update the page input if needed
+                const pageInput = this.app.getElement('pageInput');
+                if (pageInput) pageInput.value = this.app.state.idx + 1;
+
+                // Update the sidebar if it's showing pages
+                if (this.app.state.activeSideTab === 'pages') {
+                    this.app.renderPageSidebar();
+                }
+
+                // If the current page index is out of bounds, adjust it
+                if (this.app.state.idx >= this.app.state.images.length) {
+                    this.app.state.idx = Math.max(0, this.app.state.images.length - 1);
+                    if (this.app.state.idx >= 0) {
+                        this.app.loadPage(this.app.state.idx, false);
+                    }
+                }
+
+                // Update session metadata
+                this.app.dbGet('sessions', this.app.state.sessionId).then(session => {
+                    if (session) {
+                        session.pageCount = this.app.state.images.length;
+                        this.app.dbPut('sessions', session);
+                    }
+                });
+            });
+        }
     }
 }

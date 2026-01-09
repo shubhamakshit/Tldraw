@@ -30,7 +30,14 @@ export class ColorRmApp {
             clipboardBox: [],
             ownerId: null, pageLocked: false,
             selectedSessions: new Set(), isMultiSelect: false, showCursors: true,
-            zoom: 1, pan: { x: 0, y: 0 }
+            zoom: 1, pan: { x: 0, y: 0 },
+            // Eraser options
+            eraserOptions: {
+                scribble: true,
+                text: true,
+                shapes: true,
+                images: false
+            }
         };
 
         this.cache = {
@@ -256,7 +263,38 @@ export class ColorRmApp {
             return;
         }
 
-        const item = this.state.images[i];
+        let item = this.state.images[i];
+        if (!item) {
+            console.warn(`Page ${i} missing from state. Skipping loadPage.`);
+            return;
+        }
+
+        // If the page doesn't have a blob, try to fetch it from the backend
+        if (!item.blob && this.config.collaborative && this.state.ownerId) {
+            try {
+                const response = await fetch(window.Config?.apiUrl(`/api/color_rm/page_file/${this.state.sessionId}/${i}`) || `/api/color_rm/page_file/${this.state.sessionId}/${i}`);
+                if (response.ok) {
+                    const blob = await response.blob();
+                    item.blob = blob;
+                    // Update the database with the fetched blob
+                    await this.dbPut('pages', item);
+                } else {
+                    console.warn(`Page ${i} not found on backend. Attempting to fetch from base file...`);
+                    // If page not found, try to get base file (first page)
+                    if (i === 0) {
+                        const baseResponse = await fetch(window.Config?.apiUrl(`/api/color_rm/base_file/${this.state.sessionId}`) || `/api/color_rm/base_file/${this.state.sessionId}`);
+                        if (baseResponse.ok) {
+                            const blob = await baseResponse.blob();
+                            item.blob = blob;
+                            await this.dbPut('pages', item);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error(`Error fetching page ${i} from backend:`, err);
+            }
+        }
+
         if (!item || !item.blob) {
             console.warn(`Page ${i} missing blob data. Skipping loadPage.`);
             return;
@@ -318,3 +356,9 @@ Object.assign(ColorRmApp.prototype, ColorRmInput);
 Object.assign(ColorRmApp.prototype, ColorRmUI);
 Object.assign(ColorRmApp.prototype, ColorRmSession);
 Object.assign(ColorRmApp.prototype, ColorRmExport);
+
+// Ensure the app instance has access to export methods for other modules
+ColorRmApp.prototype.sanitizeFilename = ColorRmExport.sanitizeFilename;
+
+// The methods are already properly mixed in via Object.assign, so no need to rebind them
+// The functions are already bound to the prototype correctly

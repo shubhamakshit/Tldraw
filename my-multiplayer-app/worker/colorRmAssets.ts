@@ -71,3 +71,76 @@ export async function handleColorRmDelete(request: IRequest, env: Env) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500 })
     }
 }
+
+// New functions to handle page image uploads/downloads
+export async function handleColorRmPageUpload(request: IRequest, env: Env) {
+    const { roomId, pageIndex } = request.params
+    if (!roomId || !pageIndex) {
+        return new Response('Missing roomId or pageIndex', { status: 400 })
+    }
+
+    if (!request.body) {
+        return new Response('Missing request body', { status: 400 })
+    }
+
+    const objectKey = `color_rm/pages/${roomId}/${pageIndex}`
+    const projectName = request.headers.get('x-project-name') ? decodeURIComponent(request.headers.get('x-project-name')!) : 'ColorRM Project'
+
+    try {
+        await env.TLDRAW_BUCKET.put(objectKey, request.body, {
+            httpMetadata: request.headers,
+            customMetadata: { name: projectName, pageIndex: pageIndex }
+        })
+        return new Response('Page upload successful', { status: 200 })
+    } catch (e: any) {
+        console.error('Error uploading color_rm page file:', e)
+        return new Response('Error during page upload', { status: 500 })
+    }
+}
+
+export async function handleColorRmPageDownload(request: IRequest, env: Env) {
+    const { roomId, pageIndex } = request.params
+    if (!roomId || !pageIndex) {
+        return new Response('Missing roomId or pageIndex', { status: 400 })
+    }
+
+    const objectKey = `color_rm/pages/${roomId}/${pageIndex}`
+
+    try {
+        const obj = await env.TLDRAW_BUCKET.get(objectKey)
+
+        if (!obj) {
+            return new Response('Page file not found', { status: 404 })
+        }
+
+        const headers = new Headers()
+        obj.writeHttpMetadata(headers)
+        headers.set('etag', obj.httpEtag)
+
+        return new Response(obj.body, { headers })
+    } catch (e: any) {
+        console.error('Error downloading color_rm page file:', e)
+        return new Response('Error during page download', { status: 500 })
+    }
+}
+
+export async function handleColorRmPageDelete(request: IRequest, env: Env) {
+    const { roomId, pageIndex } = request.params
+    if (!roomId || !pageIndex) {
+        return new Response('Missing roomId or pageIndex', { status: 400 })
+    }
+
+    const objectKey = `color_rm/pages/${roomId}/${pageIndex}`
+
+    try {
+        await env.TLDRAW_BUCKET.delete(objectKey)
+        console.log('Deleted color_rm page file:', objectKey)
+        return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    } catch (e: any) {
+        console.error('Error deleting color_rm page file:', e)
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 })
+    }
+}

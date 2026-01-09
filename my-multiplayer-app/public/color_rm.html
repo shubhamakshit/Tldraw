@@ -21,14 +21,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
     
-    <!-- Initialize App namespace if not already defined -->
-    
-
     <style>
         :root {
             --bg-body: #000000; --bg-panel: #000000; --bg-surface: #111111;
             --primary: #ffffff; --accent: #0070f3; --text-main: #ffffff; --text-muted: #888888;
-            --text: var(--text-main); /* compat for splitview-simple.js */
+            --text: var(--text-main);
             --border: #333333; --glass: rgba(0, 0, 0, 0.9);
             --menu-bg: #000000;
             --success: #0070f3;
@@ -56,8 +53,9 @@
         .btn-icon { width: 32px; height: 32px; justify-content: center; padding: 0; }
         
         /* Sidebar Tabs */
-        .sb-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
-        .sb-tab { flex: 1; padding: 14px; text-align: center; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; border-bottom: 1px solid transparent; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; transition: 0.2s; }
+        .sb-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg-panel); flex-shrink: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; }
+        .sb-tabs::-webkit-scrollbar { display: none; }
+        .sb-tab { flex: 1 0 auto; min-width: 80px; padding: 14px; text-align: center; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; border-bottom: 1px solid transparent; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; transition: 0.2s; white-space: nowrap; }
         .sb-tab:hover { color: white; }
         .sb-tab.active { color: white; border-bottom-color: white; }
 
@@ -120,9 +118,37 @@
         .shape-btn.active { background: #fff; color: #000; border-color: #fff; }
 
         header { height: 56px; background: var(--bg-panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; z-index: 50; flex-shrink: 0; }
+        
         .workspace { display: flex; flex: 1; overflow: hidden; position: relative; }
-        .sidebar { width: 280px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 40; height: 100%; }
-        .sidebar-content { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 24px; }
+
+        /* Sidebar Base */
+        .sidebar { 
+            width: 280px; 
+            background: var(--bg-panel); 
+            border-left: 1px solid var(--border); 
+            display: flex; 
+            flex-direction: column; 
+            z-index: 40; 
+            height: 100%; 
+            position: relative;
+            min-width: 200px;
+            max-width: 60vw;
+        }
+
+        .sidebar-content {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            min-height: 0;
+        }
+
+        .sb-page-grid, .box-grid { overflow-x: auto; padding-bottom: 8px; min-width: 0; }
+        .sb-page-item, .box-item { flex-shrink: 0; min-width: 60px; min-height: 60px; }
+        .sb-page-grid, .sb-page-list { min-width: 100%; }
+        
         .sidebar-footer { padding: 16px; border-top: 1px solid var(--border); display: grid; gap: 8px; background: #000; flex-shrink: 0; }
         .control-section { display: flex; flex-direction: column; gap: 12px; }
         .control-section h4 { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); margin: 0; letter-spacing: 0.1em; font-weight: 700; }
@@ -216,10 +242,80 @@
         /* Navigation Island */
         .nav-island { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); background:#000; padding:6px 12px; border-radius:8px; border:1px solid #333; display:flex; gap:12px; align-items:center; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
 
-        @media (max-width: 900px) { 
-            .workspace { flex-direction: column-reverse; } 
-            .sidebar { width: 100%; height: 45vh; border-left: none; border-top: 1px solid var(--border); } 
-            .viewport { height: 55vh; } 
+        /* --- Resizer Styles --- */
+        /* Desktop: Resizer on the Right Edge */
+        .resize-handle-side {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 14px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            transition: background 0.2s;
+        }
+
+        .resize-handle-side:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .resize-handle-side::after {
+            content: "⋮";
+            color: #555;
+            font-size: 14px;
+            font-weight: bold;
+            pointer-events: none;
+        }
+
+        /* Mobile: Resizer on the Top Edge (because sidebar is at bottom) */
+        .resize-handle-top {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 18px;
+            cursor: row-resize;
+            z-index: 100;
+            display: none; /* Hidden on desktop */
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            border-top: 1px solid var(--border);
+        }
+
+        .resize-handle-top::after {
+            content: "···";
+            color: #555;
+            font-size: 20px;
+            font-weight: bold;
+            letter-spacing: -1px;
+            margin-top: -6px;
+            pointer-events: none;
+        }
+
+        @media (max-width: 900px) {
+            .workspace { flex-direction: column-reverse; }
+            .sidebar { 
+                width: 100% !important; 
+                height: 45vh; 
+                min-height: 20vh;
+                max-height: 80vh;
+                border-left: none; 
+                border-top: none;
+                min-width: 100%;
+            }
+            .resize-handle-side {
+                display: none; 
+            }
+            .resize-handle-top {
+                display: flex; 
+            }
+            .viewport { height: auto; flex: 1; }
         }
 
         /* Hide Input Number Spinner */
@@ -460,7 +556,13 @@
     </header>
 
     <div class="workspace">
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
+            <!-- Desktop: Right Edge Handle -->
+            <div class="resize-handle-side" id="resizerSide"></div>
+            
+            <!-- Mobile: Top Edge Handle -->
+            <div class="resize-handle-top" id="resizerTop"></div>
+
             <!-- Sidebar Tabs -->
             <div class="sb-tabs">
                 <div class="sb-tab active" id="tabTools" onclick="window.App.switchSideTab('tools')">Tools</div>
@@ -486,6 +588,31 @@
                         <button class="btn tool-btn" id="toolEraser" onclick="App.setTool('eraser')"><i class="bi bi-eraser"></i> Erase (E)</button>
                         <button class="btn tool-btn" id="toolCapture" onclick="App.setTool('capture')" style="border-color:#444;"><i class="bi bi-plus-square-dotted"></i> Box (B)</button>
                     </div>
+
+                    <!-- Eraser Options Panel -->
+                    <div id="eraserOptions" style="display:none; padding:10px; background:rgba(0,0,0,0.2); border-radius:8px; margin-top:8px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                            <span style="font-size:0.8rem; color:#aaa">Erase Specific Types</span>
+                            <label class="switch" style="transform:scale(0.8)">
+                                <input type="checkbox" id="strokeEraserToggle" onchange="App.setEraserMode(this.checked)">
+                                <span class="slider-switch"></span>
+                            </label>
+                        </div>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="eraseScribble" checked onchange="App.setEraseOption('scribble', this.checked)"> Scribble
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="eraseText" checked onchange="App.setEraseOption('text', this.checked)"> Text
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="eraseShapes" checked onchange="App.setEraseOption('shapes', this.checked)"> Shapes
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="eraseImages" onchange="App.setEraseOption('images', this.checked)"> Images
+                            </label>
+                        </div>
+                    </div>
                     
                     <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; padding:12px; border:1px solid #222; border-radius:6px; background:#0a0a0a;">
                         <span style="font-size:0.75rem; color:#888; font-weight:600; text-transform:uppercase;">Preview</span>
@@ -502,6 +629,7 @@
                             <span class="slider-switch"></span>
                         </label>
                     </div>
+
 
                     <!-- Settings Panel -->
                     <div id="toolSettingsPanel" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; margin-bottom:10px; display:none;">
@@ -526,16 +654,6 @@
                             <div style="display:flex; justify-content:space-between; margin-top:5px;">
                                 <button class="btn btn-sm" onclick="App.openPicker('shapeBorder')">Border</button>
                                 <button class="btn btn-sm" onclick="App.openPicker('shapeFill')">Fill</button>
-                            </div>
-                        </div>
-
-                        <div id="eraserOptions" style="display:none;">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <span style="font-size:0.8rem; color:#aaa">Stroke Eraser</span>
-                                <label class="switch" style="transform:scale(0.8)">
-                                    <input type="checkbox" id="strokeEraserToggle" onchange="App.setEraserMode(this.checked)">
-                                    <span class="slider-switch"></span>
-                                </label>
                             </div>
                         </div>
 
@@ -583,7 +701,145 @@
 
             <!-- Pages Panel -->
             <div class="sidebar-content" id="panelPages" style="display:none">
+                <div class="control-section">
+                    <h4><i class="bi bi-files"></i> Page Management</h4>
+
+                    <!-- Page Addition Controls -->
+                    <div class="page-controls" style="display:flex; flex-direction:column; gap:12px;">
+                        <!-- Blank Page Controls -->
+                        <div class="control-group">
+                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                                <i class="bi bi-file-earmark-plus" style="color:#888;"></i>
+                                <span style="font-size:0.8rem; color:#888; font-weight:600;">ADD BLANK PAGE</span>
+                            </div>
+
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" style="flex:1; justify-content:center;" onclick="window.App.addBlankPage(800, 600, false)">
+                                    <i class="bi bi-file-plus"></i> At End
+                                </button>
+                                <button class="btn btn-sm" style="flex:1; justify-content:center;" onclick="window.App.addBlankPage(800, 600, true)">
+                                    <i class="bi bi-file-earmark-medical"></i> After Current
+                                </button>
+                            </div>
+
+                            <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+                                <label style="font-size:0.75rem; color:#888; white-space:nowrap;">BG Color:</label>
+                                <input type="color" id="blankPageColor" value="#ffffff" style="width:32px; height:32px; border:1px solid #333; border-radius:4px; background:none; cursor:pointer;">
+                                <div style="display:flex; gap:4px; flex:1;">
+                                    <div class="color-swatch" style="width:20px; height:20px; border:1px solid #333; border-radius:2px; background:#ffffff; cursor:pointer;" onclick="document.getElementById('blankPageColor').value='#ffffff';"></div>
+                                    <div class="color-swatch" style="width:20px; height:20px; border:1px solid #333; border-radius:2px; background:#000000; cursor:pointer;" onclick="document.getElementById('blankPageColor').value='#000000';"></div>
+                                    <div class="color-swatch" style="width:20px; height:20px; border:1px solid #333; border-radius:2px; background:#ffffcc; cursor:pointer;" onclick="document.getElementById('blankPageColor').value='#ffffcc';"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Image Page Controls -->
+                        <div class="control-group">
+                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                                <i class="bi bi-image" style="color:#888;"></i>
+                                <span style="font-size:0.8rem; color:#888; font-weight:600;">ADD IMAGE PAGE</span>
+                            </div>
+
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" style="flex:1; justify-content:center;" onclick="document.getElementById('addImagePageInput').click()">
+                                    <i class="bi bi-cloud-upload"></i> Upload (End)
+                                </button>
+                                <button class="btn btn-sm" style="flex:1; justify-content:center;" onclick="document.getElementById('addImagePageInputCurrent').click()">
+                                    <i class="bi bi-plus-circle"></i> Insert (After Current)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Template Controls -->
+                        <div class="control-group">
+                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                                <i class="bi bi-layout-wtf" style="color:#888;"></i>
+                                <span style="font-size:0.8rem; color:#888; font-weight:600;">TEMPLATES</span>
+                            </div>
+
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:#ffffff; color:#000;" onclick="window.App.addTemplatePage('white')">
+                                    <i class="bi bi-square"></i> White
+                                </button>
+                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:linear-gradient(45deg, #eee 25%, transparent 25%), linear-gradient(-45deg, #eee 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #eee 75%), linear-gradient(-45deg, transparent 75%, #eee 75%); background-size:20px 20px; background-position:0 0, 0 10px, 10px -10px, -10px 0px;" onclick="window.App.addTemplatePage('graph')">
+                                    <i class="bi bi-grid"></i> Graph
+                                </button>
+                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:repeating-linear-gradient(0deg, transparent, transparent 19px, #eee 19px, #eee 20px);" onclick="window.App.addTemplatePage('lined')">
+                                    <i class="bi bi-text-center"></i> Lined
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Page Management Controls -->
+                        <div class="control-group">
+                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                                <i class="bi bi-gear" style="color:#888;"></i>
+                                <span style="font-size:0.8rem; color:#888; font-weight:600;">PAGE MANAGEMENT</span>
+                            </div>
+
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:#dc2626; color:white;" onclick="window.App.deleteCurrentPage()">
+                                    <i class="bi bi-trash"></i> Delete Current
+                                </button>
+                                <button class="btn btn-sm" style="flex:1; justify-content:center;" onclick="window.App.showPageSizeModal()">
+                                    <i class="bi bi-aspect-ratio"></i> Set Page Size
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <input type="file" id="addImagePageInput" accept="image/*" style="display:none" onchange="window.App.handleImagePageUpload(event, false)">
+                    <input type="file" id="addImagePageInputCurrent" accept="image/*" style="display:none" onchange="window.App.handleImagePageUpload(event, true)">
+                </div>
+
                 <div id="sbPageList" class="sb-page-grid"></div>
+
+                <!-- Page Size Modal -->
+                <div id="pageSizeModal" class="overlay" style="display:none; z-index:300;">
+                    <div class="card" style="max-width:450px; width:90%; background:var(--bg-panel); border:1px solid var(--border);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; padding-bottom:10px; border-bottom:1px solid var(--border);">
+                            <h3 style="margin:0; color:white; font-size:1.1rem;">Page Size</h3>
+                            <button onclick="document.getElementById('pageSizeModal').style.display='none'" style="background:var(--bg); border:1px solid var(--border); color:#888; cursor:pointer; width:32px; height:32px; border-radius:4px; display:flex; align-items:center; justify-content:center;">×</button>
+                        </div>
+
+                        <div style="margin-bottom:15px;">
+                            <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:8px; font-weight:600;">Standard Sizes</label>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" style="padding:6px 10px; font-size:0.75rem;" onclick="window.App.setPageSize(800, 600)">800×600</button>
+                                <button class="btn btn-sm" style="padding:6px 10px; font-size:0.75rem;" onclick="window.App.setPageSize(1024, 768)">1024×768</button>
+                                <button class="btn btn-sm" style="padding:6px 10px; font-size:0.75rem;" onclick="window.App.setPageSize(1200, 900)">1200×900</button>
+                                <button class="btn btn-sm" style="padding:6px 10px; font-size:0.75rem;" onclick="window.App.setPageSize(1600, 1200)">1600×1200</button>
+                                <button class="btn btn-sm" style="padding:6px 10px; font-size:0.75rem;" onclick="window.App.setPageSize(2000, 1500)">2000×1500</button>
+                                <button class="btn btn-sm" style="padding:6px 10px; font-size:0.75rem;" onclick="window.App.setPageSize(2480, 3508)">A4 (2480×3508)</button>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom:15px;">
+                            <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:8px; font-weight:600;">Custom Size</label>
+                            <div style="display:flex; gap:8px; align-items:end;">
+                                <div style="flex:1;">
+                                    <label style="display:block; font-size:0.7rem; color:var(--text-muted); margin-bottom:4px;">Width</label>
+                                    <input type="number" id="pageWidthInput" placeholder="Width" class="opt-input" style="width:100%; padding:8px;">
+                                </div>
+                                <div style="font-size:1.2rem; color:#666; display:flex; align-items:center; height:36px;">×</div>
+                                <div style="flex:1;">
+                                    <label style="display:block; font-size:0.7rem; color:var(--text-muted); margin-bottom:4px;">Height</label>
+                                    <input type="number" id="pageHeightInput" placeholder="Height" class="opt-input" style="width:100%; padding:8px;">
+                                </div>
+                                <button class="btn btn-sm" style="padding:8px 12px;" onclick="window.App.setCustomPageSize()">Set</button>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom:15px;">
+                            <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:8px; font-weight:600;">Preview</label>
+                            <div id="pageSizePreview" style="background:var(--bg); border:1px solid var(--border); border-radius:4px; height:150px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden;">
+                                <div id="pagePreview" style="background:#fff; box-shadow:0 0 0 1px #ddd; transition:all 0.2s; border-radius:2px;"></div>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary" style="width:100%; padding:10px;" onclick="window.App.applyPageSizeToAll()">Apply to All Pages</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Box / Clipboard Panel -->
@@ -737,7 +993,7 @@
                     </div>
                 </div>
 
-                <div class="control-section" style="margin-top:auto;">
+                <div class="control-section" style="margin-top:auto; overflow:hidden;">
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
                         <button class="btn btn-outline" style="justify-content:center; font-size:0.7rem; padding:10px;" onclick="window.App.render()">Redraw</button>
                         <button class="btn btn-outline" style="justify-content:center; font-size:0.7rem; padding:10px;" onclick="window.LiveSync.syncHistory(); window.App.render();">Sync Now</button>
@@ -790,5 +1046,95 @@
     <script type="module" src="./scripts/config.js"></script>
     <script type="module" src="./scripts/Logger.js"></script>
     <script type="module" src="./scripts/main.js"></script>
+
+    <script>
+        // Robust Resizable Sidebar (Desktop & Mobile)
+        document.addEventListener('DOMContentLoaded', () => {
+            const sidebar = document.getElementById('sidebar');
+            const resizerSide = document.getElementById('resizerSide'); // Desktop
+            const resizerTop = document.getElementById('resizerTop');   // Mobile
+
+            if (!sidebar) return;
+
+            let isResizing = false;
+            let startVal = 0;   // Start X or Y
+            let startSize = 0;  // Start Width or Height
+
+            // Desktop Horizontal Resize
+            if (resizerSide) {
+                const handlePointerDown = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    isResizing = true;
+
+                    const startX = e.clientX;
+                    const startWidth = sidebar.getBoundingClientRect().width;
+
+                    const handlePointerMove = (ev) => {
+                        if (!isResizing) return;
+                        ev.preventDefault();
+
+                        const diff = ev.clientX - startX;
+                        const newWidth = Math.max(200, Math.min(window.innerWidth * 0.6, startWidth + diff));
+                        sidebar.style.width = newWidth + 'px';
+                    };
+
+                    const handlePointerUp = () => {
+                        isResizing = false;
+                        document.removeEventListener('pointermove', handlePointerMove);
+                        document.removeEventListener('pointerup', handlePointerUp);
+                        document.body.style.userSelect = '';
+                        document.body.style.cursor = '';
+                    };
+
+                    document.body.style.userSelect = 'none';
+                    document.body.style.cursor = 'col-resize';
+                    document.addEventListener('pointermove', handlePointerMove, { passive: false });
+                    document.addEventListener('pointerup', handlePointerUp);
+                };
+
+                resizerSide.addEventListener('pointerdown', handlePointerDown);
+            }
+
+            // Mobile Vertical Resize
+            if (resizerTop) {
+                const handlePointerDown = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    isResizing = true;
+
+                    const startY = e.clientY;
+                    const startHeight = sidebar.getBoundingClientRect().height;
+
+                    const handlePointerMove = (ev) => {
+                        if (!isResizing) return;
+                        ev.preventDefault();
+
+                        const diff = startY - ev.clientY;
+                        const minH = window.innerHeight * 0.2;
+                        const maxH = window.innerHeight * 0.8;
+                        const newHeight = Math.max(minH, Math.min(maxH, startHeight + diff));
+                        sidebar.style.height = newHeight + 'px';
+                    };
+
+                    const handlePointerUp = () => {
+                        isResizing = false;
+                        document.removeEventListener('pointermove', handlePointerMove);
+                        document.removeEventListener('pointerup', handlePointerUp);
+                        document.body.style.userSelect = '';
+                        document.body.style.cursor = '';
+                    };
+
+                    document.body.style.userSelect = 'none';
+                    document.body.style.cursor = 'row-resize';
+                    document.addEventListener('pointermove', handlePointerMove, { passive: false });
+                    document.addEventListener('pointerup', handlePointerUp);
+                };
+
+                resizerTop.addEventListener('pointerdown', handlePointerDown);
+            }
+        });
+    </script>
 </body>
 </html> 
+

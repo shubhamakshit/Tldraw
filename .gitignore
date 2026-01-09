@@ -1,2 +1,4 @@
 my-multiplayer-app/cmd/hf_backup.mjs
 my-multiplayer-app/cmd/install_favicons.ps1
+termux-fix.js
+termux-fix.cjs

@@ -24,6 +24,28 @@ export const ColorRmInput = {
         const eo = this.getElement('eraserOptions');
         if(eo) eo.style.display = t==='eraser'?'block':'none';
 
+        // Update the checkboxes based on current eraser options
+        if(t==='eraser' && eo) {
+            const options = this.state.eraserOptions || {
+                scribble: true,
+                text: true,
+                shapes: true,
+                images: false
+            };
+
+            const scribbleCb = this.getElement('eraseScribble');
+            const textCb = this.getElement('eraseText');
+            const shapesCb = this.getElement('eraseShapes');
+            const imagesCb = this.getElement('eraseImages');
+            const strokeCb = this.getElement('strokeEraserToggle');
+
+            if(scribbleCb) scribbleCb.checked = options.scribble;
+            if(textCb) textCb.checked = options.text;
+            if(shapesCb) shapesCb.checked = options.shapes;
+            if(imagesCb) imagesCb.checked = options.images;
+            if(strokeCb) strokeCb.checked = (this.state.eraserType === 'stroke');
+        }
+
         const range = this.getElement('brushSize');
         const label = this.getElement('sizeLabel');
         if(label) label.innerText = "Size";
@@ -351,41 +373,134 @@ export const ColorRmInput = {
 
             if(!this.isDragging) return;
 
-            if(this.state.tool==='lasso') { lassoPath.push(pt); this.renderLasso(c.getContext('2d'), lassoPath); }
+            if(this.state.tool==='lasso') {
+                // Add the point to the lasso path (in document coordinates)
+                lassoPath.push(pt);
+
+                // Redraw the canvas to clear previous content and draw the lasso on top
+                this.render();
+
+                // Draw the lasso path on top of the current canvas with proper transforms
+                const ctx = c.getContext('2d');
+                ctx.save();
+                ctx.translate(this.state.pan.x, this.state.pan.y);
+                ctx.scale(this.state.zoom, this.state.zoom);
+
+                ctx.strokeStyle = '#3b82f6';
+                ctx.setLineDash([5, 5]);
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(lassoPath[0].x, lassoPath[0].y);
+
+                for (let i = 1; i < lassoPath.length - 1; i++) {
+                    const xc = (lassoPath[i].x + lassoPath[i + 1].x) / 2;
+                    const yc = (lassoPath[i].y + lassoPath[i + 1].y) / 2;
+                    ctx.quadraticCurveTo(lassoPath[i].x, lassoPath[i].y, xc, yc);
+                }
+
+                ctx.lineTo(lassoPath[lassoPath.length - 1].x, lassoPath[lassoPath.length - 1].y);
+                ctx.stroke();
+
+                ctx.restore();
+            }
             else if(this.state.tool==='shape' || this.state.tool==='capture') {
                 let w=pt.x-startPt.x, h=pt.y-startPt.y;
                 if(this.state.tool==='shape' && (e.shiftKey || ['rectangle','circle'].includes(this.state.shapeType))) { if(e.shiftKey || Math.abs(Math.abs(w)-Math.abs(h))<15) { const s=Math.max(Math.abs(w),Math.abs(h)); w=(w<0?-1:1)*s; h=(h<0?-1:1)*s; } }
+
+                // Update the canvas to show the shape preview during drag
                 this.render();
+
+                // Draw the shape preview on top of the current canvas
+                const ctx = c.getContext('2d');
+                ctx.save();
+
+                // Apply the same transforms as the main render function
+                ctx.translate(this.state.pan.x, this.state.pan.y);
+                ctx.scale(this.state.zoom, this.state.zoom);
+
                 if(this.state.tool === 'capture') {
-                        const ctx = c.getContext('2d'); ctx.save();
-                        ctx.strokeStyle = '#10b981'; ctx.lineWidth = 2; ctx.setLineDash([5,5]);
-                        ctx.strokeRect(startPt.x, startPt.y, w, h); ctx.restore();
+                    ctx.strokeStyle = '#10b981';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([5,5]);
+                    ctx.strokeRect(startPt.x, startPt.y, w, h);
                 } else {
-                    this.renderObject(c.getContext('2d'), {tool:'shape', shapeType:this.state.shapeType, x:startPt.x, y:startPt.y, w:w, h:h, border:this.state.shapeBorder, fill:this.state.shapeFill, width:this.state.shapeWidth});
+                    // Draw the shape preview
+                    this.renderObject(ctx, {
+                        tool:'shape',
+                        shapeType:this.state.shapeType,
+                        x:startPt.x,
+                        y:startPt.y,
+                        w:w,
+                        h:h,
+                        border:this.state.shapeBorder,
+                        fill:this.state.shapeFill,
+                        width:this.state.shapeWidth
+                    });
                 }
+
+                ctx.restore();
             }
             else if(['pen','eraser'].includes(this.state.tool)) {
                 if (this.state.tool === 'eraser' && this.state.eraserType === 'stroke') {
                     const img = this.state.images[this.state.idx];
                     const eraserR = this.state.eraserSize / 2;
                     let changed = false;
+
+                    // Get eraser options, default to all enabled if not set
+                    const options = this.state.eraserOptions || {
+                        scribble: true,
+                        text: true,
+                        shapes: true,
+                        images: false
+                    };
+
                     for (let i = img.history.length - 1; i >= 0; i--) {
                         const st = img.history[i];
                         if (st.locked) continue;
+
                         let hit = false;
+                        let shouldErase = false;
+
                         if (st.tool === 'pen' || st.tool === 'eraser') {
-                            for (const p of st.pts) {
-                                if (Math.hypot(p.x - pt.x, p.y - pt.y) < eraserR + st.size) {
-                                    hit = true; break;
+                            // Check if we should erase scribbles
+                            if (options.scribble) {
+                                for (const p of st.pts) {
+                                    if (Math.hypot(p.x - pt.x, p.y - pt.y) < eraserR + st.size) {
+                                        hit = true; break;
+                                    }
                                 }
                             }
-                        } else if (st.tool === 'shape' || st.tool === 'text') {
-                            if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
-                                pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
-                                hit = true;
+                        } else if (st.tool === 'text') {
+                            // Check if we should erase text
+                            if (options.text) {
+                                if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                    pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
+                                    hit = true;
+                                }
+                            }
+                        } else if (st.tool === 'shape') {
+                            // Check if we should erase shapes
+                            if (options.shapes) {
+                                if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                    pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
+                                    hit = true;
+                                }
+                            }
+                        } else if (st.tool === 'image') {
+                            // Check if we should erase images
+                            if (options.images) {
+                                if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                    pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
+                                    hit = true;
+                                }
                             }
                         }
-                        if (hit) { st.deleted = true; st.lastMod = Date.now(); changed = true; }
+
+                        if (hit) {
+                            st.deleted = true;
+                            st.lastMod = Date.now();
+                            changed = true;
+                        }
                     }
                     if (changed) { this.invalidateCache(); this.scheduleSave(); this.render(); }
                     return;
@@ -499,7 +614,12 @@ export const ColorRmInput = {
                 return;
             }
             this.isDragging=false;
-            
+
+            // Clear pending shape if we were drawing one
+            if (this.pendingShape) {
+                delete this.pendingShape;
+            }
+
             // Send a final update to clear the live trail for other users
             if (this.liveSync) {
                 this.liveSync.updateCursor(getPt(e), this.state.tool, false, this.state.penColor, 0);
@@ -507,20 +627,113 @@ export const ColorRmInput = {
 
             const pt = getPt(e);
             if(this.state.tool==='lasso') {
+                // Calculate bounding box of lasso path
                 let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
                 lassoPath.forEach(p=>{minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y);});
+
                 this.state.selection=[];
+
+                // The lassoPath points are in document coordinates (converted by getPt function)
+                // So we need to compare with object coordinates in document space
                 this.state.images[this.state.idx].history.forEach((st,i)=>{
-                    if(st.locked || st.deleted) return; let cx,cy; if(st.tool==='pen'){cx=st.pts[0].x;cy=st.pts[0].y} else {cx=st.x+st.w/2;cy=st.y+st.h/2}
-                    if(cx>=minX && cx<=maxX && cy>=minY && cy<=maxY) this.state.selection.push(i);
+                    if(st.locked || st.deleted) return;
+
+                    let cx, cy;
+                    if(st.tool==='pen'){
+                        // For pen strokes, use the first point as center
+                        cx = st.pts[0].x;
+                        cy = st.pts[0].y;
+                    } else {
+                        // For other objects, calculate center in document coordinates
+                        cx = st.x + st.w/2;
+                        cy = st.y + st.h/2;
+                    }
+
+                    // Check if the point is within the lasso path using point-in-polygon algorithm
+                    if(this.isPointInPolygon(cx, cy, lassoPath)) {
+                        this.state.selection.push(i);
+                    }
                 });
+
                 syncSidebarToSelection();
                 this.render();
+
+                // Clear the lasso path after selection is complete
+                lassoPath = [];
             } else if(this.state.tool==='shape') {
-                let w=pt.x-startPt.x, h=pt.y-startPt.y;
-                if(Math.abs(w)>2) {
-                    this.state.images[this.state.idx].history.push({id: Date.now() + Math.random(), lastMod: Date.now(), tool:'shape', shapeType:this.state.shapeType, x:startPt.x, y:startPt.y, w:w, h:h, border:this.state.shapeBorder, fill:this.state.shapeFill, width:this.state.shapeWidth, rotation:0});
-                    this.saveCurrentImg(); this.state.selection=[this.state.images[this.state.idx].history.length-1]; this.setTool('lasso'); syncSidebarToSelection();
+                // Calculate width and height from the startPt and current pt
+                let w = pt.x - startPt.x;
+                let h = pt.y - startPt.y;
+
+                if(Math.abs(w)>2 || Math.abs(h)>2) { // Allow for very thin shapes
+                    const newShape = {
+                        id: Date.now() + Math.random(),
+                        lastMod: Date.now(),
+                        tool: 'shape',
+                        shapeType: this.state.shapeType,
+                        x: startPt.x,
+                        y: startPt.y,
+                        w: w,
+                        h: h,
+                        border: this.state.shapeBorder,
+                        fill: this.state.shapeFill,
+                        width: this.state.shapeWidth,
+                        rotation: 0
+                    };
+
+                    this.state.images[this.state.idx].history.push(newShape);
+                    this.saveCurrentImg();
+                    this.state.selection=[this.state.images[this.state.idx].history.length-1];
+                    this.setTool('lasso');
+                    syncSidebarToSelection();
+
+                    // Ensure the shape is rendered immediately for the owner
+                    this.render();
+
+                    // Synchronize with Liveblocks if in collaborative mode
+                    if (this.liveSync) {
+                        this.liveSync.addStroke(this.state.idx, newShape);
+                    }
+                }
+            } else if(this.state.tool==='capture') {
+                // Calculate width and height from the startPt and current pt
+                let w = pt.x - startPt.x;
+                let h = pt.y - startPt.y;
+
+                if(Math.abs(w)>2 || Math.abs(h)>2) { // Allow for very thin shapes
+                    const newShape = {
+                        id: Date.now() + Math.random(),
+                        lastMod: Date.now(),
+                        tool: 'shape',
+                        shapeType: this.state.shapeType,
+                        x: startPt.x,
+                        y: startPt.y,
+                        w: w,
+                        h: h,
+                        border: this.state.shapeBorder,
+                        fill: this.state.shapeFill,
+                        width: this.state.shapeWidth,
+                        rotation: 0
+                    };
+
+                    this.state.images[this.state.idx].history.push(newShape);
+                    this.saveCurrentImg();
+                    this.state.selection=[this.state.images[this.state.idx].history.length-1];
+                    this.setTool('lasso');
+                    syncSidebarToSelection();
+
+                    // Ensure the shape is rendered immediately for the owner
+                    this.render();
+
+                    // Synchronize with Liveblocks if in collaborative mode
+                    if (this.liveSync) {
+                        this.liveSync.addStroke(this.state.idx, newShape);
+                    }
+                }
+
+                // Clear the pending shape if it exists
+                if (this.pendingShape) {
+                    delete this.pendingShape;
                 }
             } else if(this.state.tool==='capture') {
                 let w = pt.x - startPt.x, h = pt.y - startPt.y;
@@ -528,6 +741,11 @@ export const ColorRmInput = {
                 if(h < 0) { startPt.y += h; h = Math.abs(h); }
                 if(w > 5 && h > 5) this.addToBox(startPt.x, startPt.y, w, h);
                 this.render();
+
+                // Clear the pending shape if it was for capture
+                if (this.pendingShape && this.pendingShape.tool === 'capture') {
+                    delete this.pendingShape;
+                }
             } else if(['pen','eraser'].includes(this.state.tool)) {
                 const newStroke = {id: Date.now() + Math.random(), lastMod: Date.now(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize, deleted: false};
                 this.state.images[this.state.idx].history.push(newStroke);
@@ -536,7 +754,115 @@ export const ColorRmInput = {
                     this.liveSync.addStroke(this.state.idx, newStroke);
                 }
                 this.render();
+            } else if (this.state.tool === 'eraser' && this.state.eraserType !== 'stroke') {
+                // Regular eraser (area-based) with options
+                const img = this.state.images[this.state.idx];
+                const eraserR = this.state.eraserSize / 2;
+                let changed = false;
+
+                // Get eraser options, default to all enabled if not set
+                const options = this.state.eraserOptions || {
+                    scribble: true,
+                    text: true,
+                    shapes: true,
+                    images: false
+                };
+
+                for (let i = img.history.length - 1; i >= 0; i--) {
+                    const st = img.history[i];
+                    if (st.locked) continue;
+
+                    let hit = false;
+
+                    if (st.tool === 'pen' || st.tool === 'eraser') {
+                        // Check if we should erase scribbles
+                        if (options.scribble) {
+                            for (const p of st.pts) {
+                                if (Math.hypot(p.x - pt.x, p.y - pt.y) < eraserR + st.size) {
+                                    hit = true; break;
+                                }
+                            }
+                        }
+                    } else if (st.tool === 'text') {
+                        // Check if we should erase text
+                        if (options.text) {
+                            if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
+                                hit = true;
+                            }
+                        }
+                    } else if (st.tool === 'shape') {
+                        // Check if we should erase shapes
+                        if (options.shapes) {
+                            if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
+                                hit = true;
+                            }
+                        }
+                    } else if (st.tool === 'image') {
+                        // Check if we should erase images
+                        if (options.images) {
+                            if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
+                                hit = true;
+                            }
+                        }
+                    }
+
+                    if (hit) {
+                        st.deleted = true;
+                        st.lastMod = Date.now();
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    this.invalidateCache();
+                    this.scheduleSave();
+                    this.render();
+                }
             }
         });
+    },
+
+    setEraseOption(option, checked) {
+        if (!this.state.eraserOptions) {
+            this.state.eraserOptions = {
+                scribble: true,
+                text: true,
+                shapes: true,
+                images: false  // By default, don't erase images
+            };
+        }
+        this.state.eraserOptions[option] = checked;
+        console.log("Eraser options updated:", this.state.eraserOptions);
+        this.saveSessionState();
+    },
+
+    setEraserMode(isStrokeEraser) {
+        if (!this.state.eraserOptions) {
+            this.state.eraserOptions = {
+                scribble: true,
+                text: true,
+                shapes: true,
+                images: false
+            };
+        }
+        this.state.eraserType = isStrokeEraser ? 'stroke' : 'standard';
+        console.log("Eraser mode set to:", this.state.eraserType);
+        this.saveSessionState();
+    },
+
+    // Helper function to determine if a point is inside a polygon using ray casting algorithm
+    isPointInPolygon(x, y, vertices) {
+        let inside = false;
+        for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+            const xi = vertices[i].x, yi = vertices[i].y;
+            const xj = vertices[j].x, yj = vertices[j].y;
+
+            const intersect = ((yi > y) !== (yj > y))
+                && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
     }
 };
