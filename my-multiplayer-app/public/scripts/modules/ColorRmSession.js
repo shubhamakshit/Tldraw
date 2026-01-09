@@ -968,6 +968,16 @@ export const ColorRmSession = {
 
             this.ui.showToast(`Added blank page ${newPageIndex + 1} (Local)`);
         }
+
+        // Update canvas dimensions to match new page size
+        const canvas = this.getElement('canvas');
+        if (canvas) {
+            canvas.width = width;
+            canvas.height = height;
+            // Update the view dimensions as well
+            this.state.viewW = width;
+            this.state.viewH = height;
+        }
     },
 
     async addImageAsPage(file, insertAtCurrent = false) {
@@ -1069,6 +1079,16 @@ export const ColorRmSession = {
             this.liveSync.updatePageCount(this.state.images.length);
             // Update presence to notify other users about the page structure change
             this.liveSync.notifyPageStructureChange();
+        }
+
+        // Update canvas dimensions to match new page size
+        const canvas = this.getElement('canvas');
+        if (canvas) {
+            canvas.width = width;
+            canvas.height = height;
+            // Update the view dimensions as well
+            this.state.viewW = width;
+            this.state.viewH = height;
         }
 
         this.ui.showToast(`Added image as page ${newPageIndex + 1}`);
@@ -1561,6 +1581,16 @@ export const ColorRmSession = {
             this.liveSync.updatePageCount(this.state.images.length);
             // Update presence to notify other users about the page structure change
             this.liveSync.notifyPageStructureChange();
+        }
+
+        // Update canvas dimensions to match new page size
+        const canvas = this.getElement('canvas');
+        if (canvas) {
+            canvas.width = width;
+            canvas.height = height;
+            // Update the view dimensions as well
+            this.state.viewW = width;
+            this.state.viewH = height;
         }
 
         this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1}`);
