@@ -99,25 +99,51 @@ export const ColorRmStorage = {
     // Chunked saving for large blobs on Android
     async saveBlobNativeChunked(blob, filename) {
         try {
-            // Convert blob to base64 in chunks to avoid memory spike
-            const arrayBuffer = await blob.arrayBuffer();
-            const bytes = new Uint8Array(arrayBuffer);
+            if (window.AndroidNative.startFile) {
+                // New Method: True Chunked Transfer
+                const sessionId = Date.now().toString();
+                const actualName = window.AndroidNative.startFile(filename, sessionId);
 
-            // Convert to base64 in chunks
-            let base64 = '';
-            const chunkSize = 32768; // Process 32KB at a time
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                const chunk = bytes.slice(i, Math.min(i + chunkSize, bytes.length));
-                base64 += btoa(String.fromCharCode.apply(null, chunk));
+                if (!actualName) throw new Error("Failed to start file save");
 
-                // Yield to UI every few chunks
-                if (i % (chunkSize * 10) === 0) {
-                    await new Promise(r => setTimeout(r, 0));
+                const arrayBuffer = await blob.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+                const chunkSize = 32768; // 32KB chunks
+
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    const chunk = bytes.slice(i, Math.min(i + chunkSize, bytes.length));
+                    const b64Chunk = btoa(String.fromCharCode.apply(null, chunk));
+                    window.AndroidNative.appendFile(b64Chunk, sessionId);
+
+                    if (i % (chunkSize * 10) === 0) await new Promise(r => setTimeout(r, 0));
+                    this.ui.updateProgress((i / bytes.length) * 100, `Saving ${Math.round((i/bytes.length)*100)}%`);
                 }
-            }
 
-            window.AndroidNative.saveBlob(base64, filename, blob.type);
-            this.ui.showToast("Saved to Downloads");
+                window.AndroidNative.finishFile(sessionId, blob.type);
+                this.ui.showToast("Saved: " + actualName);
+
+            } else {
+                // Fallback: Old method (High Memory)
+                // Convert blob to base64 in chunks to avoid memory spike
+                const arrayBuffer = await blob.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+
+                // Convert to base64 in chunks
+                let base64 = '';
+                const chunkSize = 32768; // Process 32KB at a time
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    const chunk = bytes.slice(i, Math.min(i + chunkSize, bytes.length));
+                    base64 += btoa(String.fromCharCode.apply(null, chunk));
+
+                    // Yield to UI every few chunks
+                    if (i % (chunkSize * 10) === 0) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+
+                window.AndroidNative.saveBlob(base64, filename, blob.type);
+                this.ui.showToast("Saved to Downloads");
+            }
         } catch (e) {
             console.error("Chunked save failed:", e);
             this.ui.showToast("Save failed: " + e.message);
