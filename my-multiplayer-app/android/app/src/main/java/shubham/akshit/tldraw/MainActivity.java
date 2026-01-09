@@ -56,6 +56,10 @@ public class MainActivity extends BridgeActivity {
     private boolean isVolUpPressed = false;
     private boolean isVolDownPressed = false;
 
+    // State for chunked file uploads
+    private final java.util.Map<String, FileOutputStream> pendingFiles = new java.util.HashMap<>();
+    private final java.util.Map<String, File> pendingFilePaths = new java.util.HashMap<>();
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Enable WebView debugging for chrome://inspect
@@ -211,6 +215,79 @@ public class MainActivity extends BridgeActivity {
                         intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
                         startActivity(Intent.createChooser(intent, "Open with..."));
 
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                @JavascriptInterface
+                public String startFile(String filename, String sessionId) {
+                    try {
+                        File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                        File file = new File(path, filename);
+
+                        // Avoid overwrite
+                        int i = 1;
+                        String name = filename;
+                        int dot = filename.lastIndexOf('.');
+                        String ext = dot > -1 ? filename.substring(dot) : "";
+                        String base = dot > -1 ? filename.substring(0, dot) : filename;
+
+                        while (file.exists()) {
+                            file = new File(path, base + "_" + i + ext);
+                            i++;
+                        }
+
+                        FileOutputStream os = new FileOutputStream(file);
+                        pendingFiles.put(sessionId, os);
+                        pendingFilePaths.put(sessionId, file);
+                        return file.getName(); // Return actual filename used
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return null;
+                    }
+                }
+
+                @JavascriptInterface
+                public void appendFile(String base64Chunk, String sessionId) {
+                    try {
+                        FileOutputStream os = pendingFiles.get(sessionId);
+                        if (os != null) {
+                            byte[] data = Base64.decode(base64Chunk, Base64.DEFAULT);
+                            os.write(data);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                @JavascriptInterface
+                public void finishFile(String sessionId, String mimeType) {
+                    try {
+                        FileOutputStream os = pendingFiles.remove(sessionId);
+                        File file = pendingFilePaths.remove(sessionId);
+
+                        if (os != null) {
+                            os.close();
+                        }
+
+                        if (file != null) {
+                            // Index the file
+                            android.media.MediaScannerConnection.scanFile(MainActivity.this,
+                                    new String[]{file.toString()}, null, null);
+
+                            final String savedPath = file.getAbsolutePath();
+                            MainActivity.this.runOnUiThread(() ->
+                                android.widget.Toast.makeText(MainActivity.this, "FILE SAVED: " + savedPath, android.widget.Toast.LENGTH_LONG).show()
+                            );
+
+                            // Notify system & Open
+                            Intent intent = new Intent(Intent.ACTION_VIEW);
+                            Uri uri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".fileprovider", file);
+                            intent.setDataAndType(uri, mimeType);
+                            intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(Intent.createChooser(intent, "Open with..."));
+                        }
                     } catch (Exception e) {
                         e.printStackTrace();
                     }

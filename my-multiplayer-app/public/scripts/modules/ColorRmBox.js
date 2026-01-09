@@ -311,7 +311,8 @@ export const ColorRmBox = {
                     ctx.font = "24px Arial";
                     ctx.textAlign = "center";
                     const labelY = labelPos === 'top' ? y - 10 : y + finalH + 30;
-                    ctx.fillText(this.processTags(labelTxt, {seq, page: pages.length + 1}), x + colW/2, labelY);
+                    // Use item.pageIdx + 1 (original document page) instead of generated sheet page
+                    ctx.fillText(this.processTags(labelTxt, {seq, page: item.pageIdx + 1}), x + colW/2, labelY);
                 }
             }
             currentY += row.height;
