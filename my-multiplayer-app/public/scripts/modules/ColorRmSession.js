@@ -1596,37 +1596,155 @@ export const ColorRmSession = {
         this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1}`);
     },
 
-    reorderPages(fromIndex, toIndex) {
-        if (fromIndex < 0 || toIndex < 0 ||
-            fromIndex >= this.state.images.length ||
-            toIndex >= this.state.images.length) {
-            return;
-        }
+    // Show reorder dialog to allow users to reorder pages
+    async reorderPages() {
+        // Create a modal for page reordering
+        const modal = document.createElement('div');
+        modal.className = 'overlay';
+        modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:300; display:flex; align-items:center; justify-content:center;';
 
-        // Reorder in state
-        const page = this.state.images.splice(fromIndex, 1)[0];
-        this.state.images.splice(toIndex, 0, page);
+        modal.innerHTML = `
+            <div class="card" style="max-width:500px; width:90%; background:var(--bg-panel); border:1px solid var(--border); max-height:80vh; overflow:hidden;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; padding-bottom:10px; border-bottom:1px solid var(--border);">
+                    <h3 style="margin:0; color:white; font-size:1.1rem;">Reorder Pages</h3>
+                    <button id="closeReorderModal" style="background:var(--bg); border:1px solid var(--border); color:#888; cursor:pointer; width:32px; height:32px; border-radius:4px; display:flex; align-items:center; justify-content:center;">×</button>
+                </div>
+                <div id="reorderList" style="max-height:400px; overflow-y:auto; margin-bottom:15px;">
+                    <!-- Pages will be populated here -->
+                </div>
+                <button id="saveOrderBtn" class="btn btn-primary" style="width:100%;">Save Order</button>
+            </div>
+        `;
 
-        // Update page indices
-        this.state.images.forEach((img, idx) => {
-            img.pageIndex = idx;
-            // Update the ID to reflect new index
-            img.id = `${this.state.sessionId}_${idx}`;
+        document.body.appendChild(modal);
+
+        // Populate the reorder list
+        const reorderList = modal.querySelector('#reorderList');
+        this.state.images.forEach((page, idx) => {
+            const item = document.createElement('div');
+            item.className = 'draggable-page';
+            item.style.cssText = 'display:flex; align-items:center; padding:10px; margin:5px 0; background:var(--bg); border:1px solid var(--border); border-radius:4px; cursor:grab;';
+            item.draggable = true;
+            item.dataset.index = idx;
+
+            // Create a small preview of the page
+            const preview = document.createElement('div');
+            preview.style.cssText = 'width:40px; height:40px; background:#333; border-radius:4px; margin-right:10px; display:flex; align-items:center; justify-content:center; font-size:0.7rem; color:#888; overflow:hidden;';
+            preview.textContent = `P${idx + 1}`;
+
+            // Add page info
+            const info = document.createElement('div');
+            info.style.cssText = 'flex:1; margin-right:10px;';
+            info.innerHTML = `<div style="font-weight:600; color:white;">Page ${idx + 1}</div><div style="font-size:0.7rem; color:#888;">${page.history.length} items</div>`;
+
+            // Add drag handle
+            const handle = document.createElement('div');
+            handle.style.cssText = 'color:#888; cursor:grab;';
+            handle.innerHTML = '<i class="bi bi-grip-vertical"></i>';
+
+            item.appendChild(preview);
+            item.appendChild(info);
+            item.appendChild(handle);
+            reorderList.appendChild(item);
         });
 
-        // Update database
-        const promises = this.state.images.map(img => this.dbPut('pages', img));
-        Promise.all(promises).then(() => {
-            this.ui.showToast("Pages reordered");
-            if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
+        // Add drag and drop functionality
+        let draggedItem = null;
 
-            // Synchronize with Liveblocks
-            if (this.liveSync) {
-                // Update the page count in metadata
-                this.liveSync.updatePageCount(this.state.images.length);
-                // Update presence to notify other users about the page structure change
-                this.liveSync.notifyPageStructureChange();
+        document.querySelectorAll('.draggable-page').forEach(item => {
+            item.addEventListener('dragstart', e => {
+                draggedItem = item;
+                item.style.opacity = '0.5';
+                item.classList.add('dragging');
+            });
+
+            item.addEventListener('dragend', e => {
+                item.style.opacity = '1';
+                item.classList.remove('dragging');
+                draggedItem = null;
+            });
+        });
+
+        reorderList.addEventListener('dragover', e => {
+            e.preventDefault();
+            const afterElement = getDragAfterElement(reorderList, e.clientY);
+            const draggable = document.querySelectorAll('.draggable-page')[0];
+            if (afterElement == null) {
+                reorderList.appendChild(draggedItem);
+            } else {
+                reorderList.insertBefore(draggedItem, afterElement);
             }
         });
+
+        function getDragAfterElement(container, y) {
+            const draggableElements = [...container.querySelectorAll('.draggable-page:not(.dragging)')];
+
+            return draggableElements.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else {
+                    return closest;
+                }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }
+
+        // Close modal
+        modal.querySelector('#closeReorderModal').addEventListener('click', () => {
+            document.body.removeChild(modal);
+        });
+
+        // Save order
+        modal.querySelector('#saveOrderBtn').addEventListener('click', () => {
+            // Get the new order
+            const newOrder = Array.from(reorderList.children).map(child => parseInt(child.dataset.index));
+
+            // Reorder the pages in state
+            const newImages = [];
+            newOrder.forEach(newIndex => {
+                newImages.push(this.state.images[newIndex]);
+            });
+
+            // Update page indices
+            newImages.forEach((img, idx) => {
+                img.pageIndex = idx;
+                img.id = `${this.state.sessionId}_${idx}`;
+            });
+
+            this.state.images = newImages;
+
+            // Update database
+            const promises = this.state.images.map(img => this.dbPut('pages', img));
+            Promise.all(promises).then(() => {
+                this.ui.showToast("Pages reordered");
+                if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
+
+                // Synchronize with Liveblocks
+                if (this.liveSync) {
+                    // Update the page count in metadata
+                    this.liveSync.updatePageCount(this.state.images.length);
+                    // Update presence to notify other users about the page structure change
+                    this.liveSync.notifyPageStructureChange();
+                }
+
+                document.body.removeChild(modal);
+            });
+        });
+    },
+
+    // Switch to a different project
+    async switchProject(ownerId, projectId) {
+        try {
+            // Update the URL hash to reflect the new project
+            window.location.hash = `#/color_rm/${ownerId}/${projectId}`;
+
+            // Reload the page to load the new project
+            location.reload();
+        } catch (error) {
+            console.error('Error switching project:', error);
+            this.ui.showToast('Error switching project');
+        }
     }
 }; 

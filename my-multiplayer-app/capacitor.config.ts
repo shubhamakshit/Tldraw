@@ -22,7 +22,21 @@ const getConfig = (): CapacitorConfig => {
     appName: 'TlDraw',
     webDir: 'dist/client',
     android: {
-      allowMixedContent: true
+      allowMixedContent: true,
+      // Enable intent handling for deep links and file associations
+      appendUserAgent: 'Capacitor',
+      overrideUserAgent: 'Capacitor'
+    },
+    // Configure deep linking and file handling
+    server: {
+      androidScheme: 'https',
+      cleartext: true
+    },
+    plugins: {
+      Deeplinks: {
+        schemes: ['colorrm'],
+        hosts: ['colorrm.app', 'jaimodiji-my-multiplayer-app.hf.space']
+      }
     }
   };
 
@@ -37,6 +51,10 @@ const getConfig = (): CapacitorConfig => {
       plugins: {
         CapacitorHttp: {
           enabled: true // Use native HTTP for CORS-free API calls
+        },
+        Deeplinks: {
+          schemes: ['colorrm'],
+          hosts: ['colorrm.app', 'jaimodiji-my-multiplayer-app.hf.space']
         }
       }
     };
@@ -48,6 +66,10 @@ const getConfig = (): CapacitorConfig => {
       plugins: {
         CapacitorHttp: {
           enabled: true
+        },
+        Deeplinks: {
+          schemes: ['colorrm'],
+          hosts: ['colorrm.app', 'jaimodiji-my-multiplayer-app.hf.space']
         }
       }
     };
@@ -82,6 +104,12 @@ const getConfig = (): CapacitorConfig => {
       androidScheme: 'https',
       cleartext: true,
       allowNavigation: [allowNavigation]
+    },
+    plugins: {
+      Deeplinks: {
+        schemes: ['colorrm'],
+        hosts: ['colorrm.app', 'jaimodiji-my-multiplayer-app.hf.space']
+      }
     }
   };
 };
