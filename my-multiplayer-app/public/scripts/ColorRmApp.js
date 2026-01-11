@@ -184,6 +184,17 @@ export class ColorRmApp {
 
     // Initialize Android Intent Handling for URLs and PDF files
     initializeAndroidIntentHandling() {
+        // Expose global handler for Native Android calls (MainActivity.java)
+        window.handleSharedFile = (uri) => {
+            console.log("Global handleSharedFile called with:", uri);
+            this.handlePdfFileFromUri(uri);
+        };
+        
+        window.handleSharedUrl = (url) => {
+            console.log("Global handleSharedUrl called with:", url);
+            this.handleIncomingUrl(url);
+        };
+
         // Check if we're running in a Capacitor environment
         if (window.Capacitor) {
             // Import Capacitor plugins
@@ -343,7 +354,8 @@ export class ColorRmApp {
 
             if (file) {
                 // Check if a project with the same name already exists
-                const fileName = uri.split('/').pop().split('?')[0] || 'imported_pdf.pdf';
+                // Use file.name as it's more reliable (handled in convertUriToFileObject)
+                const fileName = file.name;
                 const projectName = fileName.replace(/\.[^/.]+$/, ""); // Remove extension
                 const existingProjects = await this.dbGetAll('sessions');
                 const existingProject = existingProjects.find(proj => proj.name === projectName);
@@ -406,6 +418,32 @@ export class ColorRmApp {
     // Convert URI to File object
     async convertUriToFileObject(uri) {
         try {
+            // Priority: Try Android Native Interface for content:// URIs
+            if (uri.startsWith('content://') && window.AndroidNative && window.AndroidNative.readContentUri) {
+                console.log("Using AndroidNative to read content URI:", uri);
+                const base64Data = window.AndroidNative.readContentUri(uri);
+                if (base64Data) {
+                     const binaryString = atob(base64Data);
+                     const bytes = new Uint8Array(binaryString.length);
+                     for (let i = 0; i < binaryString.length; i++) {
+                         bytes[i] = binaryString.charCodeAt(i);
+                     }
+                     const blob = new Blob([bytes], { type: 'application/pdf' });
+                     
+                     // Try to get filename from URI
+                     let fileName = 'imported_pdf.pdf';
+                     try {
+                        const parts = uri.split('/');
+                        const lastPart = parts[parts.length - 1];
+                        if (lastPart && lastPart.indexOf('.') > -1) {
+                             fileName = decodeURIComponent(lastPart);
+                        }
+                     } catch(e) {}
+
+                     return new File([blob], fileName, { type: 'application/pdf' });
+                }
+            }
+
             if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
                 const { Filesystem } = window.Capacitor.Plugins;
 
@@ -415,9 +453,8 @@ export class ColorRmApp {
                     const filePath = uri.substring(7); // Remove 'file://' prefix
                     return await this.convertFilePathToFileObject(filePath);
                 } else if (uri.startsWith('content://')) {
-                    // For content URIs, we need to use the Documents contract
-                    // This is more complex and may require additional plugins
-                    // For now, we'll try to read it directly
+                    // Fallback to Capacitor Filesystem if Native interface didn't work
+                    console.warn("AndroidNative not available, trying Capacitor Filesystem for content URI");
                     const fileData = await Filesystem.readFile({
                         path: uri
                     });
@@ -470,7 +507,13 @@ export class ColorRmApp {
                 const savedIntent = await App.getLaunchUri();
 
                 if (savedIntent && savedIntent.url) {
-                    this.handleIncomingUrl(savedIntent.url);
+                    // Check if it's a file URL or content URL
+                    const url = savedIntent.url;
+                    if (url.startsWith('file://') || url.startsWith('content://')) {
+                         this.handlePdfFileFromUri(url);
+                    } else {
+                        this.handleIncomingUrl(url);
+                    }
                 }
             } catch (error) {
                 console.error('Error checking pending intents:', error);

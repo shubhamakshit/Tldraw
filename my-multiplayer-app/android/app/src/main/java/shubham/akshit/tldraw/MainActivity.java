@@ -349,6 +349,27 @@ public class MainActivity extends BridgeActivity {
                     File logFile = new File(logDir, "colorrm.log");
                     return logFile.getAbsolutePath();
                 }
+
+                @JavascriptInterface
+                public String readContentUri(String uriString) {
+                    try {
+                        Uri uri = Uri.parse(uriString);
+                        InputStream is = getContentResolver().openInputStream(uri);
+                        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+                        int nRead;
+                        byte[] data = new byte[16384];
+                        while ((nRead = is.read(data, 0, data.length)) != -1) {
+                            buffer.write(data, 0, nRead);
+                        }
+                        buffer.flush();
+                        byte[] finalBytes = buffer.toByteArray();
+                        is.close();
+                        return Base64.encodeToString(finalBytes, Base64.NO_WRAP);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return null;
+                    }
+                }
             }, "AndroidNative");
         }
     }
