@@ -1,84 +1,132 @@
 
 export function initializeSPen(canvasElement) {
     let isPen = false
-    let lastEvent = null
 
     // S-Pen uses button ID 5
     const SPEN_BUTTON_ID = 5
 
+    // Marker to identify synthetic events and prevent infinite loops
+    const SYNTHETIC_MARKER = '__spen_synthetic__'
+
     const handlePointerDown = (e) => {
-        // CRITICAL: Only dispatch if the event target is the canvas or inside it
+        // Skip synthetic events we created
+        if (e[SYNTHETIC_MARKER]) return
+
+        // CRITICAL: Only process if the event target is the canvas or inside it
         if (e.target !== canvasElement && !canvasElement.contains(e.target)) {
             return
         }
 
         if (e.button === SPEN_BUTTON_ID) {
+            // STOP the original event from reaching canvas handlers
+            e.stopPropagation()
+            e.preventDefault()
+
             isPen = true
-            // Dispatch a synthetic 'touchstart' or 'pointerdown' event
+
+            // Dispatch S-Pen button event for tool switching
+            window.dispatchEvent(new CustomEvent('spen-button-down'))
+
+            // Dispatch a synthetic 'pointerdown' event with button 0
             const newEvent = new PointerEvent('pointerdown', {
-                ...e,
+                clientX: e.clientX,
+                clientY: e.clientY,
+                screenX: e.screenX,
+                screenY: e.screenY,
+                pointerId: e.pointerId,
+                pointerType: e.pointerType,
+                pressure: e.pressure,
+                width: e.width,
+                height: e.height,
+                tiltX: e.tiltX,
+                tiltY: e.tiltY,
                 button: 0, // Pretend it's a left-click/touch
+                buttons: 1,
                 isPrimary: true,
                 bubbles: true,
                 cancelable: true
             })
-            lastEvent = newEvent
-            // Dispatch specifically to the canvas
+            newEvent[SYNTHETIC_MARKER] = true
             canvasElement.dispatchEvent(newEvent)
-            e.preventDefault()
         }
     }
 
     const handlePointerMove = (e) => {
-        // If we are dragging, we might be outside the canvas, but we still want to track it
-        // IF we started inside. But for S-Pen hover/move, we generally want it scoped.
-        // However, standard pointer capture should handle drags.
+        // Skip synthetic events we created
+        if (e[SYNTHETIC_MARKER]) return
 
-        // For simple robust behavior: if isPen is true, we keep dispatching.
-        // If isPen is false, we check target.
+        if (!isPen) return
 
-        if (!isPen && (e.target !== canvasElement && !canvasElement.contains(e.target))) {
-            return
-        }
+        // Stop original event and dispatch synthetic one
+        e.stopPropagation()
+        e.preventDefault()
 
-        if (isPen) {
-            const newEvent = new PointerEvent('pointermove', {
-                ...e,
-                button: 0,
-                isPrimary: true,
-                bubbles: true,
-                cancelable: true
-            })
-            lastEvent = newEvent
-            canvasElement.dispatchEvent(newEvent)
-            e.preventDefault()
-        }
+        const newEvent = new PointerEvent('pointermove', {
+            clientX: e.clientX,
+            clientY: e.clientY,
+            screenX: e.screenX,
+            screenY: e.screenY,
+            pointerId: e.pointerId,
+            pointerType: e.pointerType,
+            pressure: e.pressure,
+            width: e.width,
+            height: e.height,
+            tiltX: e.tiltX,
+            tiltY: e.tiltY,
+            button: 0,
+            buttons: 1,
+            isPrimary: true,
+            bubbles: true,
+            cancelable: true
+        })
+        newEvent[SYNTHETIC_MARKER] = true
+        canvasElement.dispatchEvent(newEvent)
     }
 
     const handlePointerUp = (e) => {
+        // Skip synthetic events we created
+        if (e[SYNTHETIC_MARKER]) return
+
         if (isPen) {
+            e.stopPropagation()
+            e.preventDefault()
+
             isPen = false
+
+            // Dispatch S-Pen button up event for tool switching
+            window.dispatchEvent(new CustomEvent('spen-button-up'))
+
             const newEvent = new PointerEvent('pointerup', {
-                ...e,
+                clientX: e.clientX,
+                clientY: e.clientY,
+                screenX: e.screenX,
+                screenY: e.screenY,
+                pointerId: e.pointerId,
+                pointerType: e.pointerType,
+                pressure: e.pressure,
+                width: e.width,
+                height: e.height,
+                tiltX: e.tiltX,
+                tiltY: e.tiltY,
                 button: 0,
+                buttons: 0,
                 isPrimary: true,
                 bubbles: true,
                 cancelable: true
             })
+            newEvent[SYNTHETIC_MARKER] = true
             canvasElement.dispatchEvent(newEvent)
-            e.preventDefault()
         }
     }
 
-    // We still listen on window to catch events that bubble up or happen globally (like up outside)
-    // but we added target checks in Down and Move to prevent cross-talk.
-    window.addEventListener('pointerdown', handlePointerDown)
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', handlePointerUp)
+    // Use CAPTURE phase to intercept events BEFORE they reach the canvas
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    window.addEventListener('pointermove', handlePointerMove, true)
+    window.addEventListener('pointerup', handlePointerUp, true)
 
     return () => {
-        window.removeEventListener('pointerdown', handlePointerDown)
-        window.removeEventListener('pointermove', handlePointerMove)
-        window.removeEventListener('pointerup', handlePointerUp)
+        window.removeEventListener('pointerdown', handlePointerDown, true)
+        window.removeEventListener('pointermove', handlePointerMove, true)
+        window.removeEventListener('pointerup', handlePointerUp, true)
     }
 }

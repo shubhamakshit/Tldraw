@@ -617,85 +617,56 @@ export class LiveSyncClient {
         }
     }
 
-    // Handle page structure change notifications from other users
+    // Handle page structure change notifications from other users (debounced)
     handlePageStructureChange(message) {
-        // Refresh the page structure from the server
-        console.log('Received page structure change notification, refreshing pages...');
+        // Debounce: Only process if we haven't processed recently
+        const now = Date.now();
+        const DEBOUNCE_MS = 2000; // 2 second debounce
 
-        // Update the page count in local state
-        if (this.app.state.images.length !== message.pageCount) {
-            // Reload the session pages to get the new structure
-            this.app.loadSessionPages(this.app.state.sessionId).then(() => {
-                // Update the page total display
-                const pt = this.app.getElement('pageTotal');
-                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
-
-                // Update the page input if needed
-                const pageInput = this.app.getElement('pageInput');
-                if (pageInput) pageInput.value = this.app.state.idx + 1;
-
-                // Update the sidebar if it's showing pages
-                if (this.app.state.activeSideTab === 'pages') {
-                    this.app.renderPageSidebar();
-                }
-
-                // If the current page index is out of bounds, adjust it
-                if (this.app.state.idx >= this.app.state.images.length) {
-                    this.app.state.idx = Math.max(0, this.app.state.images.length - 1);
-                    if (this.app.state.idx >= 0) {
-                        this.app.loadPage(this.app.state.idx, false);
-                    }
-                }
-
-                // Update session metadata
-                this.app.dbGet('sessions', this.app.state.sessionId).then(session => {
-                    if (session) {
-                        session.pageCount = this.app.state.images.length;
-                        this.app.dbPut('sessions', session);
-                    }
-                });
-            });
+        if (this._lastPageStructureChange && (now - this._lastPageStructureChange) < DEBOUNCE_MS) {
+            // Skip - too soon since last change
+            return;
         }
-    }
 
-    // Handle page structure change notifications from other users
-    handlePageStructureChange(message) {
-        // Refresh the page structure from the server
-        console.log('Received page structure change notification, refreshing pages...');
-
-        // Update the page count in local state
-        if (this.app.state.images.length !== message.pageCount) {
-            // Reload the session pages to get the new structure
-            this.app.loadSessionPages(this.app.state.sessionId).then(() => {
-                // Update the page total display
-                const pt = this.app.getElement('pageTotal');
-                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
-
-                // Update the page input if needed
-                const pageInput = this.app.getElement('pageInput');
-                if (pageInput) pageInput.value = this.app.state.idx + 1;
-
-                // Update the sidebar if it's showing pages
-                if (this.app.state.activeSideTab === 'pages') {
-                    this.app.renderPageSidebar();
-                }
-
-                // If the current page index is out of bounds, adjust it
-                if (this.app.state.idx >= this.app.state.images.length) {
-                    this.app.state.idx = Math.max(0, this.app.state.images.length - 1);
-                    if (this.app.state.idx >= 0) {
-                        this.app.loadPage(this.app.state.idx, false);
-                    }
-                }
-
-                // Update session metadata
-                this.app.dbGet('sessions', this.app.state.sessionId).then(session => {
-                    if (session) {
-                        session.pageCount = this.app.state.images.length;
-                        this.app.dbPut('sessions', session);
-                    }
-                });
-            });
+        // Check if page count actually differs
+        if (this.app.state.images.length === message.pageCount) {
+            // No change needed
+            return;
         }
+
+        this._lastPageStructureChange = now;
+        console.log('Page structure change detected, refreshing pages...');
+
+        // Reload the session pages to get the new structure
+        this.app.loadSessionPages(this.app.state.sessionId).then(() => {
+            // Update the page total display
+            const pt = this.app.getElement('pageTotal');
+            if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+            // Update the page input if needed
+            const pageInput = this.app.getElement('pageInput');
+            if (pageInput) pageInput.value = this.app.state.idx + 1;
+
+            // Update the sidebar if it's showing pages
+            if (this.app.state.activeSideTab === 'pages') {
+                this.app.renderPageSidebar();
+            }
+
+            // If the current page index is out of bounds, adjust it
+            if (this.app.state.idx >= this.app.state.images.length) {
+                this.app.state.idx = Math.max(0, this.app.state.images.length - 1);
+                if (this.app.state.idx >= 0) {
+                    this.app.loadPage(this.app.state.idx, false);
+                }
+            }
+
+            // Update session metadata
+            this.app.dbGet('sessions', this.app.state.sessionId).then(session => {
+                if (session) {
+                    session.pageCount = this.app.state.images.length;
+                    this.app.dbPut('sessions', session);
+                }
+            });
+        });
     }
 }

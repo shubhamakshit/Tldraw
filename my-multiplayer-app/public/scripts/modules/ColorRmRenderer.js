@@ -366,6 +366,15 @@ export const ColorRmRenderer = {
 
             menu.style.left = (cr.left + mx - menu.offsetWidth/2) + 'px';
             menu.style.top = (cr.top + my) + 'px';
+
+            // Show/hide edit text button based on selection
+            const editTextBtn = this.getElement('ctxEditText');
+            if (editTextBtn) {
+                const hasTextSelected = this.state.selection.length === 1 &&
+                    hist[this.state.selection[0]] &&
+                    hist[this.state.selection[0]].tool === 'text';
+                editTextBtn.style.display = hasTextSelected ? 'flex' : 'none';
+            }
         }
     },
 
