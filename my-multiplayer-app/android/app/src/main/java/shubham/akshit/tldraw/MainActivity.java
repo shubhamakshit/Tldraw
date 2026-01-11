@@ -26,6 +26,13 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
+import android.webkit.MimeTypeMap;
+import java.io.InputStream;
+import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import android.database.Cursor;
+import android.provider.MediaStore;
+
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.widget.EditText;
@@ -84,6 +91,8 @@ public class MainActivity extends BridgeActivity {
 
         // Enable edge-to-edge display
         hideSystemUI();
+
+        handleIntent(getIntent());
     }
 
     @Override
@@ -347,8 +356,55 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+
     @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    private void handleIntent(Intent intent) {
+        if (intent == null) return;
+
+        String action = intent.getAction();
+        String type = intent.getType();
+
+        if (Intent.ACTION_SEND.equals(action) && type != null) {
+            if ("text/plain".equals(type)) {
+                String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
+                if (sharedText != null) {
+                    // Pass the URL to the WebView
+                    evaluateJavascript("window.handleSharedUrl('" + escapeJavascriptString(sharedText) + "');");
+                }
+            } else {
+                Uri fileUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+                if (fileUri != null) {
+                    // Pass the file URI to the WebView
+                    evaluateJavascript("window.handleSharedFile('" + escapeJavascriptString(fileUri.toString()) + "');");
+                }
+            }
+        } else if (Intent.ACTION_VIEW.equals(action) && type != null) {
+            Uri fileUri = intent.getData();
+            if (fileUri != null) {
+                // Pass the file URI to the WebView
+                evaluateJavascript("window.handleSharedFile('" + escapeJavascriptString(fileUri.toString()) + "');");
+            }
+        }
+    }
+
+    private void evaluateJavascript(String script) {
+        WebView webView = getBridge().getWebView();
+        if (webView != null) {
+            webView.evaluateJavascript(script, null);
+        }
+    }
+
+    private String escapeJavascriptString(String text) {
+        return text.replace("'", "\'").replace(""", "\"").replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    @Override
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             hideSystemUI();
