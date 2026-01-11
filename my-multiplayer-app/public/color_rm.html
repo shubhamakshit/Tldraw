@@ -321,6 +321,98 @@
         /* Hide Input Number Spinner */
         input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         input[type=number] { -moz-appearance: textfield; }
+
+        /* Add Page Modal Styles */
+        .page-modal-tab {
+            background: transparent;
+            color: #888;
+        }
+        .page-modal-tab.active {
+            background: var(--primary);
+            color: white;
+        }
+        .page-modal-tab:hover:not(.active) {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .size-preset-btn {
+            padding: 12px 8px;
+            background: var(--bg);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        .size-preset-btn:hover {
+            border-color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.1);
+        }
+        .size-preset-btn.active {
+            border-color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.2);
+        }
+
+        .color-preset {
+            width: 28px;
+            height: 28px;
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: transform 0.15s, border-color 0.15s;
+        }
+        .color-preset:hover {
+            transform: scale(1.1);
+            border-color: #8b5cf6;
+        }
+
+        .insert-pos-btn {
+            flex: 1;
+            padding: 12px;
+            background: var(--bg);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .insert-pos-btn:hover {
+            border-color: #8b5cf6;
+        }
+        .insert-pos-btn.active {
+            border-color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.2);
+        }
+
+        .template-btn {
+            padding: 0;
+            background: var(--bg);
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            overflow: hidden;
+        }
+        .template-btn:hover {
+            border-color: #8b5cf6;
+            transform: translateY(-2px);
+        }
+        .template-preview {
+            width: 100%;
+            height: 80px;
+            border-radius: 10px 10px 0 0;
+        }
+        .template-label {
+            padding: 10px;
+            color: white;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
     </style>
 </head>
 <body>
@@ -649,7 +741,7 @@
 
                     <!-- Settings Panel -->
                     <div id="toolSettingsPanel" style="background:rgba(0,0,0,0.2); padding:10px; border-radius:8px; margin-bottom:10px; display:none;">
-                        
+
                         <div id="penOptions" style="display:none;">
                             <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                                 <div class="color-dot" style="background:#ef4444" onclick="App.setPenColor('#ef4444')"></div>
@@ -658,14 +750,45 @@
                                 <div id="customSwatches" style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;"></div>
                                 <button class="btn btn-sm" onclick="App.openPicker('pen')" title="Custom Color" style="width:22px; height:22px; padding:0; justify-content:center; border-radius:4px;"><i class="bi bi-plus"></i></button>
                             </div>
+
+                            <!-- Stabilization Slider -->
+                            <div style="margin-top:12px; padding:10px; background:rgba(0,0,0,0.3); border-radius:6px;">
+                                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                                    <span style="font-size:0.75rem; color:#888; font-weight:600;">STABILIZATION</span>
+                                    <span id="stabilizationValue" style="font-size:0.7rem; color:#fff; font-family:monospace;">0%</span>
+                                </div>
+                                <input type="range" id="stabilizationSlider" min="0" max="100" value="0" class="slider" style="width:100%;" oninput="App.setStabilization(this.value)">
+                                <div style="display:flex; justify-content:space-between; font-size:0.6rem; color:#555; margin-top:2px;">
+                                    <span>Raw</span>
+                                    <span>Smooth</span>
+                                </div>
+                            </div>
+
+                            <!-- Hold to Shape Toggle -->
+                            <div style="margin-top:10px; display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:rgba(0,0,0,0.3); border-radius:6px;">
+                                <div>
+                                    <span style="font-size:0.75rem; color:#888; font-weight:600;">HOLD TO SHAPE</span>
+                                    <div style="font-size:0.6rem; color:#555;">Hold still to snap to shape</div>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="holdToShapeToggle" onchange="App.setHoldToShape(this.checked)">
+                                    <span class="slider-switch"></span>
+                                </label>
+                            </div>
                         </div>
 
                         <div id="shapeOptions" style="display:none;">
                             <div class="shape-grid">
-                                <div class="shape-btn" id="sh_rectangle" onclick="App.setShapeType('rectangle')"><i class="bi bi-square"></i></div>
-                                <div class="shape-btn" id="sh_circle" onclick="App.setShapeType('circle')"><i class="bi bi-circle"></i></div>
-                                <div class="shape-btn" id="sh_line" onclick="App.setShapeType('line')"><i class="bi bi-dash-lg"></i></div>
-                                <div class="shape-btn" id="sh_arrow" onclick="App.setShapeType('arrow')"><i class="bi bi-arrow-right"></i></div>
+                                <div class="shape-btn" id="sh_rectangle" onclick="App.setShapeType('rectangle')" title="Rectangle"><i class="bi bi-square"></i></div>
+                                <div class="shape-btn" id="sh_circle" onclick="App.setShapeType('circle')" title="Circle/Ellipse"><i class="bi bi-circle"></i></div>
+                                <div class="shape-btn" id="sh_line" onclick="App.setShapeType('line')" title="Line"><i class="bi bi-dash-lg"></i></div>
+                                <div class="shape-btn" id="sh_arrow" onclick="App.setShapeType('arrow')" title="Arrow"><i class="bi bi-arrow-right"></i></div>
+                                <div class="shape-btn" id="sh_triangle" onclick="App.setShapeType('triangle')" title="Triangle"><i class="bi bi-triangle"></i></div>
+                                <div class="shape-btn" id="sh_diamond" onclick="App.setShapeType('diamond')" title="Diamond"><i class="bi bi-diamond"></i></div>
+                                <div class="shape-btn" id="sh_star" onclick="App.setShapeType('star')" title="Star"><i class="bi bi-star"></i></div>
+                                <div class="shape-btn" id="sh_hexagon" onclick="App.setShapeType('hexagon')" title="Hexagon"><i class="bi bi-hexagon"></i></div>
+                                <div class="shape-btn" id="sh_pentagon" onclick="App.setShapeType('pentagon')" title="Pentagon"><i class="bi bi-pentagon"></i></div>
+                                <div class="shape-btn" id="sh_octagon" onclick="App.setShapeType('octagon')" title="Octagon"><i class="bi bi-octagon"></i></div>
                             </div>
                             <div style="display:flex; justify-content:space-between; margin-top:5px;">
                                 <button class="btn btn-sm" onclick="App.openPicker('shapeBorder')">Border</button>
@@ -720,80 +843,19 @@
                 <div class="control-section">
                     <h4><i class="bi bi-files"></i> Page Management</h4>
 
-                    <!-- Consolidated Page Controls -->
-                    <div class="page-controls" style="display:flex; flex-direction:column; gap:12px;">
-                        <!-- Main Action Buttons -->
-                        <div class="control-group">
-                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                                <i class="bi bi-plus-circle" style="color:#888;"></i>
-                                <span style="font-size:0.8rem; color:#888; font-weight:600;">CREATE PAGES</span>
-                            </div>
+                    <!-- Simplified Page Controls -->
+                    <div class="page-controls" style="display:flex; flex-direction:column; gap:10px;">
+                        <button class="btn" style="width:100%; justify-content:center; background:linear-gradient(135deg, #6366f1, #8b5cf6); color:white; padding:12px; font-weight:600;" onclick="window.App.showAddPageModal()">
+                            <i class="bi bi-plus-lg"></i> Add New Page
+                        </button>
 
-                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:linear-gradient(45deg, #4ade80, #22d3ee); color:white;" onclick="window.App.addBlankPage(2000, 1500, false)">
-                                    <i class="bi bi-file-earmark-plus"></i> New Page
-                                </button>
-                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:linear-gradient(45deg, #f87171, #fbbf24); color:white;" onclick="window.App.addBlankPage(2000, 1500, true)">
-                                    <i class="bi bi-file-earmark-medical"></i> Insert After
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Template & Image Controls -->
-                        <div class="control-group">
-                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                                <i class="bi bi-layout-wtf" style="color:#888;"></i>
-                                <span style="font-size:0.8rem; color:#888; font-weight:600;">TEMPLATES & IMPORT</span>
-                            </div>
-
-                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:#ffffff; color:#000;" onclick="window.App.addTemplatePage('white')">
-                                    <i class="bi bi-square"></i> Plain
-                                </button>
-                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:linear-gradient(45deg, #eee 25%, transparent 25%), linear-gradient(-45deg, #eee 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #eee 75%), linear-gradient(-45deg, transparent 75%, #eee 75%); background-size:20px 20px; background-position:0 0, 0 10px, 10px -10px, -10px 0px;" onclick="window.App.addTemplatePage('graph')">
-                                    <i class="bi bi-grid"></i> Graph
-                                </button>
-                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:repeating-linear-gradient(0deg, transparent, transparent 19px, #eee 19px, #eee 20px);" onclick="window.App.addTemplatePage('lined')">
-                                    <i class="bi bi-text-center"></i> Lined
-                                </button>
-                                <button class="btn btn-sm" style="flex:1; justify-content:center;" onclick="document.getElementById('addImagePageInput').click()">
-                                    <i class="bi bi-cloud-upload"></i> Import
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Page Management Actions -->
-                        <div class="control-group">
-                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                                <i class="bi bi-gear" style="color:#888;"></i>
-                                <span style="font-size:0.8rem; color:#888; font-weight:600;">MANAGE PAGES</span>
-                            </div>
-
-                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:#dc2626; color:white;" onclick="window.App.deleteCurrentPage()">
-                                    <i class="bi bi-trash"></i> Delete
-                                </button>
-                                <button class="btn btn-sm" style="flex:1; justify-content:center; background:#8b5cf6; color:white;" onclick="window.App.showPageSizeModal()">
-                                    <i class="bi bi-aspect-ratio"></i> Size
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Background Color Picker -->
-                        <div class="control-group">
-                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                                <i class="bi bi-palette" style="color:#888;"></i>
-                                <span style="font-size:0.8rem; color:#888; font-weight:600;">BACKGROUND COLOR</span>
-                            </div>
-
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <input type="color" id="blankPageColor" value="#ffffff" style="width:32px; height:32px; border:1px solid #333; border-radius:4px; background:none; cursor:pointer;">
-                                <div style="display:flex; gap:4px; flex:1;">
-                                    <div class="color-swatch" style="width:20px; height:20px; border:1px solid #333; border-radius:2px; background:#ffffff; cursor:pointer;" onclick="document.getElementById('blankPageColor').value='#ffffff';"></div>
-                                    <div class="color-swatch" style="width:20px; height:20px; border:1px solid #333; border-radius:2px; background:#000000; cursor:pointer;" onclick="document.getElementById('blankPageColor').value='#000000';"></div>
-                                    <div class="color-swatch" style="width:20px; height:20px; border:1px solid #333; border-radius:2px; background:#ffffcc; cursor:pointer;" onclick="document.getElementById('blankPageColor').value='#ffffcc';"></div>
-                                </div>
-                            </div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-sm" style="flex:1; justify-content:center;" onclick="window.App.reorderPages()">
+                                <i class="bi bi-arrow-down-up"></i> Reorder
+                            </button>
+                            <button class="btn btn-sm" style="flex:1; justify-content:center; background:#dc2626; color:white;" onclick="window.App.deleteCurrentPage()">
+                                <i class="bi bi-trash"></i> Delete
+                            </button>
                         </div>
                     </div>
 
@@ -803,7 +865,150 @@
 
                 <div id="sbPageList" class="sb-page-grid"></div>
 
-                <!-- Page Size Modal -->
+                <!-- Add Page Modal -->
+                <div id="addPageModal" class="overlay" style="display:none; z-index:300;">
+                    <div class="card" style="max-width:480px; width:95%; background:var(--bg-panel); border:1px solid var(--border); max-height:90vh; overflow-y:auto;">
+                        <!-- Header -->
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:15px; border-bottom:1px solid var(--border);">
+                            <h3 style="margin:0; color:white; font-size:1.2rem; display:flex; align-items:center; gap:8px;">
+                                <i class="bi bi-file-earmark-plus" style="color:#8b5cf6;"></i> Add New Page
+                            </h3>
+                            <button onclick="document.getElementById('addPageModal').style.display='none'" style="background:var(--bg); border:1px solid var(--border); color:#888; cursor:pointer; width:32px; height:32px; border-radius:4px; display:flex; align-items:center; justify-content:center;">×</button>
+                        </div>
+
+                        <!-- Tab Navigation -->
+                        <div style="display:flex; gap:4px; margin-bottom:20px; background:var(--bg); padding:4px; border-radius:8px;">
+                            <button class="page-modal-tab active" data-tab="blank" onclick="window.App.switchPageModalTab('blank')" style="flex:1; padding:10px; border:none; border-radius:6px; cursor:pointer; font-weight:600; transition:all 0.2s;">
+                                <i class="bi bi-file-earmark"></i> Blank
+                            </button>
+                            <button class="page-modal-tab" data-tab="template" onclick="window.App.switchPageModalTab('template')" style="flex:1; padding:10px; border:none; border-radius:6px; cursor:pointer; font-weight:600; transition:all 0.2s;">
+                                <i class="bi bi-grid-3x3"></i> Template
+                            </button>
+                            <button class="page-modal-tab" data-tab="import" onclick="window.App.switchPageModalTab('import')" style="flex:1; padding:10px; border:none; border-radius:6px; cursor:pointer; font-weight:600; transition:all 0.2s;">
+                                <i class="bi bi-image"></i> Import
+                            </button>
+                        </div>
+
+                        <!-- Blank Page Tab -->
+                        <div id="pageModalBlank" class="page-modal-content">
+                            <!-- Size Selection -->
+                            <div style="margin-bottom:20px;">
+                                <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:10px; font-weight:600;">PAGE SIZE</label>
+                                <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+                                    <button class="size-preset-btn active" data-size="2000x1500" onclick="window.App.selectPageSize(2000, 1500, this)">
+                                        <div style="font-weight:600;">Large</div>
+                                        <div style="font-size:0.7rem; opacity:0.7;">2000×1500</div>
+                                    </button>
+                                    <button class="size-preset-btn" data-size="1600x1200" onclick="window.App.selectPageSize(1600, 1200, this)">
+                                        <div style="font-weight:600;">Medium</div>
+                                        <div style="font-size:0.7rem; opacity:0.7;">1600×1200</div>
+                                    </button>
+                                    <button class="size-preset-btn" data-size="1024x768" onclick="window.App.selectPageSize(1024, 768, this)">
+                                        <div style="font-weight:600;">Small</div>
+                                        <div style="font-size:0.7rem; opacity:0.7;">1024×768</div>
+                                    </button>
+                                    <button class="size-preset-btn" data-size="2480x3508" onclick="window.App.selectPageSize(2480, 3508, this)">
+                                        <div style="font-weight:600;">A4</div>
+                                        <div style="font-size:0.7rem; opacity:0.7;">Portrait</div>
+                                    </button>
+                                    <button class="size-preset-btn" data-size="3508x2480" onclick="window.App.selectPageSize(3508, 2480, this)">
+                                        <div style="font-weight:600;">A4</div>
+                                        <div style="font-size:0.7rem; opacity:0.7;">Landscape</div>
+                                    </button>
+                                    <button class="size-preset-btn" data-size="custom" onclick="window.App.toggleCustomSize()">
+                                        <div style="font-weight:600;">Custom</div>
+                                        <div style="font-size:0.7rem; opacity:0.7;">Set size</div>
+                                    </button>
+                                </div>
+
+                                <!-- Custom Size Inputs (hidden by default) -->
+                                <div id="customSizeInputs" style="display:none; margin-top:12px; padding:12px; background:var(--bg); border-radius:8px;">
+                                    <div style="display:flex; gap:10px; align-items:center;">
+                                        <input type="number" id="newPageWidth" placeholder="Width" value="2000" style="flex:1; padding:10px; background:var(--bg-panel); border:1px solid var(--border); border-radius:6px; color:white;">
+                                        <span style="color:#666;">×</span>
+                                        <input type="number" id="newPageHeight" placeholder="Height" value="1500" style="flex:1; padding:10px; background:var(--bg-panel); border:1px solid var(--border); border-radius:6px; color:white;">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Background Color -->
+                            <div style="margin-bottom:20px;">
+                                <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:10px; font-weight:600;">BACKGROUND COLOR</label>
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <input type="color" id="blankPageColor" value="#ffffff" style="width:44px; height:44px; border:2px solid var(--border); border-radius:8px; background:none; cursor:pointer; padding:2px;">
+                                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                        <div class="color-preset" style="background:#ffffff;" onclick="document.getElementById('blankPageColor').value='#ffffff';"></div>
+                                        <div class="color-preset" style="background:#f5f5f5;" onclick="document.getElementById('blankPageColor').value='#f5f5f5';"></div>
+                                        <div class="color-preset" style="background:#ffffcc;" onclick="document.getElementById('blankPageColor').value='#ffffcc';"></div>
+                                        <div class="color-preset" style="background:#e8f5e9;" onclick="document.getElementById('blankPageColor').value='#e8f5e9';"></div>
+                                        <div class="color-preset" style="background:#e3f2fd;" onclick="document.getElementById('blankPageColor').value='#e3f2fd';"></div>
+                                        <div class="color-preset" style="background:#1a1a1a;" onclick="document.getElementById('blankPageColor').value='#1a1a1a';"></div>
+                                        <div class="color-preset" style="background:#000000;" onclick="document.getElementById('blankPageColor').value='#000000';"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Insert Position -->
+                            <div style="margin-bottom:20px;">
+                                <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:10px; font-weight:600;">INSERT POSITION</label>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="insert-pos-btn active" data-pos="end" onclick="window.App.selectInsertPosition('end', this)">
+                                        <i class="bi bi-box-arrow-in-down"></i> At End
+                                    </button>
+                                    <button class="insert-pos-btn" data-pos="after" onclick="window.App.selectInsertPosition('after', this)">
+                                        <i class="bi bi-box-arrow-in-right"></i> After Current
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Template Tab -->
+                        <div id="pageModalTemplate" class="page-modal-content" style="display:none;">
+                            <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:12px;">
+                                <button class="template-btn" onclick="window.App.createPageFromModal('white')">
+                                    <div class="template-preview" style="background:#ffffff;"></div>
+                                    <div class="template-label">Plain White</div>
+                                </button>
+                                <button class="template-btn" onclick="window.App.createPageFromModal('graph')">
+                                    <div class="template-preview" style="background:linear-gradient(90deg, #e0e0e0 1px, transparent 1px), linear-gradient(#e0e0e0 1px, transparent 1px); background-size:10px 10px; background-color:#ffffff;"></div>
+                                    <div class="template-label">Graph Paper</div>
+                                </button>
+                                <button class="template-btn" onclick="window.App.createPageFromModal('lined')">
+                                    <div class="template-preview" style="background:repeating-linear-gradient(0deg, transparent, transparent 9px, #e0e0e0 9px, #e0e0e0 10px); background-color:#ffffff;"></div>
+                                    <div class="template-label">Lined Paper</div>
+                                </button>
+                                <button class="template-btn" onclick="window.App.createPageFromModal('dotted')">
+                                    <div class="template-preview" style="background:radial-gradient(circle, #ccc 1px, transparent 1px); background-size:12px 12px; background-color:#ffffff;"></div>
+                                    <div class="template-label">Dotted Grid</div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Import Tab -->
+                        <div id="pageModalImport" class="page-modal-content" style="display:none;">
+                            <div style="border:2px dashed var(--border); border-radius:12px; padding:40px 20px; text-align:center; cursor:pointer; transition:all 0.2s;" onclick="document.getElementById('addImagePageInput').click();" onmouseover="this.style.borderColor='#8b5cf6'; this.style.background='rgba(139,92,246,0.05)';" onmouseout="this.style.borderColor='var(--border)'; this.style.background='transparent';">
+                                <i class="bi bi-cloud-upload" style="font-size:3rem; color:#8b5cf6; display:block; margin-bottom:15px;"></i>
+                                <div style="font-weight:600; color:white; margin-bottom:5px;">Click to upload image</div>
+                                <div style="font-size:0.8rem; color:#888;">PNG, JPG, WebP supported</div>
+                            </div>
+                            <p style="text-align:center; font-size:0.8rem; color:#666; margin-top:15px;">
+                                <i class="bi bi-info-circle"></i> Image will be added as a new page
+                            </p>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div style="display:flex; gap:10px; margin-top:20px; padding-top:20px; border-top:1px solid var(--border);">
+                            <button class="btn" style="flex:1; justify-content:center;" onclick="document.getElementById('addPageModal').style.display='none'">
+                                Cancel
+                            </button>
+                            <button id="createPageBtn" class="btn" style="flex:2; justify-content:center; background:linear-gradient(135deg, #6366f1, #8b5cf6); color:white; font-weight:600;" onclick="window.App.createPageFromModal()">
+                                <i class="bi bi-plus-lg"></i> Create Page
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Page Size Modal (kept for resize functionality) -->
                 <div id="pageSizeModal" class="overlay" style="display:none; z-index:300;">
                     <div class="card" style="max-width:450px; width:90%; background:var(--bg-panel); border:1px solid var(--border);">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; padding-bottom:10px; border-bottom:1px solid var(--border);">

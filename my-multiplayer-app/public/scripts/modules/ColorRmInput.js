@@ -184,6 +184,22 @@ export const ColorRmInput = {
                 console.log('S-Pen Engine not found, skipping initialization.');
             });
 
+        // Initialize Eraser Pen Engine (button 32)
+        import('../eraser_engine.js')
+            .then(({ initializeEraserPen }) => {
+                const canvas = this.getElement('canvas');
+                if (canvas) {
+                    console.log('Initializing Eraser Pen Engine for ColorRM...');
+                    initializeEraserPen(canvas, (isErasing) => {
+                        // Dispatch custom events similar to S-Pen
+                        window.dispatchEvent(new CustomEvent(isErasing ? 'eraser-pen-down' : 'eraser-pen-up'));
+                    });
+                }
+            })
+            .catch(err => {
+                console.log('Eraser Pen Engine not found, skipping initialization.');
+            });
+
         const c = this.getElement('canvas');
         if (!c) return;
 
@@ -219,6 +235,25 @@ export const ColorRmInput = {
             if (this.state.tool === 'eraser') {
                 this.setTool(previousTool);
                 console.log('S-Pen: Reverted to', previousTool);
+            }
+        });
+
+        // --- Eraser Pen Button Logic (button 32) ---
+        window.addEventListener('eraser-pen-down', () => {
+            if (!isActiveInstance()) return;
+
+            if (this.state.tool !== 'eraser') {
+                previousTool = this.state.tool;
+                this.setTool('eraser');
+                console.log('Eraser Pen: Switched to Eraser');
+            }
+        });
+        window.addEventListener('eraser-pen-up', () => {
+            if (!isActiveInstance()) return;
+
+            if (this.state.tool === 'eraser') {
+                this.setTool(previousTool);
+                console.log('Eraser Pen: Reverted to', previousTool);
             }
         });
 
@@ -327,19 +362,22 @@ export const ColorRmInput = {
             }
 
             this.isDragging = true;
+            // Reset stabilization on stroke start
+            this._resetStabilization();
             if(this.state.tool==='lasso') lassoPath=[pt]; else if(this.state.tool!=='shape' && this.state.tool!=='capture') this.currentStroke=[pt];
         };
 
         const onPointerMove = e => {
             // Scope: Only process events if this instance is active
-            // Check if we're dragging OR if the event target is within our container
-            const isOurEvent = this.isDragging ||
+            // Check if we're dragging, resizing, rotating OR if the event target is within our container
+            const isInteracting = this.isDragging || isMovingSelection || isResizing || isRotating;
+            const isOurEvent = isInteracting ||
                                (this.container ? this.container.contains(e.target) : true);
             if (!isOurEvent) return;
 
             if (lastPinchDist !== null) return;
-            // Only process if target is our canvas or we are dragging
-            if (!this.isDragging && e.target !== c) return;
+            // Only process if target is our canvas or we are interacting
+            if (!isInteracting && e.target !== c) return;
 
             const pt = getPt(e);
 
@@ -359,6 +397,91 @@ export const ColorRmInput = {
             }
 
             if(isMovingSelection) { this.dragOffset = {x:pt.x-dragStart.x, y:pt.y-dragStart.y}; this.render(); return; }
+
+            // Handle resize during drag
+            if(isResizing && startBounds && resizeHandle) {
+                const img = this.state.images[this.state.idx];
+                const dx = pt.x - startPt.x;
+                const dy = pt.y - startPt.y;
+
+                this.state.selection.forEach((idx, i) => {
+                    const st = img.history[idx];
+                    const orig = initialHistoryState[i];
+
+                    // Calculate scale factors based on which handle is being dragged
+                    let scaleX = 1, scaleY = 1;
+                    let newX = orig.x, newY = orig.y, newW = orig.w, newH = orig.h;
+
+                    if (resizeHandle.includes('r')) { // right handles
+                        newW = orig.w + dx;
+                        scaleX = newW / orig.w;
+                    }
+                    if (resizeHandle.includes('l')) { // left handles
+                        newX = orig.x + dx;
+                        newW = orig.w - dx;
+                        scaleX = newW / orig.w;
+                    }
+                    if (resizeHandle.includes('b')) { // bottom handles
+                        newH = orig.h + dy;
+                        scaleY = newH / orig.h;
+                    }
+                    if (resizeHandle.includes('t')) { // top handles
+                        newY = orig.y + dy;
+                        newH = orig.h - dy;
+                        scaleY = newH / orig.h;
+                    }
+
+                    // Apply to shape/text
+                    if (st.tool === 'pen' || st.tool === 'eraser') {
+                        // Scale pen points relative to original bounds
+                        const origBounds = this._getPenBounds(orig.pts);
+                        st.pts = orig.pts.map(p => ({
+                            x: origBounds.minX + (p.x - origBounds.minX) * scaleX + (resizeHandle.includes('l') ? dx : 0),
+                            y: origBounds.minY + (p.y - origBounds.minY) * scaleY + (resizeHandle.includes('t') ? dy : 0)
+                        }));
+                    } else {
+                        st.x = newX;
+                        st.y = newY;
+                        st.w = newW;
+                        st.h = newH;
+                    }
+                });
+
+                this.render();
+                return;
+            }
+
+            // Handle rotation during drag
+            if(isRotating && startBounds) {
+                const img = this.state.images[this.state.idx];
+                const currentAngle = Math.atan2(pt.y - startBounds.cy, pt.x - startBounds.cx);
+                const deltaAngle = currentAngle - startRotation;
+
+                this.state.selection.forEach((idx, i) => {
+                    const st = img.history[idx];
+                    const orig = initialHistoryState[i];
+
+                    if (st.tool === 'pen' || st.tool === 'eraser') {
+                        // Rotate pen points around the center of the selection
+                        st.pts = orig.pts.map(p => {
+                            const rx = p.x - startBounds.cx;
+                            const ry = p.y - startBounds.cy;
+                            const cos = Math.cos(deltaAngle);
+                            const sin = Math.sin(deltaAngle);
+                            return {
+                                x: startBounds.cx + rx * cos - ry * sin,
+                                y: startBounds.cy + rx * sin + ry * cos
+                            };
+                        });
+                    } else {
+                        // For shapes/text, update rotation property
+                        st.rotation = (orig.rotation || 0) + deltaAngle;
+                    }
+                });
+
+                this.render();
+                return;
+            }
 
             if (this.state.tool === 'hand' && this.isDragging) {
                 const dx = e.clientX - this.lastScreenX;
@@ -506,14 +629,17 @@ export const ColorRmInput = {
                     return;
                 }
 
-                this.currentStroke.push(pt); const ctx=c.getContext('2d');
+                // Apply stabilization to the point
+                const stabilizedPt = this._applyStabilization(pt);
+                this.currentStroke.push(stabilizedPt);
+                const ctx=c.getContext('2d');
                 ctx.save();
                 ctx.translate(this.state.pan.x, this.state.pan.y);
                 ctx.scale(this.state.zoom, this.state.zoom);
                 ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize;
                 ctx.strokeStyle=this.state.tool==='eraser'?(this.state.bg==='transparent'?'#000':this.state.bg):this.state.penColor;
                 if(this.state.tool==='eraser'&&this.state.bg==='transparent') ctx.globalCompositeOperation='destination-out';
-                ctx.beginPath(); ctx.moveTo(this.currentStroke[this.currentStroke.length-2].x, this.currentStroke[this.currentStroke.length-2].y); ctx.lineTo(pt.x,pt.y); ctx.stroke(); ctx.restore();
+                ctx.beginPath(); ctx.moveTo(this.currentStroke[this.currentStroke.length-2].x, this.currentStroke[this.currentStroke.length-2].y); ctx.lineTo(stabilizedPt.x,stabilizedPt.y); ctx.stroke(); ctx.restore();
             }
         };
 
@@ -606,6 +732,31 @@ export const ColorRmInput = {
                 this.state.selection.forEach(idx => { const st=this.state.images[this.state.idx].history[idx]; if(st.tool==='pen') st.pts.forEach(p=>{p.x+=this.dragOffset.x;p.y+=this.dragOffset.y}); else {st.x+=this.dragOffset.x;st.y+=this.dragOffset.y} });
                 this.dragOffset=null; this.saveCurrentImg(); this.render(); return;
             }
+
+            // Finalize resize operation
+            if(isResizing) {
+                isResizing = false;
+                resizeHandle = null;
+                initialHistoryState = [];
+                startBounds = null;
+                this.invalidateCache();
+                this.saveCurrentImg();
+                this.render();
+                return;
+            }
+
+            // Finalize rotation operation
+            if(isRotating) {
+                isRotating = false;
+                initialHistoryState = [];
+                startBounds = null;
+                startRotation = 0;
+                this.invalidateCache();
+                this.saveCurrentImg();
+                this.render();
+                return;
+            }
+
             if(!this.isDragging) {
                 // Send a final update on pointer up even if not dragging, to clear drawing state
                 if (this.liveSync) {
@@ -747,6 +898,23 @@ export const ColorRmInput = {
                     delete this.pendingShape;
                 }
             } else if(['pen','eraser'].includes(this.state.tool)) {
+                // Check for hold-to-shape conversion (pen only)
+                if (this.state.tool === 'pen' && this.state.holdToShape && this.currentStroke && this.currentStroke.length > 10) {
+                    const shapeObj = this._convertToShape(this.currentStroke);
+                    if (shapeObj) {
+                        // Convert stroke to shape
+                        this.state.images[this.state.idx].history.push(shapeObj);
+                        this.saveCurrentImg(true);
+                        if (this.liveSync && !this.liveSync.isInitializing) {
+                            this.liveSync.addStroke(this.state.idx, shapeObj);
+                        }
+                        this.ui.showToast(`Converted to ${shapeObj.shapeType}`);
+                        this.render();
+                        return;
+                    }
+                }
+
+                // Normal stroke
                 const newStroke = {id: Date.now() + Math.random(), lastMod: Date.now(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize, deleted: false};
                 this.state.images[this.state.idx].history.push(newStroke);
                 this.saveCurrentImg(true);
@@ -864,5 +1032,195 @@ export const ColorRmInput = {
             if (intersect) inside = !inside;
         }
         return inside;
+    },
+
+    // =============================================
+    // PEN STABILIZATION (Lazy Brush Algorithm)
+    // =============================================
+
+    /**
+     * Sets the stabilization level (0-100)
+     * Higher values = more smoothing/lag
+     */
+    setStabilization(value) {
+        this.state.stabilization = parseInt(value) || 0;
+        const label = this.getElement('stabilizationValue');
+        if (label) label.textContent = `${this.state.stabilization}%`;
+        this.saveSessionState();
+    },
+
+    /**
+     * Applies stabilization to a point using lazy brush algorithm
+     * Creates a "pulling string" effect for smoother lines
+     */
+    _applyStabilization(newPoint) {
+        const stab = this.state.stabilization || 0;
+        if (stab === 0 || !this._lastStabilizedPoint) {
+            this._lastStabilizedPoint = { ...newPoint };
+            return newPoint;
+        }
+
+        // Lazy brush: the brush follows the cursor with a "string" of length based on stabilization
+        // Higher stabilization = longer string = more lag but smoother
+        const friction = stab / 100; // 0 to 1
+        const stringLength = stab * 0.5; // Max 50px string length
+
+        const dx = newPoint.x - this._lastStabilizedPoint.x;
+        const dy = newPoint.y - this._lastStabilizedPoint.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist > stringLength) {
+            // Pull the brush toward the cursor
+            const pullFactor = 1 - (stringLength / dist);
+            this._lastStabilizedPoint.x += dx * pullFactor * (1 - friction * 0.5);
+            this._lastStabilizedPoint.y += dy * pullFactor * (1 - friction * 0.5);
+        }
+
+        return { ...this._lastStabilizedPoint };
+    },
+
+    /**
+     * Resets stabilization state (call on stroke start)
+     */
+    _resetStabilization() {
+        this._lastStabilizedPoint = null;
+    },
+
+    // =============================================
+    // HOLD TO SHAPE
+    // =============================================
+
+    /**
+     * Enables/disables hold-to-shape feature
+     */
+    setHoldToShape(enabled) {
+        this.state.holdToShape = enabled;
+        this.saveSessionState();
+    },
+
+    /**
+     * Detects if a stroke resembles a shape and returns the shape type
+     * Called when user holds still at the end of a stroke
+     */
+    _detectShape(points) {
+        if (points.length < 5) return null;
+
+        // Calculate bounding box
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        points.forEach(p => {
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+        });
+
+        const width = maxX - minX;
+        const height = maxY - minY;
+        const centerX = minX + width / 2;
+        const centerY = minY + height / 2;
+
+        // Check if too small
+        if (width < 20 && height < 20) return null;
+
+        // Check if it's a line (very thin bounding box)
+        const aspectRatio = Math.max(width, height) / Math.min(width, height);
+        if (aspectRatio > 5) {
+            return {
+                type: 'line',
+                x: points[0].x,
+                y: points[0].y,
+                w: points[points.length - 1].x - points[0].x,
+                h: points[points.length - 1].y - points[0].y
+            };
+        }
+
+        // Check if stroke is closed (start near end)
+        const startEnd = Math.hypot(
+            points[0].x - points[points.length - 1].x,
+            points[0].y - points[points.length - 1].y
+        );
+        const isClosed = startEnd < Math.max(width, height) * 0.3;
+
+        if (!isClosed) return null;
+
+        // Calculate circularity: how close are points to being equidistant from center
+        let totalDeviation = 0;
+        const avgRadius = (width + height) / 4;
+        points.forEach(p => {
+            const distFromCenter = Math.hypot(p.x - centerX, p.y - centerY);
+            totalDeviation += Math.abs(distFromCenter - avgRadius);
+        });
+        const circularity = 1 - (totalDeviation / points.length / avgRadius);
+
+        // Calculate rectangularity: how many points are near the edges
+        let edgePoints = 0;
+        const edgeThreshold = Math.min(width, height) * 0.15;
+        points.forEach(p => {
+            const nearLeft = Math.abs(p.x - minX) < edgeThreshold;
+            const nearRight = Math.abs(p.x - maxX) < edgeThreshold;
+            const nearTop = Math.abs(p.y - minY) < edgeThreshold;
+            const nearBottom = Math.abs(p.y - maxY) < edgeThreshold;
+            if (nearLeft || nearRight || nearTop || nearBottom) edgePoints++;
+        });
+        const rectangularity = edgePoints / points.length;
+
+        // Detect shape based on metrics
+        if (circularity > 0.7) {
+            return {
+                type: 'circle',
+                x: minX,
+                y: minY,
+                w: width,
+                h: height
+            };
+        } else if (rectangularity > 0.6) {
+            return {
+                type: 'rectangle',
+                x: minX,
+                y: minY,
+                w: width,
+                h: height
+            };
+        }
+
+        return null;
+    },
+
+    /**
+     * Converts a stroke to a detected shape
+     */
+    _convertToShape(points) {
+        const detected = this._detectShape(points);
+        if (!detected) return null;
+
+        return {
+            id: Date.now() + Math.random(),
+            lastMod: Date.now(),
+            tool: 'shape',
+            shapeType: detected.type,
+            x: detected.x,
+            y: detected.y,
+            w: detected.w,
+            h: detected.h,
+            border: this.state.penColor,
+            fill: 'transparent',
+            width: this.state.penSize,
+            rotation: 0
+        };
+    },
+
+    /**
+     * Gets bounding box of pen stroke points
+     */
+    _getPenBounds(pts) {
+        if (!pts || pts.length === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0, w: 0, h: 0 };
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        pts.forEach(p => {
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+        });
+        return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
     }
 };
