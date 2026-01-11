@@ -199,14 +199,20 @@ export class ColorRmApp {
                 this.handleIncomingUrl(url);
             });
 
-            // Listen for file open events (PDF files, etc.)
-            App.addListener('appRestoredResult', (data) => {
-                if (data && data.data) {
-                    const filePath = data.data.filePath || data.data.fileUri;
-                    if (filePath && filePath.toLowerCase().endsWith('.pdf')) {
-                        console.log('PDF file opened:', filePath);
-                        this.handlePdfFile(filePath);
+            // Listen for URI scheme events (for file associations)
+            App.addListener('appUriOpen', (data) => {
+                const url = data.url;
+                console.log('App URI opened:', url);
+
+                // Check if it's a file URL
+                if (url.startsWith('file://') || url.startsWith('content://')) {
+                    if (url.toLowerCase().endsWith('.pdf')) {
+                        console.log('PDF file opened via URI:', url);
+                        this.handlePdfFileFromUri(url);
                     }
+                } else {
+                    // Parse the URL and route it appropriately
+                    this.handleIncomingUrl(url);
                 }
             });
 
@@ -217,11 +223,42 @@ export class ColorRmApp {
                     this.checkPendingIntents();
                 }
             });
+
+            // Check for initial intent when app starts
+            this.checkInitialIntent();
         } else {
             // For web browsers, handle URL changes via hash routing
             window.addEventListener('hashchange', () => {
                 this.handleIncomingUrl(window.location.href);
             });
+        }
+    }
+
+    // Check for initial intent when app starts
+    async checkInitialIntent() {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+            try {
+                const { App } = window.Capacitor.Plugins;
+                const launchInfo = await App.getLaunchUri();
+
+                if (launchInfo && launchInfo.url) {
+                    const url = launchInfo.url;
+                    console.log('Initial launch URL:', url);
+
+                    // Check if it's a file URL
+                    if (url.startsWith('file://') || url.startsWith('content://')) {
+                        if (url.toLowerCase().endsWith('.pdf')) {
+                            console.log('PDF file opened via initial intent:', url);
+                            this.handlePdfFileFromUri(url);
+                        }
+                    } else {
+                        // Handle as regular URL
+                        this.handleIncomingUrl(url);
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking initial intent:', error);
+            }
         }
     }
 
@@ -258,32 +295,16 @@ export class ColorRmApp {
         }
     }
 
-    // Handle incoming PDF files
+    // Handle incoming PDF files from file path
     async handlePdfFile(filePath) {
         try {
-            // Check if Capacitor Filesystem plugin is available
-            if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
-                const { Filesystem, Capacitor } = window.Capacitor.Plugins;
+            // For file paths, we need to read the file differently
+            // This function handles traditional file paths
+            const file = await this.convertFilePathToFileObject(filePath);
 
-                // Read the PDF file
-                const fileData = await Filesystem.readFile({
-                    path: filePath,
-                    directory: Filesystem.Directory.External
-                });
-
-                // Convert base64 data to Blob
-                const binaryString = atob(fileData.data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                const blob = new Blob([bytes], { type: 'application/pdf' });
-
-                // Create a file object from the blob
-                const fileName = filePath.split('/').pop() || 'imported_pdf.pdf';
-                const file = new File([blob], fileName, { type: 'application/pdf' });
-
+            if (file) {
                 // Check if a project with the same name already exists
+                const fileName = filePath.split('/').pop() || 'imported_pdf.pdf';
                 const projectName = fileName.replace(/\.[^/.]+$/, ""); // Remove extension
                 const existingProjects = await this.dbGetAll('sessions');
                 const existingProject = existingProjects.find(proj => proj.name === projectName);
@@ -307,13 +328,117 @@ export class ColorRmApp {
                     // Create new project with PDF
                     await this.createProjectFromPdf(file, projectName);
                 }
-            } else {
-                console.error('Filesystem plugin not available');
             }
         } catch (error) {
             console.error('Error handling PDF file:', error);
             this.ui.showToast('Error opening PDF file');
         }
+    }
+
+    // Handle incoming PDF files from URI (file:// or content://)
+    async handlePdfFileFromUri(uri) {
+        try {
+            // Convert URI to file object
+            const file = await this.convertUriToFileObject(uri);
+
+            if (file) {
+                // Check if a project with the same name already exists
+                const fileName = uri.split('/').pop().split('?')[0] || 'imported_pdf.pdf';
+                const projectName = fileName.replace(/\.[^/.]+$/, ""); // Remove extension
+                const existingProjects = await this.dbGetAll('sessions');
+                const existingProject = existingProjects.find(proj => proj.name === projectName);
+
+                if (existingProject) {
+                    // Ask user if they want to create a new project or open existing
+                    const choice = await this.ui.showPrompt(
+                        "Project Already Exists",
+                        "Type 'open' to open existing project, or 'new' to create a new one",
+                        "open"
+                    );
+
+                    if (choice && choice.toLowerCase() === 'new') {
+                        // Create new project with PDF
+                        await this.createProjectFromPdf(file, `${projectName}_copy`);
+                    } else {
+                        // Open existing project
+                        this.switchProject(existingProject.ownerId || 'local', existingProject.id);
+                    }
+                } else {
+                    // Create new project with PDF
+                    await this.createProjectFromPdf(file, projectName);
+                }
+            }
+        } catch (error) {
+            console.error('Error handling PDF file from URI:', error);
+            this.ui.showToast('Error opening PDF file');
+        }
+    }
+
+    // Convert file path to File object
+    async convertFilePathToFileObject(filePath) {
+        try {
+            if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+                const { Filesystem } = window.Capacitor.Plugins;
+
+                // Read the PDF file
+                const fileData = await Filesystem.readFile({
+                    path: filePath
+                });
+
+                // Convert base64 data to Blob
+                const binaryString = atob(fileData.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                const blob = new Blob([bytes], { type: 'application/pdf' });
+
+                // Create a file object from the blob
+                const fileName = filePath.split('/').pop() || 'imported_pdf.pdf';
+                return new File([blob], fileName, { type: 'application/pdf' });
+            }
+        } catch (error) {
+            console.error('Error converting file path to file object:', error);
+        }
+        return null;
+    }
+
+    // Convert URI to File object
+    async convertUriToFileObject(uri) {
+        try {
+            if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+                const { Filesystem } = window.Capacitor.Plugins;
+
+                // For content:// URIs, we need to handle them differently
+                // First, try to read directly if it's a file:// URI
+                if (uri.startsWith('file://')) {
+                    const filePath = uri.substring(7); // Remove 'file://' prefix
+                    return await this.convertFilePathToFileObject(filePath);
+                } else if (uri.startsWith('content://')) {
+                    // For content URIs, we need to use the Documents contract
+                    // This is more complex and may require additional plugins
+                    // For now, we'll try to read it directly
+                    const fileData = await Filesystem.readFile({
+                        path: uri
+                    });
+
+                    // Convert base64 data to Blob
+                    const binaryString = atob(fileData.data);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    const blob = new Blob([bytes], { type: 'application/pdf' });
+
+                    // Create a file object from the blob
+                    const fileName = uri.split('/').pop().split('?')[0] || 'imported_pdf.pdf';
+                    return new File([blob], fileName, { type: 'application/pdf' });
+                }
+            }
+        } catch (error) {
+            console.error('Error converting URI to file object:', error);
+        }
+        return null;
     }
 
     // Create a new project from a PDF file
