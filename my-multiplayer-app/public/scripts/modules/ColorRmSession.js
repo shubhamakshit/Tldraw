@@ -16,6 +16,174 @@ export const ColorRmSession = {
         }
     },
 
+    // =============================================
+    // REFACTORED HELPERS (Phase 1 - Core Helpers)
+    // =============================================
+
+    /**
+     * Creates a page object with consistent structure
+     * @param {number} pageIndex - The index for the new page
+     * @param {Blob} blob - The image blob for the page
+     * @returns {Object} Page object ready for storage
+     */
+    _createPageObject(pageIndex, blob) {
+        return {
+            id: `${this.state.sessionId}_${pageIndex}`,
+            sessionId: this.state.sessionId,
+            pageIndex: pageIndex,
+            blob: blob,
+            history: []
+        };
+    },
+
+    /**
+     * Sets canvas dimensions and updates state
+     * @param {number} width - Canvas width
+     * @param {number} height - Canvas height
+     */
+    _setCanvasDimensions(width, height) {
+        const displayCanvas = this.getElement('canvas');
+        if (displayCanvas) {
+            displayCanvas.width = width;
+            displayCanvas.height = height;
+        }
+        this.state.viewW = width;
+        this.state.viewH = height;
+    },
+
+    /**
+     * Syncs page structure changes to Liveblocks
+     */
+    _syncPageStructureToLive() {
+        if (!this.liveSync) return;
+        this.liveSync.updatePageCount(this.state.images.length);
+        this.liveSync.notifyPageStructureChange();
+    },
+
+    /**
+     * Refreshes page-related UI elements (sidebar, total count, input)
+     */
+    _refreshPageUI() {
+        if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
+        const pt = this.getElement('pageTotal');
+        if (pt) pt.innerText = '/ ' + this.state.images.length;
+        const pageInput = this.getElement('pageInput');
+        if (pageInput) pageInput.value = this.state.idx + 1;
+    },
+
+    // =============================================
+    // REFACTORED HELPERS (Phase 2 - Storage Helpers)
+    // =============================================
+
+    /**
+     * Persists session metadata to IndexedDB and registry
+     * @param {Object} extraFields - Additional fields to merge into session
+     */
+    async _persistSessionMetadata(extraFields = {}) {
+        const session = await this.dbGet('sessions', this.state.sessionId);
+        if (!session) return;
+
+        session.pageCount = this.state.images.length;
+        session.idx = this.state.idx;
+        session.lastMod = Date.now();
+        Object.assign(session, extraFields);
+
+        await this.dbPut('sessions', session);
+        if (this.registry) this.registry.upsert(session);
+    },
+
+    /**
+     * Uploads a page blob to the backend (collaborative mode)
+     * @param {number} pageIndex - The page index
+     * @param {Blob} blob - The image blob to upload
+     * @returns {boolean} True if upload succeeded or skipped (non-collaborative)
+     */
+    async _uploadPageBlob(pageIndex, blob) {
+        if (!this.config.collaborative || !this.state.ownerId) return true;
+
+        try {
+            const url = window.Config?.apiUrl(`/api/color_rm/page_upload/${this.state.sessionId}/${pageIndex}`)
+                     || `/api/color_rm/page_upload/${this.state.sessionId}/${pageIndex}`;
+
+            const res = await fetch(url, {
+                method: 'POST',
+                body: blob,
+                headers: {
+                    'Content-Type': blob.type || 'image/jpeg',
+                    'x-project-name': encodeURIComponent(this.state.projectName)
+                }
+            });
+
+            if (!res.ok) {
+                console.error('Page upload failed:', await res.text());
+                return false;
+            }
+            return true;
+        } catch (err) {
+            console.error('Error uploading page:', err);
+            return false;
+        }
+    },
+
+    // =============================================
+    // REFACTORED HELPERS (Phase 3 - Complex Helpers)
+    // =============================================
+
+    /**
+     * Inserts a page at a specific index, shifting existing pages
+     * @param {Object} pageObj - The page object to insert
+     * @param {number} newPageIndex - The index where to insert
+     */
+    async _insertPageAtIndex(pageObj, newPageIndex) {
+        // Update all existing pages that come after the insertion point
+        for (let i = newPageIndex; i < this.state.images.length; i++) {
+            this.state.images[i].pageIndex = i + 1;
+            this.state.images[i].id = `${this.state.sessionId}_${i + 1}`;
+            await this.dbPut('pages', this.state.images[i]);
+        }
+
+        // Insert the new page at the correct position
+        this.state.images.splice(newPageIndex, 0, pageObj);
+        await this.dbPut('pages', pageObj);
+    },
+
+    /**
+     * Handles navigation after inserting a page
+     * @param {number} newPageIndex - The index of the newly inserted page
+     * @param {boolean} navigateToNew - Whether to navigate to the new page
+     */
+    async _handlePostInsertNavigation(newPageIndex, navigateToNew) {
+        if (navigateToNew) {
+            await this.loadPage(newPageIndex);
+        } else {
+            // If appending, stay on current page but update the total
+            if (this.state.idx >= newPageIndex) {
+                // If we inserted before or at the current page, update current index
+                this.state.idx++;
+            }
+            // Update page input to reflect current page
+            const pageInput = this.getElement('pageInput');
+            if (pageInput) pageInput.value = this.state.idx + 1;
+        }
+    },
+
+    /**
+     * Creates a canvas blob with a solid color background
+     * @param {number} width - Canvas width
+     * @param {number} height - Canvas height
+     * @param {string} bgColor - Background color (hex)
+     * @returns {Promise<Blob>} The canvas as a JPEG blob
+     */
+    async _createBlankCanvasBlob(width, height, bgColor) {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, width, height);
+        return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+    },
+
     // --- Folder Management ---
     async createFolder() {
         this.ui.showInput("New Folder", "Folder Name", async (name) => {
@@ -852,131 +1020,213 @@ export const ColorRmSession = {
         }
     },
 
+    // =============================================
+    // PAGE CREATION MODAL HANDLERS
+    // =============================================
+
+    // Internal state for the add page modal
+    _pageModalState: {
+        width: 2000,
+        height: 1500,
+        insertPosition: 'end'
+    },
+
+    /**
+     * Shows the Add Page modal
+     */
+    showAddPageModal() {
+        const modal = document.getElementById('addPageModal');
+        if (modal) {
+            modal.style.display = 'grid';
+            // Reset to default state
+            this._pageModalState = { width: 2000, height: 1500, insertPosition: 'end' };
+            this.switchPageModalTab('blank');
+
+            // Reset size preset selection
+            const sizeButtons = document.querySelectorAll('.size-preset-btn');
+            sizeButtons.forEach(btn => btn.classList.remove('active'));
+            const defaultBtn = document.querySelector('[data-size="2000x1500"]');
+            if (defaultBtn) defaultBtn.classList.add('active');
+
+            // Reset insert position
+            const posButtons = document.querySelectorAll('.insert-pos-btn');
+            posButtons.forEach(btn => btn.classList.remove('active'));
+            const endBtn = document.querySelector('[data-pos="end"]');
+            if (endBtn) endBtn.classList.add('active');
+
+            // Hide custom size inputs
+            const customInputs = document.getElementById('customSizeInputs');
+            if (customInputs) customInputs.style.display = 'none';
+        }
+    },
+
+    /**
+     * Switches between tabs in the Add Page modal
+     * @param {string} tab - 'blank', 'template', or 'import'
+     */
+    switchPageModalTab(tab) {
+        // Update tab buttons
+        const tabs = document.querySelectorAll('.page-modal-tab');
+        tabs.forEach(t => {
+            t.classList.toggle('active', t.dataset.tab === tab);
+        });
+
+        // Show/hide content panels
+        const blankPanel = document.getElementById('pageModalBlank');
+        const templatePanel = document.getElementById('pageModalTemplate');
+        const importPanel = document.getElementById('pageModalImport');
+        const createBtn = document.getElementById('createPageBtn');
+
+        if (blankPanel) blankPanel.style.display = tab === 'blank' ? 'block' : 'none';
+        if (templatePanel) templatePanel.style.display = tab === 'template' ? 'block' : 'none';
+        if (importPanel) importPanel.style.display = tab === 'import' ? 'block' : 'none';
+
+        // Hide create button for template and import tabs (they have their own actions)
+        if (createBtn) {
+            createBtn.style.display = tab === 'blank' ? 'flex' : 'none';
+        }
+    },
+
+    /**
+     * Selects a page size preset
+     * @param {number} width - Page width
+     * @param {number} height - Page height
+     * @param {HTMLElement} element - The clicked button element
+     */
+    selectPageSize(width, height, element) {
+        // Update internal state
+        this._pageModalState.width = width;
+        this._pageModalState.height = height;
+
+        // Update button states
+        const buttons = document.querySelectorAll('.size-preset-btn');
+        buttons.forEach(btn => btn.classList.remove('active'));
+        if (element) element.classList.add('active');
+
+        // Update custom inputs if visible
+        const widthInput = document.getElementById('newPageWidth');
+        const heightInput = document.getElementById('newPageHeight');
+        if (widthInput) widthInput.value = width;
+        if (heightInput) heightInput.value = height;
+
+        // Hide custom inputs when selecting a preset (unless it's "custom")
+        const customInputs = document.getElementById('customSizeInputs');
+        if (customInputs && element && element.dataset.size !== 'custom') {
+            customInputs.style.display = 'none';
+        }
+    },
+
+    /**
+     * Toggles the custom size input visibility
+     */
+    toggleCustomSize() {
+        const customInputs = document.getElementById('customSizeInputs');
+        if (customInputs) {
+            const isHidden = customInputs.style.display === 'none';
+            customInputs.style.display = isHidden ? 'block' : 'none';
+
+            // Clear other preset selections
+            const buttons = document.querySelectorAll('.size-preset-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+
+            // Highlight custom button
+            const customBtn = document.querySelector('[data-size="custom"]');
+            if (customBtn) customBtn.classList.add('active');
+
+            // Update state from inputs
+            const widthInput = document.getElementById('newPageWidth');
+            const heightInput = document.getElementById('newPageHeight');
+            if (widthInput && heightInput) {
+                this._pageModalState.width = parseInt(widthInput.value) || 2000;
+                this._pageModalState.height = parseInt(heightInput.value) || 1500;
+            }
+        }
+    },
+
+    /**
+     * Selects the insert position for new pages
+     * @param {string} position - 'end' or 'after'
+     * @param {HTMLElement} element - The clicked button element
+     */
+    selectInsertPosition(position, element) {
+        this._pageModalState.insertPosition = position;
+
+        // Update button states
+        const buttons = document.querySelectorAll('.insert-pos-btn');
+        buttons.forEach(btn => btn.classList.remove('active'));
+        if (element) element.classList.add('active');
+    },
+
+    /**
+     * Creates a page based on modal settings
+     * @param {string} templateType - Optional template type ('white', 'graph', 'lined', 'dotted')
+     */
+    async createPageFromModal(templateType = null) {
+        // Close the modal
+        const modal = document.getElementById('addPageModal');
+        if (modal) modal.style.display = 'none';
+
+        // Get values from modal state
+        let width = this._pageModalState.width;
+        let height = this._pageModalState.height;
+        const insertAtCurrent = this._pageModalState.insertPosition === 'after';
+
+        // If custom inputs are visible, use their values
+        const customInputs = document.getElementById('customSizeInputs');
+        if (customInputs && customInputs.style.display !== 'none') {
+            const widthInput = document.getElementById('newPageWidth');
+            const heightInput = document.getElementById('newPageHeight');
+            width = parseInt(widthInput?.value) || width;
+            height = parseInt(heightInput?.value) || height;
+        }
+
+        // Handle template pages
+        if (templateType && templateType !== 'white') {
+            await this.addTemplatePage(templateType);
+            return;
+        }
+
+        // Handle blank page (default or white template)
+        await this.addBlankPage(width, height, insertAtCurrent);
+    },
+
     async addBlankPage(width = 2000, height = 1500, insertAtCurrent = false) {
         // Get the selected color from the color picker
         const colorPicker = document.getElementById('blankPageColor');
         const bgColor = colorPicker ? colorPicker.value : '#ffffff';
 
-        // Create a blank canvas
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-
-        // Fill with selected background color
-        ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, width, height);
-
-        // Convert to high-quality blob
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95)); // Higher quality
+        // Create blank canvas blob using helper
+        const blob = await this._createBlankCanvasBlob(width, height, bgColor);
 
         // Determine where to insert the page
-        let newPageIndex;
-        if (insertAtCurrent) {
-            newPageIndex = this.state.idx + 1; // Insert after current page
-        } else {
-            newPageIndex = this.state.images.length; // Append at the end
-        }
+        const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
 
-        // Create page object
-        const pageObj = {
-            id: `${this.state.sessionId}_${newPageIndex}`,
-            sessionId: this.state.sessionId,
-            pageIndex: newPageIndex,
-            blob: blob,
-            history: []
-        };
-
-        // Update all existing pages that come after the insertion point
-        for (let i = newPageIndex; i < this.state.images.length; i++) {
-            this.state.images[i].pageIndex = i + 1;
-            this.state.images[i].id = `${this.state.sessionId}_${i + 1}`;
-            await this.dbPut('pages', this.state.images[i]);
-        }
-
-        // Insert the new page at the correct position
-        this.state.images.splice(newPageIndex, 0, pageObj);
-        await this.dbPut('pages', pageObj);
+        // Create and insert page using helpers
+        const pageObj = this._createPageObject(newPageIndex, blob);
+        await this._insertPageAtIndex(pageObj, newPageIndex);
 
         // Update UI
-        if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
-        const pt = this.getElement('pageTotal');
-        if (pt) pt.innerText = '/ ' + this.state.images.length;
+        this._refreshPageUI();
 
-        // Navigate to the new page if inserting at current
-        if (insertAtCurrent) {
-            await this.loadPage(newPageIndex);
-        } else {
-            // If appending, stay on current page but update the total
-            if (this.state.idx >= newPageIndex) {
-                // If we inserted before or at the current page, update current index
-                this.state.idx++;
-            }
-            // Update page input to reflect current page
-            const pageInput = this.getElement('pageInput');
-            if (pageInput) pageInput.value = this.state.idx + 1;
-        }
+        // Handle navigation
+        await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
 
         // Update session metadata
-        const session = await this.dbGet('sessions', this.state.sessionId);
-        if (session) {
-            session.pageCount = this.state.images.length;
-            session.idx = this.state.idx; // Update current page index in session
-            await this.dbPut('sessions', session);
-            if (this.registry) this.registry.upsert(session);
-        }
+        await this._persistSessionMetadata();
 
-        // Upload page image to backend if in collaborative mode
+        // Upload and sync
+        const uploadSuccess = await this._uploadPageBlob(newPageIndex, blob);
+        this._syncPageStructureToLive();
+
+        // Show toast based on upload result
         if (this.config.collaborative && this.state.ownerId) {
-            try {
-                const uploadRes = await fetch(window.Config?.apiUrl(`/api/color_rm/page_upload/${this.state.sessionId}/${newPageIndex}`) || `/api/color_rm/page_upload/${this.state.sessionId}/${newPageIndex}`, {
-                    method: 'POST',
-                    body: blob,
-                    headers: {
-                        'Content-Type': 'image/jpeg',
-                        'x-project-name': encodeURIComponent(this.state.projectName)
-                    }
-                });
-
-                if (uploadRes.ok) {
-                    // Synchronize with Liveblocks - send page count and potentially page data
-                    if (this.liveSync) {
-                        // Update the page count in metadata
-                        this.liveSync.updatePageCount(this.state.images.length);
-                        // Update presence to notify other users about the page structure change
-                        this.liveSync.notifyPageStructureChange();
-                    }
-
-                    this.ui.showToast(`Added blank page ${newPageIndex + 1} ✓ Synced`);
-                } else {
-                    console.error('Page upload failed:', await uploadRes.text());
-                    this.ui.showToast(`Added blank page ${newPageIndex + 1} ⚠ Upload failed`);
-                }
-            } catch (err) {
-                console.error('Error uploading page image:', err);
-                this.ui.showToast(`Added blank page ${newPageIndex + 1} ⚠ Upload failed`);
-            }
+            this.ui.showToast(`Added blank page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
         } else {
-            // Synchronize with Liveblocks - send page count and potentially page data
-            if (this.liveSync) {
-                // Update the page count in metadata
-                this.liveSync.updatePageCount(this.state.images.length);
-                // Update presence to notify other users about the page structure change
-                this.liveSync.notifyPageStructureChange();
-            }
-
             this.ui.showToast(`Added blank page ${newPageIndex + 1} (Local)`);
         }
 
-        // Update canvas dimensions to match new page size
-        const displayCanvas = this.getElement('canvas');
-        if (displayCanvas) {
-            displayCanvas.width = width;
-            displayCanvas.height = height;
-            // Update the view dimensions as well
-            this.state.viewW = width;
-            this.state.viewH = height;
-        }
+        // Update canvas dimensions
+        this._setCanvasDimensions(width, height);
     },
 
     async addImageAsPage(file, insertAtCurrent = false) {
@@ -987,108 +1237,41 @@ export const ColorRmSession = {
             img.onload = resolve;
         });
 
+        const width = img.width;
+        const height = img.height;
+
         // Create canvas to ensure consistent format
         const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
+        canvas.width = width;
+        canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
         // Convert to blob
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95)); // Higher quality
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
 
         // Determine where to insert the page
-        let newPageIndex;
-        if (insertAtCurrent) {
-            newPageIndex = this.state.idx + 1; // Insert after current page
-        } else {
-            newPageIndex = this.state.images.length; // Append at the end
-        }
+        const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
 
-        // Create page object
-        const pageObj = {
-            id: `${this.state.sessionId}_${newPageIndex}`,
-            sessionId: this.state.sessionId,
-            pageIndex: newPageIndex,
-            blob: blob,
-            history: []
-        };
-
-        // Update all existing pages that come after the insertion point
-        for (let i = newPageIndex; i < this.state.images.length; i++) {
-            this.state.images[i].pageIndex = i + 1;
-            this.state.images[i].id = `${this.state.sessionId}_${i + 1}`;
-            await this.dbPut('pages', this.state.images[i]);
-        }
-
-        // Insert the new page at the correct position
-        this.state.images.splice(newPageIndex, 0, pageObj);
-        await this.dbPut('pages', pageObj);
+        // Create and insert page using helpers
+        const pageObj = this._createPageObject(newPageIndex, blob);
+        await this._insertPageAtIndex(pageObj, newPageIndex);
 
         // Update UI
-        if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
-        const pt = this.getElement('pageTotal');
-        if (pt) pt.innerText = '/ ' + this.state.images.length;
+        this._refreshPageUI();
 
-        // Navigate to the new page if inserting at current
-        if (insertAtCurrent) {
-            await this.loadPage(newPageIndex);
-        } else {
-            // If appending, stay on current page but update the total
-            if (this.state.idx >= newPageIndex) {
-                // If we inserted before or at the current page, update current index
-                this.state.idx++;
-            }
-            // Update page input to reflect current page
-            const pageInput = this.getElement('pageInput');
-            if (pageInput) pageInput.value = this.state.idx + 1;
-        }
+        // Handle navigation
+        await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
 
         // Update session metadata
-        const session = await this.dbGet('sessions', this.state.sessionId);
-        if (session) {
-            session.pageCount = this.state.images.length;
-            session.idx = this.state.idx; // Update current page index in session
-            await this.dbPut('sessions', session);
-            if (this.registry) this.registry.upsert(session);
-        }
+        await this._persistSessionMetadata();
 
-        // Upload page image to backend if in collaborative mode
-        if (this.config.collaborative && this.state.ownerId) {
-            try {
-                const uploadRes = await fetch(window.Config?.apiUrl(`/api/color_rm/page_upload/${this.state.sessionId}/${newPageIndex}`) || `/api/color_rm/page_upload/${this.state.sessionId}/${newPageIndex}`, {
-                    method: 'POST',
-                    body: blob,
-                    headers: {
-                        'Content-Type': 'image/jpeg',
-                        'x-project-name': encodeURIComponent(this.state.projectName)
-                    }
-                });
-                if (!uploadRes.ok) {
-                    console.error('Page upload failed:', await uploadRes.text());
-                }
-            } catch (err) {
-                console.error('Error uploading page image:', err);
-            }
-        }
+        // Upload and sync
+        await this._uploadPageBlob(newPageIndex, blob);
+        this._syncPageStructureToLive();
 
-        // Synchronize with Liveblocks - send page count and potentially page data
-        if (this.liveSync) {
-            // Update the page count in metadata
-            this.liveSync.updatePageCount(this.state.images.length);
-            // Update presence to notify other users about the page structure change
-            this.liveSync.notifyPageStructureChange();
-        }
-
-        // Update canvas dimensions to match new page size
-        const displayCanvas = this.getElement('canvas');
-        if (displayCanvas) {
-            displayCanvas.width = width;
-            displayCanvas.height = height;
-            // Update the view dimensions as well
-            this.state.viewW = width;
-            this.state.viewH = height;
-        }
+        // Update canvas dimensions
+        this._setCanvasDimensions(width, height);
 
         this.ui.showToast(`Added image as page ${newPageIndex + 1}`);
     },
@@ -1131,9 +1314,7 @@ export const ColorRmSession = {
         }
 
         // Update UI
-        if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
-        const pt = this.getElement('pageTotal');
-        if (pt) pt.innerText = '/ ' + this.state.images.length;
+        this._refreshPageUI();
 
         // Navigate to a valid page (preferably the next one, or previous if at end)
         if (currentPageIndex >= this.state.images.length) {
@@ -1151,20 +1332,9 @@ export const ColorRmSession = {
             }
         }
 
-        // Update session metadata
-        const session = await this.dbGet('sessions', this.state.sessionId);
-        if (session) {
-            session.pageCount = this.state.images.length;
-            session.idx = this.state.idx; // Update current page index in session
-            await this.dbPut('sessions', session);
-            if (this.registry) this.registry.upsert(session);
-        }
-
-        // Synchronize with Liveblocks
-        if (this.liveSync) {
-            this.liveSync.updatePageCount(this.state.images.length);
-            this.liveSync.notifyPageStructureChange();
-        }
+        // Update session metadata and sync
+        await this._persistSessionMetadata();
+        this._syncPageStructureToLive();
 
         this.ui.showToast(`Deleted page ${currentPageIndex + 1}`);
     },
@@ -1250,25 +1420,14 @@ export const ColorRmSession = {
         });
 
         // Convert to blob
-        const newBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95)); // Higher quality
+        const newBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
 
         // Update the page in state and database
         currentPage.blob = newBlob;
         await this.dbPut('pages', currentPage);
 
-        // Update state dimensions
-        this.state.viewW = newWidth;
-        this.state.viewH = newHeight;
-
-        // Update canvas dimensions to match new page size
-        const displayCanvas = this.getElement('canvas');
-        if (displayCanvas) {
-            displayCanvas.width = newWidth;
-            displayCanvas.height = newHeight;
-            // Update the view dimensions as well
-            this.state.viewW = newWidth;
-            this.state.viewH = newHeight;
-        }
+        // Update canvas dimensions using helper
+        this._setCanvasDimensions(newWidth, newHeight);
 
         // Reload the page to reflect changes
         await this.loadPage(this.state.idx, false);
@@ -1427,15 +1586,8 @@ export const ColorRmSession = {
             }
         }
 
-        // Update canvas dimensions to match new page size
-        const displayCanvas = this.getElement('canvas');
-        if (displayCanvas) {
-            displayCanvas.width = width;
-            displayCanvas.height = height;
-            // Update the view dimensions as well
-            this.state.viewW = width;
-            this.state.viewH = height;
-        }
+        // Update canvas dimensions using helper
+        this._setCanvasDimensions(width, height);
 
         // Reload current page to reflect changes
         await this.loadPage(this.state.idx, false);
@@ -1506,91 +1658,31 @@ export const ColorRmSession = {
         }
         // For 'white' template, we just have a plain background
 
-        // Convert to blob - this returns a Promise
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95)); // Higher quality
+        // Convert to blob
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
 
-        // Determine where to insert the page
-        const newPageIndex = this.state.images.length; // Always append for templates
+        // Always append for templates
+        const newPageIndex = this.state.images.length;
 
-        // Create page object
-        const pageObj = {
-            id: `${this.state.sessionId}_${newPageIndex}`,
-            sessionId: this.state.sessionId,
-            pageIndex: newPageIndex,
-            blob: blob,
-            history: []
-        };
-
-        // Update all existing pages that come after the insertion point
-        for (let i = newPageIndex; i < this.state.images.length; i++) {
-            this.state.images[i].pageIndex = i + 1;
-            this.state.images[i].id = `${this.state.sessionId}_${i + 1}`;
-            await this.dbPut('pages', this.state.images[i]);
-        }
-
-        // Insert the new page at the correct position
-        this.state.images.splice(newPageIndex, 0, pageObj);
-        await this.dbPut('pages', pageObj);
+        // Create and insert page using helpers
+        const pageObj = this._createPageObject(newPageIndex, blob);
+        await this._insertPageAtIndex(pageObj, newPageIndex);
 
         // Update UI
-        if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
-        const pt = this.getElement('pageTotal');
-        if (pt) pt.innerText = '/ ' + this.state.images.length;
+        this._refreshPageUI();
 
-        // Stay on current page but update the total
-        if (this.state.idx >= newPageIndex) {
-            // If we inserted before or at the current page, update current index
-            this.state.idx++;
-        }
-        // Update page input to reflect current page
-        const pageInput = this.getElement('pageInput');
-        if (pageInput) pageInput.value = this.state.idx + 1;
+        // Handle navigation (templates always append, so navigateToNew=false)
+        await this._handlePostInsertNavigation(newPageIndex, false);
 
         // Update session metadata
-        const session = await this.dbGet('sessions', this.state.sessionId);
-        if (session) {
-            session.pageCount = this.state.images.length;
-            session.idx = this.state.idx; // Update current page index in session
-            await this.dbPut('sessions', session);
-            if (this.registry) this.registry.upsert(session);
-        }
+        await this._persistSessionMetadata();
 
-        // Upload page image to backend if in collaborative mode
-        if (this.config.collaborative && this.state.ownerId) {
-            try {
-                const uploadRes = await fetch(window.Config?.apiUrl(`/api/color_rm/page_upload/${this.state.sessionId}/${newPageIndex}`) || `/api/color_rm/page_upload/${this.state.sessionId}/${newPageIndex}`, {
-                    method: 'POST',
-                    body: blob,
-                    headers: {
-                        'Content-Type': 'image/jpeg',
-                        'x-project-name': encodeURIComponent(this.state.projectName)
-                    }
-                });
-                if (!uploadRes.ok) {
-                    console.error('Page upload failed:', await uploadRes.text());
-                }
-            } catch (err) {
-                console.error('Error uploading template page image:', err);
-            }
-        }
+        // Upload and sync
+        await this._uploadPageBlob(newPageIndex, blob);
+        this._syncPageStructureToLive();
 
-        // Synchronize with Liveblocks - send page count and potentially page data
-        if (this.liveSync) {
-            // Update the page count in metadata
-            this.liveSync.updatePageCount(this.state.images.length);
-            // Update presence to notify other users about the page structure change
-            this.liveSync.notifyPageStructureChange();
-        }
-
-        // Update canvas dimensions to match new page size
-        const displayCanvas = this.getElement('canvas');
-        if (displayCanvas) {
-            displayCanvas.width = width;
-            displayCanvas.height = height;
-            // Update the view dimensions as well
-            this.state.viewW = width;
-            this.state.viewH = height;
-        }
+        // Update canvas dimensions
+        this._setCanvasDimensions(width, height);
 
         this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1}`);
     },
@@ -1721,12 +1813,7 @@ export const ColorRmSession = {
                 if(this.state.activeSideTab === 'pages') this.renderPageSidebar();
 
                 // Synchronize with Liveblocks
-                if (this.liveSync) {
-                    // Update the page count in metadata
-                    this.liveSync.updatePageCount(this.state.images.length);
-                    // Update presence to notify other users about the page structure change
-                    this.liveSync.notifyPageStructureChange();
-                }
+                this._syncPageStructureToLive();
 
                 document.body.removeChild(modal);
             });
@@ -1745,5 +1832,128 @@ export const ColorRmSession = {
             console.error('Error switching project:', error);
             this.ui.showToast('Error switching project');
         }
+    },
+
+    // =============================================
+    // STRESS BENCHMARK FOR STROKE RENDERING
+    // =============================================
+
+    /**
+     * Runs a stress benchmark to test stroke rendering performance
+     * @param {number} strokeCount - Number of strokes to generate (default: 500)
+     * @param {number} pointsPerStroke - Points per stroke (default: 50)
+     */
+    async runStrokeBenchmark(strokeCount = 500, pointsPerStroke = 50) {
+        console.log(`\n🎯 STROKE RENDERING BENCHMARK`);
+        console.log(`================================`);
+        console.log(`Strokes: ${strokeCount}, Points/stroke: ${pointsPerStroke}`);
+        console.log(`Total points: ${strokeCount * pointsPerStroke}\n`);
+
+        const img = this.state.images[this.state.idx];
+        const originalHistory = [...img.history];
+
+        // Generate random strokes
+        const testStrokes = [];
+        const colors = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6'];
+
+        for (let i = 0; i < strokeCount; i++) {
+            const pts = [];
+            let x = Math.random() * this.state.viewW;
+            let y = Math.random() * this.state.viewH;
+
+            for (let j = 0; j < pointsPerStroke; j++) {
+                x += (Math.random() - 0.5) * 20;
+                y += (Math.random() - 0.5) * 20;
+                pts.push({ x, y });
+            }
+
+            testStrokes.push({
+                id: Date.now() + Math.random(),
+                lastMod: Date.now(),
+                tool: 'pen',
+                pts: pts,
+                color: colors[i % colors.length],
+                size: 2 + Math.random() * 4,
+                deleted: false
+            });
+        }
+
+        // Add test strokes
+        img.history = [...originalHistory, ...testStrokes];
+        this.invalidateCache();
+
+        // Warm-up render
+        this.render();
+        await new Promise(r => setTimeout(r, 100));
+
+        // Benchmark: 60 frames
+        const frameCount = 60;
+        const frameTimes = [];
+
+        console.log(`Running ${frameCount} frame benchmark...`);
+
+        for (let i = 0; i < frameCount; i++) {
+            // Simulate slight pan to invalidate cache
+            this.state.pan.x += 0.001;
+            this.cache.hiResCache = null;
+
+            const start = performance.now();
+            this.render();
+            const end = performance.now();
+            frameTimes.push(end - start);
+        }
+
+        // Calculate stats
+        const avg = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+        const max = Math.max(...frameTimes);
+        const min = Math.min(...frameTimes);
+        const fps = 1000 / avg;
+
+        console.log(`\n📊 RESULTS:`);
+        console.log(`  Avg frame time: ${avg.toFixed(2)}ms`);
+        console.log(`  Min frame time: ${min.toFixed(2)}ms`);
+        console.log(`  Max frame time: ${max.toFixed(2)}ms`);
+        console.log(`  Estimated FPS: ${fps.toFixed(1)}`);
+        console.log(`  Target (60fps): ${fps >= 55 ? '✅ PASS' : fps >= 30 ? '⚠️ ACCEPTABLE' : '❌ FAIL'}`);
+
+        // Test cache performance
+        console.log(`\n🔄 CACHE PERFORMANCE TEST:`);
+
+        // Reset pan and let cache build
+        this.state.pan.x = 0;
+        this.invalidateCache();
+        this.render();
+
+        const cachedTimes = [];
+        for (let i = 0; i < frameCount; i++) {
+            const start = performance.now();
+            this.render();
+            const end = performance.now();
+            cachedTimes.push(end - start);
+        }
+
+        const cachedAvg = cachedTimes.reduce((a, b) => a + b, 0) / cachedTimes.length;
+        const cachedFps = 1000 / cachedAvg;
+
+        console.log(`  Cached avg frame time: ${cachedAvg.toFixed(2)}ms`);
+        console.log(`  Cached estimated FPS: ${cachedFps.toFixed(1)}`);
+        console.log(`  Cache speedup: ${(avg / cachedAvg).toFixed(1)}x`);
+
+        // Restore original history
+        img.history = originalHistory;
+        this.invalidateCache();
+        this.render();
+
+        console.log(`\n✅ Benchmark complete. Original state restored.`);
+
+        // Return results for programmatic use
+        return {
+            strokeCount,
+            pointsPerStroke,
+            totalPoints: strokeCount * pointsPerStroke,
+            liveRender: { avg, min, max, fps },
+            cachedRender: { avg: cachedAvg, fps: cachedFps },
+            cacheSpeedup: avg / cachedAvg
+        };
     }
 }; 

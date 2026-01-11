@@ -2,6 +2,7 @@ export const ColorRmRenderer = {
     // Invalidate the cached canvas (call when history changes)
     invalidateCache() {
         this.cache.isDirty = true;
+        this.cache.hiResCache = null; // Clear high-res cache
     },
 
     // Request a render on next animation frame (throttled to 60fps)
@@ -14,36 +15,46 @@ export const ColorRmRenderer = {
         });
     },
 
-    // Build the cached canvas with all committed strokes
-    buildCommittedCache(ctx, currentImg) {
-        if (!this.cache.isDirty && this.cache.committedCanvas) {
-            return;  // Cache is valid
+    // Build high-resolution cache at current zoom level for idle state
+    _buildHiResCache(currentImg) {
+        const zoom = this.state.zoom;
+        const pan = this.state.pan;
+
+        // Check if cache is valid for current zoom/pan
+        if (this.cache.hiResCache &&
+            this.cache.hiResCacheZoom === zoom &&
+            this.cache.hiResCachePanX === pan.x &&
+            this.cache.hiResCachePanY === pan.y &&
+            !this.cache.isDirty) {
+            return this.cache.hiResCache;
         }
 
         const activeHistory = currentImg?.history?.filter(st => !st.deleted) || [];
+        if (activeHistory.length === 0) return null;
 
-        // Create or resize offscreen canvas
-        if (!this.cache.committedCanvas ||
-            this.cache.committedCanvas.width !== this.state.viewW ||
-            this.cache.committedCanvas.height !== this.state.viewH) {
-            this.cache.committedCanvas = document.createElement('canvas');
-            this.cache.committedCanvas.width = this.state.viewW;
-            this.cache.committedCanvas.height = this.state.viewH;
-            this.cache.committedCtx = this.cache.committedCanvas.getContext('2d');
-        }
+        // Create cache at display resolution
+        const cacheCanvas = document.createElement('canvas');
+        cacheCanvas.width = this.state.viewW;
+        cacheCanvas.height = this.state.viewH;
+        const cacheCtx = cacheCanvas.getContext('2d');
 
-        const cacheCtx = this.cache.committedCtx;
-        cacheCtx.clearRect(0, 0, this.state.viewW, this.state.viewH);
+        // Draw strokes at current zoom level (crisp)
+        cacheCtx.translate(pan.x, pan.y);
+        cacheCtx.scale(zoom, zoom);
 
-        // Draw all non-selected, committed strokes to cache
         activeHistory.forEach((st, idx) => {
-            // Skip items being dragged (they'll be drawn live)
             if (this.state.selection.includes(idx)) return;
             this.renderObject(cacheCtx, st, 0, 0);
         });
 
+        // Store cache with metadata
+        this.cache.hiResCache = cacheCanvas;
+        this.cache.hiResCacheZoom = zoom;
+        this.cache.hiResCachePanX = pan.x;
+        this.cache.hiResCachePanY = pan.y;
         this.cache.isDirty = false;
-        this.cache.lastHistoryLength = currentImg?.history?.length || 0;
+
+        return cacheCanvas;
     },
 
     render(tempHex) {
@@ -52,10 +63,14 @@ export const ColorRmRenderer = {
         const c = this.getElement('canvas');
         if (!c) return;
         const ctx = c.getContext('2d');
-        
+
         // Reset transform before clearing
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalCompositeOperation = 'source-over';
+
+        // Disable image smoothing for crisp strokes at any zoom level
+        ctx.imageSmoothingEnabled = false;
+
         ctx.clearRect(0,0,c.width,c.height);
 
         try {
@@ -99,16 +114,39 @@ export const ColorRmRenderer = {
             }
 
             const currentImg = this.state.images[this.state.idx];
+            const activeHistory = currentImg?.history?.filter(st => !st.deleted) || [];
 
-            // Build cached canvas if needed (only rebuilds when dirty)
-            this.buildCommittedCache(ctx, currentImg);
+            // HYBRID RENDERING: Use cache when idle, render live when interacting
+            const isInteracting = this.isDragging || this.state.selection.length > 0;
 
-            // Draw the cached committed strokes
-            if (this.cache.committedCanvas) {
-                ctx.drawImage(this.cache.committedCanvas, 0, 0);
+            if (isInteracting || activeHistory.length < 100) {
+                // LIVE RENDERING: Always render strokes directly for crispness
+                // Used when drawing, selecting, or when stroke count is low
+                activeHistory.forEach((st, idx) => {
+                    if (this.state.selection.includes(idx)) return;
+                    this.renderObject(ctx, st, 0, 0);
+                });
+            } else {
+                // CACHED RENDERING: Use hi-res cache for performance during idle
+                // Cache is built at current zoom level so it stays crisp
+                const hiResCache = this._buildHiResCache(currentImg);
+                if (hiResCache) {
+                    // Draw cache without transform (it's already transformed)
+                    ctx.restore();
+                    ctx.drawImage(hiResCache, 0, 0);
+                    ctx.save();
+                    ctx.translate(this.state.pan.x, this.state.pan.y);
+                    ctx.scale(this.state.zoom, this.state.zoom);
+                } else {
+                    // Fallback to live rendering
+                    activeHistory.forEach((st, idx) => {
+                        if (this.state.selection.includes(idx)) return;
+                        this.renderObject(ctx, st, 0, 0);
+                    });
+                }
             }
 
-            // Draw selected items with drag offset (these are live, not cached)
+            // Draw selected items with drag offset
             if (currentImg && currentImg.history && this.state.selection.length > 0) {
                 this.state.selection.forEach(idx => {
                     const st = currentImg.history[idx];
@@ -207,9 +245,12 @@ export const ColorRmRenderer = {
             if(st.fill!=='transparent') { ctx.fillStyle=st.fill; }
             ctx.beginPath();
             const {x,y,w,h} = st;
+            const cx = x + w/2, cy = y + h/2;
+            const rx = Math.abs(w/2), ry = Math.abs(h/2);
+
             if(st.shapeType==='rectangle') ctx.rect(x,y,w,h);
             else if(st.shapeType==='circle') {
-                ctx.ellipse(x+w/2, y+h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI);
+                ctx.ellipse(cx, cy, rx, ry, 0, 0, 2*Math.PI);
             } else if(st.shapeType==='line') { ctx.moveTo(x,y); ctx.lineTo(x+w,y+h); }
             else if(st.shapeType==='arrow') {
                 const head=15; const ang=Math.atan2(h,w);
@@ -218,6 +259,43 @@ export const ColorRmRenderer = {
                 ctx.moveTo(x+w,y+h);
                 ctx.lineTo(x+w - head*Math.cos(ang+0.5), y+h - head*Math.sin(ang+0.5));
             }
+            else if(st.shapeType==='triangle') {
+                ctx.moveTo(cx, y);
+                ctx.lineTo(x + w, y + h);
+                ctx.lineTo(x, y + h);
+                ctx.closePath();
+            }
+            else if(st.shapeType==='diamond') {
+                ctx.moveTo(cx, y);
+                ctx.lineTo(x + w, cy);
+                ctx.lineTo(cx, y + h);
+                ctx.lineTo(x, cy);
+                ctx.closePath();
+            }
+            else if(st.shapeType==='star') {
+                const spikes = 5;
+                const outerR = Math.min(rx, ry);
+                const innerR = outerR * 0.5;
+                let rot = -Math.PI / 2;
+                ctx.moveTo(cx + outerR * Math.cos(rot), cy + outerR * Math.sin(rot));
+                for (let i = 0; i < spikes; i++) {
+                    rot += Math.PI / spikes;
+                    ctx.lineTo(cx + innerR * Math.cos(rot), cy + innerR * Math.sin(rot));
+                    rot += Math.PI / spikes;
+                    ctx.lineTo(cx + outerR * Math.cos(rot), cy + outerR * Math.sin(rot));
+                }
+                ctx.closePath();
+            }
+            else if(st.shapeType==='hexagon') {
+                this._drawPolygon(ctx, cx, cy, Math.min(rx, ry), 6);
+            }
+            else if(st.shapeType==='pentagon') {
+                this._drawPolygon(ctx, cx, cy, Math.min(rx, ry), 5);
+            }
+            else if(st.shapeType==='octagon') {
+                this._drawPolygon(ctx, cx, cy, Math.min(rx, ry), 8);
+            }
+
             if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) ctx.fill();
             ctx.stroke();
             if(this.state.activeShapeRatio) {
@@ -289,6 +367,20 @@ export const ColorRmRenderer = {
             menu.style.left = (cr.left + mx - menu.offsetWidth/2) + 'px';
             menu.style.top = (cr.top + my) + 'px';
         }
+    },
+
+    // Helper to draw regular polygons (pentagon, hexagon, octagon)
+    _drawPolygon(ctx, cx, cy, radius, sides) {
+        const angle = (2 * Math.PI) / sides;
+        const startAngle = -Math.PI / 2; // Start from top
+        ctx.moveTo(cx + radius * Math.cos(startAngle), cy + radius * Math.sin(startAngle));
+        for (let i = 1; i <= sides; i++) {
+            ctx.lineTo(
+                cx + radius * Math.cos(startAngle + angle * i),
+                cy + radius * Math.sin(startAngle + angle * i)
+            );
+        }
+        ctx.closePath();
     },
 
     rgbToLab(r,g,b) {
