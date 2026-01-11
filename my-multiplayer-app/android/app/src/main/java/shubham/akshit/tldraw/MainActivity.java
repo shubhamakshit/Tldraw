@@ -392,20 +392,23 @@ public class MainActivity extends BridgeActivity {
                 String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
                 if (sharedText != null) {
                     // Pass the URL to the WebView
-                    evaluateJavascript("window.handleSharedUrl('" + escapeJavascriptString(sharedText) + "');");
+                    String safeText = escapeJavascriptString(sharedText);
+                    evaluateJavascript("if(window.handleSharedUrl) { window.handleSharedUrl('" + safeText + "'); } else { console.warn('Native: handleSharedUrl not ready for: " + safeText + "'); }");
                 }
             } else {
                 Uri fileUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
                 if (fileUri != null) {
                     // Pass the file URI to the WebView
-                    evaluateJavascript("window.handleSharedFile('" + escapeJavascriptString(fileUri.toString()) + "');");
+                    String safeUri = escapeJavascriptString(fileUri.toString());
+                    evaluateJavascript("if(window.handleSharedFile) { window.handleSharedFile('" + safeUri + "'); } else { console.warn('Native: handleSharedFile not ready for: " + safeUri + "'); }");
                 }
             }
         } else if (Intent.ACTION_VIEW.equals(action) && type != null) {
             Uri fileUri = intent.getData();
             if (fileUri != null) {
                 // Pass the file URI to the WebView
-                evaluateJavascript("window.handleSharedFile('" + escapeJavascriptString(fileUri.toString()) + "');");
+                String safeUri = escapeJavascriptString(fileUri.toString());
+                evaluateJavascript("if(window.handleSharedFile) { window.handleSharedFile('" + safeUri + "'); } else { console.warn('Native: handleSharedFile not ready for: " + safeUri + "'); }");
             }
         }
     }
@@ -418,7 +421,12 @@ public class MainActivity extends BridgeActivity {
     }
 
     private String escapeJavascriptString(String text) {
-        return text.replace("'", "'\'").replace("\"", "\"").replace("\n", "\\n").replace("\r", "\\r");
+        if (text == null) return "";
+        return text.replace("\\", "\\\\")
+                   .replace("'", "\\'")
+                   .replace("\"", "\\\"")
+                   .replace("\n", "\\n")
+                   .replace("\r", "\\r");
     }
 
     @Override
