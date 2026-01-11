@@ -32,16 +32,13 @@ import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import android.database.Cursor;
 import android.provider.MediaStore;
-
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.widget.EditText;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.widget.Toast;
-
 import com.getcapacitor.BridgeActivity;
-
 import android.view.KeyEvent;
 
 public class MainActivity extends BridgeActivity {
@@ -77,7 +74,7 @@ public class MainActivity extends BridgeActivity {
         // 1. DYNAMIC SERVER URL OVERRIDE
         SharedPreferences prefs = getSharedPreferences("CapacitorPrefs", Context.MODE_PRIVATE);
         String customUrl = prefs.getString("server_url", null);
-        
+
         if (customUrl != null && !customUrl.isEmpty()) {
             // Tell Capacitor to use this URL instead of the one in config
             getIntent().putExtra("url", customUrl);
@@ -356,7 +353,6 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -401,10 +397,11 @@ public class MainActivity extends BridgeActivity {
     }
 
     private String escapeJavascriptString(String text) {
-        return text.replace("'", "\'").replace(""", "\"").replace("\n", "\\n").replace("\r", "\\r");
+        return text.replace("'", "'\'").replace("\"", "\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             hideSystemUI();
