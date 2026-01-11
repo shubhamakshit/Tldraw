@@ -90,6 +90,19 @@ export class ColorRmApp {
         this.makeDraggable();
         this.setupShortcuts();
 
+        // Check for PDF import redirect immediately
+        const urlParams = new URLSearchParams(window.location.search);
+        const importPdfUri = urlParams.get('importPdf');
+        
+        // Priority: Check session storage for pending MULTI-FILE imports
+        // If found, we skip the URL param to avoid double import (one from URL, one from storage)
+        const hasPendingFiles = sessionStorage.getItem('pending_shared_uris');
+        
+        if (importPdfUri && !hasPendingFiles) {
+             console.log("ColorRmApp: Found importPdf param early:", importPdfUri);
+             this.ui.showToast("Importing PDF...");
+        }
+
         // 3. Initialize PDF.js Worker
         if (window.pdfjsLib) {
             pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -122,7 +135,8 @@ export class ColorRmApp {
             projectId = parts[2];
 
             // If owner or project is missing from URL, try to load last project OR show dashboard
-            if (!ownerId || !projectId) {
+            // SKIP THIS IF IMPORTING PDF - we will create a new project anyway
+            if ((!ownerId || !projectId) && !importPdfUri) {
                 const lastSess = await this.db.transaction('sessions', 'readonly').objectStore('sessions').getAll();
                 if (lastSess && lastSess.length > 0) {
                     const latest = lastSess.sort((a,b) => b.lastMod - a.lastMod)[0];
@@ -146,102 +160,182 @@ export class ColorRmApp {
             }
         }
 
-        this.state.ownerId = ownerId;
-        this.state.sessionId = projectId;
+        // If not importing, open session normally
+        if (!importPdfUri) {
+            this.state.ownerId = ownerId;
+            this.state.sessionId = projectId;
 
-        await this.openSession(projectId);
+            await this.openSession(projectId);
 
-        // Only initialize LiveSync for collaborative mode
-        if (this.config.collaborative && this.liveSync) {
-            await this.liveSync.init(ownerId, projectId);
-        }
+            // Only initialize LiveSync for collaborative mode
+            if (this.config.collaborative && this.liveSync) {
+                await this.liveSync.init(ownerId, projectId);
+            }
 
-        // 5. Sync Base File (only for collaborative mode)
-        if (this.config.collaborative) {
-            try {
-                const res = await fetch(window.Config?.apiUrl(`/api/color_rm/base_file/${projectId}`) || `/api/color_rm/base_file/${projectId}`, { method: 'GET' });
-                if (res.ok) {
-                    if (this.state.images.length === 0) {
-                        console.log("Liveblocks: Downloading base file from server...");
-                        const blob = await res.blob();
-                        await this.importBaseFile(blob);
-                        if (this.liveSync && this.liveSync.syncHistory) this.liveSync.syncHistory();
+            // 5. Sync Base File (only for collaborative mode)
+            if (this.config.collaborative) {
+                try {
+                    const res = await fetch(window.Config?.apiUrl(`/api/color_rm/base_file/${projectId}`) || `/api/color_rm/base_file/${projectId}`, { method: 'GET' });
+                    if (res.ok) {
+                        if (this.state.images.length === 0) {
+                            console.log("Liveblocks: Downloading base file from server...");
+                            const blob = await res.blob();
+                            await this.importBaseFile(blob);
+                            if (this.liveSync && this.liveSync.syncHistory) this.liveSync.syncHistory();
+                        }
+                    } else if (res.status === 404) {
+                        if (this.state.images.length > 0 && this.state.images[0].blob) {
+                            console.log("Liveblocks: Server missing base file. Healing/Uploading...");
+                            this.reuploadBaseFile();
+                        }
                     }
-                } else if (res.status === 404) {
-                    if (this.state.images.length > 0 && this.state.images[0].blob) {
-                        console.log("Liveblocks: Server missing base file. Healing/Uploading...");
-                        this.reuploadBaseFile();
-                    }
+                } catch(e) {
+                    console.error("Liveblocks: Sync check error:", e);
                 }
-            } catch(e) {
-                console.error("Liveblocks: Sync check error:", e);
             }
         }
 
         // 6. Initialize Android Intent Handling for URLs and PDF files
         this.initializeAndroidIntentHandling();
+
+        // 7. Process PDF Import if present AND no pending files in storage
+        if (importPdfUri && !hasPendingFiles) {
+             console.log("ColorRmApp: Processing deferred importPdf:", importPdfUri);
+             // Clean URL
+             window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+             
+             // Execute immediately with safety wrapper
+             try {
+                 console.log("ColorRmApp: Executing handlePdfFileFromUri NOW for:", importPdfUri);
+                 this.handlePdfFileFromUri(importPdfUri);
+             } catch(e) {
+                 console.error("ColorRmApp: CRITICAL ERROR handling importPdf:", e);
+                 this.ui.showToast("Critical Error Importing PDF");
+             }
+        }
     }
 
     // Initialize Android Intent Handling for URLs and PDF files
     initializeAndroidIntentHandling() {
+        console.log("ColorRmApp: initializeAndroidIntentHandling started");
+        
         // Expose global handler for Native Android calls (MainActivity.java)
         window.handleSharedFile = (uri) => {
-            console.log("Global handleSharedFile called with:", uri);
+            console.log("ColorRmApp: Global handleSharedFile called with:", uri);
             this.handlePdfFileFromUri(uri);
         };
         
         window.handleSharedUrl = (url) => {
-            console.log("Global handleSharedUrl called with:", url);
+            console.log("ColorRmApp: Global handleSharedUrl called with:", url);
             this.handleIncomingUrl(url);
         };
 
-        // Check if we're running in a Capacitor environment
-        if (window.Capacitor) {
-            // Import Capacitor plugins
-            const { Plugins } = window.Capacitor;
-            const { App, Filesystem } = Plugins;
+        window.handleSharedFiles = (uris) => {
+            console.log("ColorRmApp: Global handleSharedFiles called with:", uris);
+            this.handlePdfFilesFromUris(uris);
+        };
 
-            // Listen for app URL open events (deep links)
-            App.addListener('appUrlOpen', (data) => {
-                const url = data.url;
-                console.log('App URL opened:', url);
-
-                // Parse the URL and route it appropriately
-                this.handleIncomingUrl(url);
-            });
-
-            // Listen for URI scheme events (for file associations)
-            App.addListener('appUriOpen', (data) => {
-                const url = data.url;
-                console.log('App URI opened:', url);
-
-                // Check if it's a file URL
-                if (url.startsWith('file://') || url.startsWith('content://')) {
-                    if (url.toLowerCase().endsWith('.pdf')) {
-                        console.log('PDF file opened via URI:', url);
-                        this.handlePdfFileFromUri(url);
+        const checkNative = () => {
+            if (window.AndroidNative) {
+                try {
+                    const pendingFile = window.AndroidNative.getPendingFileUri?.();
+                    if (pendingFile) {
+                        console.log('ColorRmApp: Found native pending file:', pendingFile);
+                        this.handlePdfFileFromUri(pendingFile);
                     }
-                } else {
-                    // Parse the URL and route it appropriately
-                    this.handleIncomingUrl(url);
-                }
-            });
 
-            // Listen for app state change to handle potential incoming intents
-            App.addListener('appStateChange', (state) => {
-                if (state.isActive) {
-                    // App came to foreground, check for any pending intents
-                    this.checkPendingIntents();
-                }
-            });
+                    const pendingFiles = window.AndroidNative.getPendingFileUris?.();
+                    if (pendingFiles) {
+                         console.log('ColorRmApp: Found native pending files:', pendingFiles);
+                         try {
+                             const uris = JSON.parse(pendingFiles);
+                             if (Array.isArray(uris) && uris.length > 0) {
+                                 this.handlePdfFilesFromUris(uris);
+                             }
+                         } catch (e) {
+                             console.error("ColorRmApp: Error parsing pending files JSON:", e);
+                         }
+                    }
 
-            // Check for initial intent when app starts
-            this.checkInitialIntent();
-        } else {
-            // For web browsers, handle URL changes via hash routing
-            window.addEventListener('hashchange', () => {
-                this.handleIncomingUrl(window.location.href);
-            });
+                    const pendingText = window.AndroidNative.getPendingSharedText?.();
+                    if (pendingText) {
+                        console.log('ColorRmApp: Found native pending text:', pendingText);
+                        this.handleIncomingUrl(pendingText);
+                    }
+                } catch (e) {
+                    console.error("ColorRmApp: Error checking native pending intents:", e);
+                }
+            }
+        };
+
+        // 1. Process JS-buffered items
+        if (window.pendingFileUri) {
+            console.log("ColorRmApp: Processing buffered file intent:", window.pendingFileUri);
+            this.handlePdfFileFromUri(window.pendingFileUri);
+            window.pendingFileUri = null;
+        }
+
+        if (window.pendingUrl) {
+            console.log("ColorRmApp: Processing buffered url intent:", window.pendingUrl);
+            this.handleIncomingUrl(window.pendingUrl);
+            window.pendingUrl = null;
+        }
+
+        // Check sessionStorage for multi-file imports from React redirect
+        const sessionUris = sessionStorage.getItem('pending_shared_uris');
+        if (sessionUris) {
+            try {
+                console.log("ColorRmApp: Found pending URIs in storage");
+                const uris = JSON.parse(sessionUris);
+                sessionStorage.removeItem('pending_shared_uris'); // Clear immediately
+                if (Array.isArray(uris) && uris.length > 0) {
+                    this.handlePdfFilesFromUris(uris);
+                    return; // Skip native check to avoid double processing if one matches
+                }
+            } catch (e) {
+                console.error("ColorRmApp: Error parsing session URIs", e);
+            }
+        }
+
+        // 2. Poll Native-buffered items immediately
+        checkNative();
+
+        // 3. Setup Capacitor Listeners (if available)
+        if (window.Capacitor && window.Capacitor.Plugins) {
+            const { Plugins } = window.Capacitor;
+            const App = Plugins.App;
+
+            if (App) {
+                App.addListener('appUrlOpen', (data) => {
+                    console.log('ColorRmApp: App URL opened:', data.url);
+                    if (data.url) {
+                        if (data.url.startsWith('file://') || data.url.startsWith('content://')) {
+                            this.handlePdfFileFromUri(data.url);
+                        } else {
+                            this.handleIncomingUrl(data.url);
+                        }
+                    }
+                });
+
+                App.addListener('appStateChange', (state) => {
+                    if (state.isActive) {
+                        console.log("ColorRmApp: App resumed, checking native buffer...");
+                        checkNative();
+                    }
+                });
+
+                // Check launch URL
+                App.getLaunchUrl().then(ret => {
+                    if (ret && ret.url) {
+                        console.log('ColorRmApp: Launch URL:', ret.url);
+                        if (ret.url.startsWith('file://') || ret.url.startsWith('content://')) {
+                            this.handlePdfFileFromUri(ret.url);
+                        } else {
+                            this.handleIncomingUrl(ret.url);
+                        }
+                    }
+                });
+            }
         }
     }
 
@@ -276,6 +370,13 @@ export class ColorRmApp {
     // Handle incoming URLs (deep links, project links, etc.)
     handleIncomingUrl(url) {
         try {
+            // Check for file/content schemes first
+            if (url.startsWith('file://') || url.startsWith('content://')) {
+                console.log("ColorRmApp: Handling content/file URI directly:", url);
+                this.handlePdfFileFromUri(url);
+                return;
+            }
+
             const parsedUrl = new URL(url);
             const pathname = parsedUrl.pathname;
             const hash = parsedUrl.hash;
@@ -348,11 +449,13 @@ export class ColorRmApp {
 
     // Handle incoming PDF files from URI (file:// or content://)
     async handlePdfFileFromUri(uri) {
+        console.log("handlePdfFileFromUri: Starting with URI:", uri);
         try {
             // Convert URI to file object
             const file = await this.convertUriToFileObject(uri);
 
             if (file) {
+                console.log("handlePdfFileFromUri: File object created:", file.name, file.size, file.type);
                 // Check if a project with the same name already exists
                 // Use file.name as it's more reliable (handled in convertUriToFileObject)
                 const fileName = file.name;
@@ -361,6 +464,7 @@ export class ColorRmApp {
                 const existingProject = existingProjects.find(proj => proj.name === projectName);
 
                 if (existingProject) {
+                    console.log("handlePdfFileFromUri: Project exists, asking user...");
                     // Ask user if they want to create a new project or open existing
                     const choice = await this.ui.showPrompt(
                         "Project Already Exists",
@@ -376,13 +480,89 @@ export class ColorRmApp {
                         this.switchProject(existingProject.ownerId || 'local', existingProject.id);
                     }
                 } else {
+                    console.log("handlePdfFileFromUri: Creating new project...");
                     // Create new project with PDF
                     await this.createProjectFromPdf(file, projectName);
                 }
+            } else {
+                console.error("handlePdfFileFromUri: Failed to create File object from URI");
+                this.ui.showToast('Failed to load file from shared URI');
             }
         } catch (error) {
             console.error('Error handling PDF file from URI:', error);
             this.ui.showToast('Error opening PDF file');
+        }
+    }
+
+    // Handle multiple incoming PDF files from URIs
+    async handlePdfFilesFromUris(uris) {
+        console.log("handlePdfFilesFromUris: Starting with URIs:", uris);
+        try {
+            this.ui.showToast("Processing multiple files...");
+            const files = [];
+            
+            for (const uri of uris) {
+                const file = await this.convertUriToFileObject(uri);
+                if (file) {
+                    files.push(file);
+                } else {
+                    console.error("Failed to convert URI to file:", uri);
+                }
+            }
+
+            if (files.length > 0) {
+                console.log(`handlePdfFilesFromUris: Converted ${files.length} files. Starting bulk import loop...`);
+                this.handleExternalFiles(files);
+            } else {
+                this.ui.showToast("Failed to process shared files");
+            }
+        } catch (error) {
+            console.error('Error handling multiple PDF files:', error);
+            this.ui.showToast('Error opening files');
+        }
+    }
+
+    async handleExternalFiles(files) {
+        this.ui.toggleLoader(true, `Importing ${files.length} projects...`);
+        // We set isBulkImporting to true to influence project naming logic in ColorRmSession
+        this.isBulkImporting = true; 
+
+        try {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                
+                // Create a unique project name based on the file
+                const firstFileName = file.name || `Imported Project ${i+1}`;
+                const projectName = firstFileName.replace(/\.[^/.]+$/, "");
+                const projectId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                const ownerId = this.liveSync?.userId || 'local';
+
+                this.ui.updateProgress((i / files.length) * 100, `Creating project ${i + 1} of ${files.length}: ${projectName}...`);
+                console.log(`handleExternalFiles: Creating project ${i+1}/${files.length}: ${projectName}`);
+
+                // 1. Create the new project structure
+                await this.createNewProject(false, projectId, ownerId, projectName);
+                
+                // 2. Import the file into this project
+                // Note: passing skipUpload=false so it uploads to server if online
+                // passing lazy=true so it only gets metadata (page count) and doesn't process images yet
+                await this.handleImport({ target: { files: [file] } }, false, true);
+                
+                // Small delay to ensure DB writes settle before next iteration
+                await new Promise(r => setTimeout(r, 500));
+            }
+        } catch(e) {
+            console.error("Bulk import failed:", e);
+            this.ui.showToast("Import error occurred");
+        } finally {
+            this.isBulkImporting = false;
+            this.ui.toggleLoader(false);
+            this.ui.showToast(`Imported ${files.length} projects`);
+            
+            // Reload the session list or dashboard to show new projects
+            // If we are currently in a project view, we might want to go to dashboard
+            this.ui.showDashboard();
+            if (this.loadSessionList) this.loadSessionList();
         }
     }
 
@@ -417,12 +597,14 @@ export class ColorRmApp {
 
     // Convert URI to File object
     async convertUriToFileObject(uri) {
+        console.log("convertUriToFileObject: Converting:", uri);
         try {
             // Priority: Try Android Native Interface for content:// URIs
             if (uri.startsWith('content://') && window.AndroidNative && window.AndroidNative.readContentUri) {
                 console.log("Using AndroidNative to read content URI:", uri);
                 const base64Data = window.AndroidNative.readContentUri(uri);
                 if (base64Data) {
+                     console.log("AndroidNative read successful, data length:", base64Data.length);
                      const binaryString = atob(base64Data);
                      const bytes = new Uint8Array(binaryString.length);
                      for (let i = 0; i < binaryString.length; i++) {
@@ -432,15 +614,27 @@ export class ColorRmApp {
                      
                      // Try to get filename from URI
                      let fileName = 'imported_pdf.pdf';
-                     try {
-                        const parts = uri.split('/');
-                        const lastPart = parts[parts.length - 1];
-                        if (lastPart && lastPart.indexOf('.') > -1) {
-                             fileName = decodeURIComponent(lastPart);
-                        }
-                     } catch(e) {}
-
+                     
+                     // 1. Try Native getFileName
+                     if (window.AndroidNative && window.AndroidNative.getFileName) {
+                         const nativeName = window.AndroidNative.getFileName(uri);
+                         if (nativeName) fileName = nativeName;
+                     } 
+                     // 2. Fallback to URI parsing
+                     else {
+                         try {
+                            const parts = uri.split('/');
+                            const lastPart = parts[parts.length - 1];
+                            if (lastPart && lastPart.indexOf('.') > -1) {
+                                 fileName = decodeURIComponent(lastPart);
+                            }
+                         } catch(e) {}
+                     }
+                     
+                     console.log("Created File object:", fileName);
                      return new File([blob], fileName, { type: 'application/pdf' });
+                } else {
+                    console.error("AndroidNative returned null/empty for URI");
                 }
             }
 

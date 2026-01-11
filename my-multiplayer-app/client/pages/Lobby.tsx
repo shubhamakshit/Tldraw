@@ -63,7 +63,7 @@ export function Lobby() {
         } else {
             setColorRmProjects([])
         }
-    }, [isAuthenticated, token])
+    }, [isAuthenticated, token, isAuthModalOpen])
 
     const handleCreate = async () => {
         if (isCreating) return

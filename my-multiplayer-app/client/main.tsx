@@ -8,37 +8,36 @@ import { AuthProvider } from './hooks/useAuth'
 
 // Initialize global logger
 import { initLogger } from './utils/logger'
+import { useGlobalAndroidIntent } from './hooks/useGlobalAndroidIntent'
 initLogger()
 
-// --- NUCLEAR CLEAN (DISABLED) ---
-// Wipes all local data to guarantee a fresh start
-// try {
-//     console.warn('Performing NUCLEAR CLEAN of local storage...')
-//     localStorage.clear()
-//     
-//     // Also try to nuke IndexedDB if tldraw is using it
-//     if (window.indexedDB) {
-//         window.indexedDB.databases().then((dbs) => {
-//             dbs.forEach((db) => {
-//                 if (db.name && db.name.includes('tldraw')) {
-//                     window.indexedDB.deleteDatabase(db.name)
-//                 }
-//             })
-//         })
-//     }
-// } catch (e) {
-//     console.error('Nuclear clean failed:', e)
-// }
-// ---------------------
+// --- ANDROID INTENT BUFFER ---
+// Buffer intents until the Editor is ready
+if (typeof window !== 'undefined') {
+    window.handleSharedFile = (uri: string) => {
+        console.log('Buffering shared file:', uri)
+        window.pendingFileUri = uri
+    }
+    window.handleSharedUrl = (url: string) => {
+        console.log('Buffering shared url:', url)
+        window.pendingUrl = url
+    }
+}
+// -----------------------------
+
+function GlobalIntentHandler() {
+    useGlobalAndroidIntent()
+    return null
+}
 
 const router = createHashRouter([
     {
         path: '/',
-        element: <Lobby />, // Show Lobby at root
+        element: <><GlobalIntentHandler /><Lobby /></>, // Show Lobby at root with handler
     },
     {
         path: '/:roomId',
-        element: <Room />,
+        element: <><GlobalIntentHandler /><Room /></>, // Show Room with handler
     },
 ])
 

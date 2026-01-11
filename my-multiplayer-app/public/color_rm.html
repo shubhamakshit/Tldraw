@@ -324,6 +324,22 @@
     </style>
 </head>
 <body>
+    <script>
+        // --- NATIVE BRIDGE BUFFER ---
+        // Buffers intents from Android Native before the main app loads
+        if (!window.handleSharedFile) {
+            window.handleSharedFile = function(uri) {
+                console.log('Buffer: shared file', uri);
+                window.pendingFileUri = uri;
+            };
+        }
+        if (!window.handleSharedUrl) {
+            window.handleSharedUrl = function(url) {
+                console.log('Buffer: shared url', url);
+                window.pendingUrl = url;
+            };
+        }
+    </script>
 
     <!-- Toast -->
     <div id="toast" class="toast">Added to Box!</div>
