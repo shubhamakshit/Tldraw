@@ -177,6 +177,180 @@ export class ColorRmApp {
                 console.error("Liveblocks: Sync check error:", e);
             }
         }
+
+        // 6. Initialize Android Intent Handling for URLs and PDF files
+        this.initializeAndroidIntentHandling();
+    }
+
+    // Initialize Android Intent Handling for URLs and PDF files
+    initializeAndroidIntentHandling() {
+        // Check if we're running in a Capacitor environment
+        if (window.Capacitor) {
+            // Import Capacitor plugins
+            const { Plugins } = window.Capacitor;
+            const { App, Filesystem } = Plugins;
+
+            // Listen for app URL open events (deep links)
+            App.addListener('appUrlOpen', (data) => {
+                const url = data.url;
+                console.log('App URL opened:', url);
+
+                // Parse the URL and route it appropriately
+                this.handleIncomingUrl(url);
+            });
+
+            // Listen for file open events (PDF files, etc.)
+            App.addListener('appRestoredResult', (data) => {
+                if (data && data.data) {
+                    const filePath = data.data.filePath || data.data.fileUri;
+                    if (filePath && filePath.toLowerCase().endsWith('.pdf')) {
+                        console.log('PDF file opened:', filePath);
+                        this.handlePdfFile(filePath);
+                    }
+                }
+            });
+
+            // Listen for app state change to handle potential incoming intents
+            App.addListener('appStateChange', (state) => {
+                if (state.isActive) {
+                    // App came to foreground, check for any pending intents
+                    this.checkPendingIntents();
+                }
+            });
+        } else {
+            // For web browsers, handle URL changes via hash routing
+            window.addEventListener('hashchange', () => {
+                this.handleIncomingUrl(window.location.href);
+            });
+        }
+    }
+
+    // Handle incoming URLs (deep links, project links, etc.)
+    handleIncomingUrl(url) {
+        try {
+            const parsedUrl = new URL(url);
+            const pathname = parsedUrl.pathname;
+            const hash = parsedUrl.hash;
+
+            // Check if this is a ColorRM project URL
+            const colorRmRegex = /\/color_rm\/([^\/]+)\/([^\/]+)/;
+            const match = pathname.match(colorRmRegex) || hash.match(colorRmRegex);
+
+            if (match) {
+                // Extract ownerId and projectId from the URL
+                const ownerId = match[1];
+                const projectId = match[2];
+
+                // Switch to the specified project
+                this.switchProject(ownerId, projectId);
+            } else {
+                // For other URLs, try to parse as a hash route
+                const hashRoute = hash.replace(/^#\/?/, '');
+                if (hashRoute) {
+                    // Navigate using the hash router
+                    window.location.hash = `#${hashRoute}`;
+                    // Reload the page to handle the new route
+                    location.reload();
+                }
+            }
+        } catch (error) {
+            console.error('Error handling incoming URL:', error);
+        }
+    }
+
+    // Handle incoming PDF files
+    async handlePdfFile(filePath) {
+        try {
+            // Check if Capacitor Filesystem plugin is available
+            if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+                const { Filesystem, Capacitor } = window.Capacitor.Plugins;
+
+                // Read the PDF file
+                const fileData = await Filesystem.readFile({
+                    path: filePath,
+                    directory: Filesystem.Directory.External
+                });
+
+                // Convert base64 data to Blob
+                const binaryString = atob(fileData.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                const blob = new Blob([bytes], { type: 'application/pdf' });
+
+                // Create a file object from the blob
+                const fileName = filePath.split('/').pop() || 'imported_pdf.pdf';
+                const file = new File([blob], fileName, { type: 'application/pdf' });
+
+                // Check if a project with the same name already exists
+                const projectName = fileName.replace(/\.[^/.]+$/, ""); // Remove extension
+                const existingProjects = await this.dbGetAll('sessions');
+                const existingProject = existingProjects.find(proj => proj.name === projectName);
+
+                if (existingProject) {
+                    // Ask user if they want to create a new project or open existing
+                    const choice = await this.ui.showPrompt(
+                        "Project Already Exists",
+                        "Type 'open' to open existing project, or 'new' to create a new one",
+                        "open"
+                    );
+
+                    if (choice && choice.toLowerCase() === 'new') {
+                        // Create new project with PDF
+                        await this.createProjectFromPdf(file, `${projectName}_copy`);
+                    } else {
+                        // Open existing project
+                        this.switchProject(existingProject.ownerId || 'local', existingProject.id);
+                    }
+                } else {
+                    // Create new project with PDF
+                    await this.createProjectFromPdf(file, projectName);
+                }
+            } else {
+                console.error('Filesystem plugin not available');
+            }
+        } catch (error) {
+            console.error('Error handling PDF file:', error);
+            this.ui.showToast('Error opening PDF file');
+        }
+    }
+
+    // Create a new project from a PDF file
+    async createProjectFromPdf(file, projectName) {
+        try {
+            // Generate a unique project ID
+            const projectId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            const ownerId = this.liveSync?.userId || 'local';
+
+            // Create a new project
+            await this.createNewProject(false, projectId, ownerId, projectName);
+
+            // Import the PDF file
+            const event = { target: { files: [file] } };
+            await this.handleImport(event, true); // Pass true to skip upload for local file
+
+            this.ui.showToast(`Created new project from PDF: ${projectName}`);
+        } catch (error) {
+            console.error('Error creating project from PDF:', error);
+            this.ui.showToast('Error creating project from PDF');
+        }
+    }
+
+    // Check for any pending intents when app becomes active
+    async checkPendingIntents() {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+            try {
+                const { App } = window.Capacitor.Plugins;
+                const savedIntent = await App.getLaunchUri();
+
+                if (savedIntent && savedIntent.url) {
+                    this.handleIncomingUrl(savedIntent.url);
+                }
+            } catch (error) {
+                console.error('Error checking pending intents:', error);
+            }
+        }
     }
 
     getElement(id) {
