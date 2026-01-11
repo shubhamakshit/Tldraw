@@ -510,8 +510,7 @@ export const ColorRmSession = {
         console.log(`[Import] Files length: ${files.length}, Bulk: ${this.isBulkImporting}`);
 
         // Priority: 1. Manual Input (only if single file and NOT bulk importing), 2. File Name, 3. Fallback
-        // Reset name for bulk imports to avoid carrying over previous project names
-        if (!pName || files.length > 1 || this.isBulkImporting) {
+        if ((!pName || files.length > 1 || this.isBulkImporting) && files[0] && files[0].name) {
             pName = files[0].name.replace(/\.[^/.]+$/, "");
             console.log(`[Import] Derived pName from file: "${pName}"`);
             if (pName.includes("base_document_blob")) {

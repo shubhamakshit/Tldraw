@@ -274,17 +274,6 @@ interface LogEntry {
     message: string;
 }
 
-declare global {
-    interface Window {
-        Logger: typeof Logger;
-        AndroidNative?: {
-            saveBlob: (base64: string, filename: string, mimeType: string) => void;
-            writeLog: (level: string, message: string) => void;
-            getLogFilePath: () => string;
-        };
-    }
-}
-
 export const Logger = {
     logs: [] as LogEntry[],
     maxLogs: 2000,

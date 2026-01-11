@@ -40,6 +40,8 @@ import android.content.DialogInterface;
 import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
 import android.view.KeyEvent;
+import android.provider.OpenableColumns;
+import java.io.ByteArrayOutputStream;
 
 public class MainActivity extends BridgeActivity {
 
@@ -59,6 +61,11 @@ public class MainActivity extends BridgeActivity {
 
     private boolean isVolUpPressed = false;
     private boolean isVolDownPressed = false;
+    
+    // Pending Intent Data (Native Buffer)
+    private String pendingSharedFileUri = null;
+    private String pendingSharedFileUris = null;
+    private String pendingSharedText = null;
 
     // State for chunked file uploads
     private final java.util.Map<String, FileOutputStream> pendingFiles = new java.util.HashMap<>();
@@ -81,6 +88,7 @@ public class MainActivity extends BridgeActivity {
         }
 
         super.onCreate(savedInstanceState);
+        setupNativeInterface();
 
         // Welcome Toast with active URL
         String urlUsed = (customUrl != null && !customUrl.isEmpty()) ? customUrl : "Default Config";
@@ -93,134 +101,119 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            isVolUpPressed = true;
-        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            isVolDownPressed = true;
-        }
-
-        if (isVolUpPressed && isVolDownPressed) {
-            showUrlConfigDialog();
-            return true; // Consume event
-        }
-
-        return super.onKeyDown(keyCode, event);
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent); // Update the intent saved in the activity
+        handleIntent(intent);
     }
-
-    @Override
-    public boolean onKeyUp(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            isVolUpPressed = false;
-        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            isVolDownPressed = false;
-        }
-        return super.onKeyUp(keyCode, event);
-    }
-
-    private void showUrlConfigDialog() {
-        SharedPreferences prefs = getSharedPreferences("CapacitorPrefs", Context.MODE_PRIVATE);
-        String currentUrl = prefs.getString("server_url", "");
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Configure Server URL");
-        builder.setMessage("Enter the backend URL (leave empty to use default config)");
-
-        final EditText input = new EditText(this);
-        input.setHint("http://192.168.x.x:5173");
-        input.setText(currentUrl);
-        builder.setView(input);
-
-        builder.setPositiveButton("Save & Restart", (dialog, which) -> {
-            String newUrl = input.getText().toString().trim();
-            prefs.edit().putString("server_url", newUrl).apply();
-            
-            Toast.makeText(this, "URL Saved. Restarting app...", Toast.LENGTH_LONG).show();
-            
-            // Restart the activity to apply the new URL
-            recreate();
-        });
-
-        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
-        builder.setNeutralButton("Reset Default", (dialog, which) -> {
-            prefs.edit().remove("server_url").apply();
-            Toast.makeText(this, "Reset to default config. Restarting...", Toast.LENGTH_LONG).show();
-            recreate();
-        });
-
-        builder.show();
-    }
-
-    @Override
-    public void onStart() {
-        super.onStart();
-        setupNativeInterface();
-    }
+    
+    // ... (rest of the file until setupNativeInterface) ...
 
     private void setupNativeInterface() {
         if (getBridge() != null && getBridge().getWebView() != null) {
             WebView webView = getBridge().getWebView();
-
-            // PERFORMANCE OPTIMIZATIONS
-            // 1. Hardware acceleration (usually on by default, but explicit is safer)
-            webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-
-            // 2. High render priority
-            WebSettings settings = webView.getSettings();
-            settings.setRenderPriority(WebSettings.RenderPriority.HIGH);
-
-            // 3. Cache mode optimization for drawing app (less disk I/O during interaction)
-            // settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
-
-            // 4. Low latency mode for autofill (Android O+)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                webView.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
-            }
+            
+            // ... (settings) ...
 
             getBridge().getWebView().addJavascriptInterface(new Object() {
                 @JavascriptInterface
+                public String getPendingFileUri() {
+                    String uri = pendingSharedFileUri;
+                    pendingSharedFileUri = null; // Clear after read
+                    return uri;
+                }
+
+                @JavascriptInterface
+                public String getPendingFileUris() {
+                    String uris = pendingSharedFileUris;
+                    pendingSharedFileUris = null; // Clear after read
+                    return uris;
+                }
+
+                @JavascriptInterface
+                public String getPendingSharedText() {
+                    String text = pendingSharedText;
+                    pendingSharedText = null; // Clear after read
+                    return text;
+                }
+
+                @JavascriptInterface
+                public String getFileName(String uriString) {
+                    if (uriString == null) return null;
+                    try {
+                        Uri uri = Uri.parse(uriString);
+                        String result = null;
+                        if (uri.getScheme().equals("content")) {
+                            try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
+                                if (cursor != null && cursor.moveToFirst()) {
+                                    int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                                    if (index >= 0) {
+                                        result = cursor.getString(index);
+                                    }
+                                }
+                            }
+                        }
+                        if (result == null) {
+                            result = uri.getPath();
+                            int cut = result.lastIndexOf('/');
+                            if (cut != -1) {
+                                result = result.substring(cut + 1);
+                            }
+                        }
+                        return result;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return "unknown_file";
+                    }
+                }
+
+                @JavascriptInterface
+                public String readContentUri(String uriString) {
+                    if (uriString == null) return null;
+                    try {
+                        Uri uri = Uri.parse(uriString);
+                        try (InputStream iStream = getContentResolver().openInputStream(uri);
+                             ByteArrayOutputStream byteBuffer = new ByteArrayOutputStream()) {
+                            if (iStream == null) return null;
+                            int bufferSize = 1024;
+                            byte[] buffer = new byte[bufferSize];
+                            int len = 0;
+                            while ((len = iStream.read(buffer)) != -1) {
+                                byteBuffer.write(buffer, 0, len);
+                            }
+                            return Base64.encodeToString(byteBuffer.toByteArray(), Base64.NO_WRAP);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return null;
+                    }
+                }
+
+                @JavascriptInterface
                 public void saveBlob(String base64Data, String filename, String mimeType) {
                     try {
-                        byte[] fileData = Base64.decode(base64Data, Base64.DEFAULT);
                         File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                        if (!path.exists()) path.mkdirs();
                         File file = new File(path, filename);
                         
-                        // Avoid overwrite
-                        int i = 1;
+                        // Handle duplicates
+                        int k = 1;
                         String name = filename;
+                        String ext = "";
                         int dot = filename.lastIndexOf('.');
-                        String ext = dot > -1 ? filename.substring(dot) : "";
-                        String base = dot > -1 ? filename.substring(0, dot) : filename;
-                        
+                        if (dot > 0) {
+                            name = filename.substring(0, dot);
+                            ext = filename.substring(dot);
+                        }
                         while (file.exists()) {
-                            file = new File(path, base + "_" + i + ext);
-                            i++;
+                            file = new File(path, name + "(" + k++ + ")" + ext);
                         }
 
-                        FileOutputStream os = new FileOutputStream(file);
-                        os.write(fileData);
-                        os.close();
-
-                        // Index the file so it appears in Downloads app immediately
-                        android.media.MediaScannerConnection.scanFile(MainActivity.this,
-                                new String[]{file.toString()}, null, null);
-
-                        // Forceful Toast to show path
-                        final String savedPath = file.getAbsolutePath();
-                        MainActivity.this.runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                android.widget.Toast.makeText(MainActivity.this, "FILE SAVED: " + savedPath, android.widget.Toast.LENGTH_LONG).show();
-                            }
-                        });
-
-                        // Notify system & Open
-                        Intent intent = new Intent(Intent.ACTION_VIEW);
-                        Uri uri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".fileprovider", file);
-                        intent.setDataAndType(uri, mimeType);
-                        intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(Intent.createChooser(intent, "Open with..."));
-
+                        byte[] bytes = Base64.decode(base64Data, Base64.DEFAULT);
+                        try (FileOutputStream os = new FileOutputStream(file)) {
+                            os.write(bytes);
+                            os.flush();
+                        }
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
@@ -230,25 +223,27 @@ public class MainActivity extends BridgeActivity {
                 public String startFile(String filename, String sessionId) {
                     try {
                         File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                        if (!path.exists()) path.mkdirs();
                         File file = new File(path, filename);
-
-                        // Avoid overwrite
-                        int i = 1;
+                        
+                        int k = 1;
                         String name = filename;
+                        String ext = "";
                         int dot = filename.lastIndexOf('.');
-                        String ext = dot > -1 ? filename.substring(dot) : "";
-                        String base = dot > -1 ? filename.substring(0, dot) : filename;
-
-                        while (file.exists()) {
-                            file = new File(path, base + "_" + i + ext);
-                            i++;
+                        if (dot > 0) {
+                            name = filename.substring(0, dot);
+                            ext = filename.substring(dot);
                         }
-
-                        FileOutputStream os = new FileOutputStream(file);
-                        pendingFiles.put(sessionId, os);
+                        while (file.exists()) {
+                            file = new File(path, name + "(" + k++ + ")" + ext);
+                        }
+                        
+                        FileOutputStream fos = new FileOutputStream(file);
+                        pendingFiles.put(sessionId, fos);
                         pendingFilePaths.put(sessionId, file);
-                        return file.getName(); // Return actual filename used
-                    } catch (Exception e) {
+                        
+                        return file.getName();
+                    } catch (IOException e) {
                         e.printStackTrace();
                         return null;
                     }
@@ -257,12 +252,12 @@ public class MainActivity extends BridgeActivity {
                 @JavascriptInterface
                 public void appendFile(String base64Chunk, String sessionId) {
                     try {
-                        FileOutputStream os = pendingFiles.get(sessionId);
-                        if (os != null) {
-                            byte[] data = Base64.decode(base64Chunk, Base64.DEFAULT);
-                            os.write(data);
+                        FileOutputStream fos = pendingFiles.get(sessionId);
+                        if (fos != null) {
+                            byte[] bytes = Base64.decode(base64Chunk, Base64.DEFAULT);
+                            fos.write(bytes);
                         }
-                    } catch (Exception e) {
+                    } catch (IOException e) {
                         e.printStackTrace();
                     }
                 }
@@ -270,145 +265,88 @@ public class MainActivity extends BridgeActivity {
                 @JavascriptInterface
                 public void finishFile(String sessionId, String mimeType) {
                     try {
-                        FileOutputStream os = pendingFiles.remove(sessionId);
+                        FileOutputStream fos = pendingFiles.remove(sessionId);
                         File file = pendingFilePaths.remove(sessionId);
-
-                        if (os != null) {
-                            os.close();
+                        if (fos != null) {
+                            fos.flush();
+                            fos.close();
                         }
-
-                        if (file != null) {
-                            // Index the file
-                            android.media.MediaScannerConnection.scanFile(MainActivity.this,
-                                    new String[]{file.toString()}, null, null);
-
-                            final String savedPath = file.getAbsolutePath();
-                            MainActivity.this.runOnUiThread(() ->
-                                android.widget.Toast.makeText(MainActivity.this, "FILE SAVED: " + savedPath, android.widget.Toast.LENGTH_LONG).show()
-                            );
-
-                            // Notify system & Open
-                            Intent intent = new Intent(Intent.ACTION_VIEW);
-                            Uri uri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".fileprovider", file);
-                            intent.setDataAndType(uri, mimeType);
-                            intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                            startActivity(Intent.createChooser(intent, "Open with..."));
-                        }
-                    } catch (Exception e) {
+                    } catch (IOException e) {
                         e.printStackTrace();
-                    }
-                }
-
-                @JavascriptInterface
-                public void writeLog(String level, String message) {
-                    // Write to Android logcat
-                    String tag = "ColorRM";
-                    switch (level) {
-                        case "ERROR":
-                        case "UNCAUGHT":
-                        case "PROMISE":
-                            android.util.Log.e(tag, message);
-                            break;
-                        case "WARN":
-                            android.util.Log.w(tag, message);
-                            break;
-                        case "DEBUG":
-                            android.util.Log.d(tag, message);
-                            break;
-                        default:
-                            android.util.Log.i(tag, message);
-                    }
-
-                    // Also append to log file
-                    try {
-                        File logDir = new File(getExternalFilesDir(null), "logs");
-                        if (!logDir.exists()) logDir.mkdirs();
-
-                        File logFile = new File(logDir, "colorrm.log");
-
-                        // Rotate log if too large (>5MB)
-                        if (logFile.exists() && logFile.length() > 5 * 1024 * 1024) {
-                            File oldLog = new File(logDir, "colorrm.old.log");
-                            if (oldLog.exists()) oldLog.delete();
-                            logFile.renameTo(oldLog);
-                            logFile = new File(logDir, "colorrm.log");
-                        }
-
-                        java.io.FileWriter fw = new java.io.FileWriter(logFile, true);
-                        String timestamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(new java.util.Date());
-                        fw.write("[" + timestamp + "] [" + level + "] " + message + "\n");
-                        fw.close();
-                    } catch (Exception e) {
-                        android.util.Log.e(tag, "Failed to write log file: " + e.getMessage());
-                    }
-                }
-
-                @JavascriptInterface
-                public String getLogFilePath() {
-                    File logDir = new File(getExternalFilesDir(null), "logs");
-                    File logFile = new File(logDir, "colorrm.log");
-                    return logFile.getAbsolutePath();
-                }
-
-                @JavascriptInterface
-                public String readContentUri(String uriString) {
-                    try {
-                        Uri uri = Uri.parse(uriString);
-                        InputStream is = getContentResolver().openInputStream(uri);
-                        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
-                        int nRead;
-                        byte[] data = new byte[16384];
-                        while ((nRead = is.read(data, 0, data.length)) != -1) {
-                            buffer.write(data, 0, nRead);
-                        }
-                        buffer.flush();
-                        byte[] finalBytes = buffer.toByteArray();
-                        is.close();
-                        return Base64.encodeToString(finalBytes, Base64.NO_WRAP);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        return null;
                     }
                 }
             }, "AndroidNative");
         }
     }
 
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        handleIntent(intent);
-    }
+    // ... (rest of the file until handleIntent) ...
 
     private void handleIntent(Intent intent) {
-        if (intent == null) return;
+        if (intent == null) {
+            android.util.Log.d("ColorRM_Native", "handleIntent: Intent is null");
+            return;
+        }
 
         String action = intent.getAction();
         String type = intent.getType();
+        android.util.Log.d("ColorRM_Native", "handleIntent: action=" + action + ", type=" + type);
 
         if (Intent.ACTION_SEND.equals(action) && type != null) {
             if ("text/plain".equals(type)) {
                 String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
+                android.util.Log.d("ColorRM_Native", "handleIntent: Shared text=" + sharedText);
                 if (sharedText != null) {
-                    // Pass the URL to the WebView
+                    // Store in native buffer
+                    pendingSharedText = sharedText;
+                    
+                    // Also try to pass to WebView if ready
                     String safeText = escapeJavascriptString(sharedText);
-                    evaluateJavascript("if(window.handleSharedUrl) { window.handleSharedUrl('" + safeText + "'); } else { console.warn('Native: handleSharedUrl not ready for: " + safeText + "'); }");
+                    evaluateJavascript("if(window.handleSharedUrl) { window.handleSharedUrl('" + safeText + "'); }");
                 }
             } else {
                 Uri fileUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+                android.util.Log.d("ColorRM_Native", "handleIntent: Shared file URI=" + fileUri);
                 if (fileUri != null) {
-                    // Pass the file URI to the WebView
+                    // Store in native buffer
+                    pendingSharedFileUri = fileUri.toString();
+                    
+                    // Also try to pass to WebView if ready
                     String safeUri = escapeJavascriptString(fileUri.toString());
-                    evaluateJavascript("if(window.handleSharedFile) { window.handleSharedFile('" + safeUri + "'); } else { console.warn('Native: handleSharedFile not ready for: " + safeUri + "'); }");
+                    evaluateJavascript("if(window.handleSharedFile) { window.handleSharedFile('" + safeUri + "'); }");
                 }
+            }
+        } else if (Intent.ACTION_SEND_MULTIPLE.equals(action) && type != null) {
+            ArrayList<Uri> imageUris = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (imageUris != null) {
+                // Build JSON Array string manually
+                StringBuilder jsonBuilder = new StringBuilder();
+                jsonBuilder.append("[");
+                for (int i = 0; i < imageUris.size(); i++) {
+                    Uri u = imageUris.get(i);
+                    if (i > 0) jsonBuilder.append(",");
+                    jsonBuilder.append("\"").append(escapeJavascriptString(u.toString())).append("\"");
+                }
+                jsonBuilder.append("]");
+                String jsonString = jsonBuilder.toString();
+                
+                android.util.Log.d("ColorRM_Native", "handleIntent: Shared multiple files=" + jsonString);
+                
+                // Store in native buffer
+                pendingSharedFileUris = jsonString;
+                
+                // Also try to pass to WebView if ready
+                evaluateJavascript("if(window.handleSharedFiles) { window.handleSharedFiles(" + jsonString + "); }");
             }
         } else if (Intent.ACTION_VIEW.equals(action) && type != null) {
             Uri fileUri = intent.getData();
+            android.util.Log.d("ColorRM_Native", "handleIntent: View file URI=" + fileUri);
             if (fileUri != null) {
-                // Pass the file URI to the WebView
+                // Store in native buffer
+                pendingSharedFileUri = fileUri.toString();
+                
+                // Also try to pass to WebView if ready
                 String safeUri = escapeJavascriptString(fileUri.toString());
-                evaluateJavascript("if(window.handleSharedFile) { window.handleSharedFile('" + safeUri + "'); } else { console.warn('Native: handleSharedFile not ready for: " + safeUri + "'); }");
+                evaluateJavascript("if(window.handleSharedFile) { window.handleSharedFile('" + safeUri + "'); }");
             }
         }
     }
