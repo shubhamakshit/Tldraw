@@ -287,7 +287,7 @@ export const ColorRmUI = {
     setPenColor(c){ this.state.penColor=c; },
     setShapeType(t){
         this.state.shapeType=t;
-        ['rectangle','circle','line','arrow'].forEach(s=>{
+        ['rectangle','circle','line','arrow','triangle','diamond','star','hexagon','pentagon','octagon'].forEach(s=>{
             const el = this.getElement('sh_'+s);
             if(el) el.classList.toggle('active', s===t);
         });

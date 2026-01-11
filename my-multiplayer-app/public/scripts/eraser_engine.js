@@ -1,96 +1,157 @@
 
 export function initializeEraserPen(canvasElement, onEraserStateChange = null) {
     let isErasing = false
-    let lastEvent = null
 
-    // Standard stylus eraser uses button ID 32
-    const ERASER_BUTTON_ID = 32
+    // Stylus eraser button - most styluses use button 5 (Samsung S-Pen, Wacom, etc.)
+    // Some may use button 32, so we check for both
+    const ERASER_BUTTON_IDS = [5, 32]
+
+    // Marker to identify synthetic events and prevent infinite loops
+    const SYNTHETIC_MARKER = '__eraser_synthetic__'
+
+    console.log('[EraserEngine] Initialized. Listening for buttons:', ERASER_BUTTON_IDS)
+    console.log('[EraserEngine] Canvas element:', canvasElement)
+    console.log('[EraserEngine] Callback provided:', !!onEraserStateChange)
 
     const handlePointerDown = (e) => {
-        // CRITICAL: Only dispatch if the event target is the canvas or inside it
-        if (e.target !== canvasElement && !canvasElement.contains(e.target)) {
+        // Skip synthetic events we created
+        if (e[SYNTHETIC_MARKER]) {
             return
         }
 
-        if (e.button === ERASER_BUTTON_ID) {
+        // Check if target is canvas
+        const isCanvasTarget = e.target === canvasElement || canvasElement.contains(e.target)
+
+        if (!isCanvasTarget) {
+            return
+        }
+
+        // Check if this is an eraser button
+        if (ERASER_BUTTON_IDS.includes(e.button)) {
+            console.log('[EraserEngine] ✓ ERASER BUTTON', e.button, 'DETECTED! Activating eraser mode')
+
+            // STOP the original event from reaching canvas handlers
+            e.stopPropagation()
+            e.preventDefault()
+
             isErasing = true
 
-            // Notify callback of eraser state change
+            // Notify callback of eraser state change BEFORE dispatching synthetic event
             if (onEraserStateChange) {
+                console.log('[EraserEngine] Calling onEraserStateChange(true)')
                 onEraserStateChange(true)
             }
 
-            // Dispatch a synthetic 'pointerdown' event
+            // Dispatch a synthetic 'pointerdown' event with button 0
             const newEvent = new PointerEvent('pointerdown', {
-                ...e,
-                button: 0, // Pretend it's a left-click/touch
+                clientX: e.clientX,
+                clientY: e.clientY,
+                screenX: e.screenX,
+                screenY: e.screenY,
+                pointerId: e.pointerId,
+                pointerType: e.pointerType,
+                pressure: e.pressure,
+                width: e.width,
+                height: e.height,
+                tiltX: e.tiltX,
+                tiltY: e.tiltY,
+                button: 0,
+                buttons: 1,
                 isPrimary: true,
                 bubbles: true,
                 cancelable: true
             })
-            lastEvent = newEvent
-            // Dispatch specifically to the canvas
+            newEvent[SYNTHETIC_MARKER] = true
+            console.log('[EraserEngine] Dispatching synthetic pointerdown to canvas')
             canvasElement.dispatchEvent(newEvent)
-            e.preventDefault()
         }
     }
 
     const handlePointerMove = (e) => {
-        // If we are dragging, we might be outside the canvas, but we still want to track it
-        // IF we started inside. But for eraser hover/move, we generally want it scoped.
-        // However, standard pointer capture should handle drags.
+        // Skip synthetic events we created
+        if (e[SYNTHETIC_MARKER]) return
 
-        // For simple robust behavior: if isErasing is true, we keep dispatching.
-        // If isErasing is false, we check target.
+        if (!isErasing) return
 
-        if (!isErasing && (e.target !== canvasElement && !canvasElement.contains(e.target))) {
+        // Stop original event and dispatch synthetic one
+        e.stopPropagation()
+        e.preventDefault()
+
+        const newEvent = new PointerEvent('pointermove', {
+            clientX: e.clientX,
+            clientY: e.clientY,
+            screenX: e.screenX,
+            screenY: e.screenY,
+            pointerId: e.pointerId,
+            pointerType: e.pointerType,
+            pressure: e.pressure,
+            width: e.width,
+            height: e.height,
+            tiltX: e.tiltX,
+            tiltY: e.tiltY,
+            button: 0,
+            buttons: 1,
+            isPrimary: true,
+            bubbles: true,
+            cancelable: true
+        })
+        newEvent[SYNTHETIC_MARKER] = true
+        canvasElement.dispatchEvent(newEvent)
+    }
+
+    const handlePointerUp = (e) => {
+        // Skip synthetic events we created
+        if (e[SYNTHETIC_MARKER]) {
             return
         }
 
         if (isErasing) {
-            const newEvent = new PointerEvent('pointermove', {
-                ...e,
-                button: 0,
-                isPrimary: true,
-                bubbles: true,
-                cancelable: true
-            })
-            lastEvent = newEvent
-            canvasElement.dispatchEvent(newEvent)
+            console.log('[EraserEngine] Ending eraser mode')
+            e.stopPropagation()
             e.preventDefault()
-        }
-    }
 
-    const handlePointerUp = (e) => {
-        if (isErasing) {
             isErasing = false
 
             // Notify callback of eraser state change
             if (onEraserStateChange) {
+                console.log('[EraserEngine] Calling onEraserStateChange(false)')
                 onEraserStateChange(false)
             }
 
             const newEvent = new PointerEvent('pointerup', {
-                ...e,
+                clientX: e.clientX,
+                clientY: e.clientY,
+                screenX: e.screenX,
+                screenY: e.screenY,
+                pointerId: e.pointerId,
+                pointerType: e.pointerType,
+                pressure: e.pressure,
+                width: e.width,
+                height: e.height,
+                tiltX: e.tiltX,
+                tiltY: e.tiltY,
                 button: 0,
+                buttons: 0,
                 isPrimary: true,
                 bubbles: true,
                 cancelable: true
             })
+            newEvent[SYNTHETIC_MARKER] = true
+            console.log('[EraserEngine] Dispatching synthetic pointerup')
             canvasElement.dispatchEvent(newEvent)
-            e.preventDefault()
         }
     }
 
-    // We still listen on window to catch events that bubble up or happen globally (like up outside)
-    // but we added target checks in Down and Move to prevent cross-talk.
-    window.addEventListener('pointerdown', handlePointerDown)
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', handlePointerUp)
+    // Use CAPTURE phase to intercept events BEFORE they reach the canvas
+    console.log('[EraserEngine] Adding event listeners with capture phase')
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    window.addEventListener('pointermove', handlePointerMove, true)
+    window.addEventListener('pointerup', handlePointerUp, true)
 
     return () => {
-        window.removeEventListener('pointerdown', handlePointerDown)
-        window.removeEventListener('pointermove', handlePointerMove)
-        window.removeEventListener('pointerup', handlePointerUp)
+        console.log('[EraserEngine] Cleanup: removing event listeners')
+        window.removeEventListener('pointerdown', handlePointerDown, true)
+        window.removeEventListener('pointermove', handlePointerMove, true)
+        window.removeEventListener('pointerup', handlePointerUp, true)
     }
 }

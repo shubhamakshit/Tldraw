@@ -16,13 +16,16 @@ export const ColorRmInput = {
         if(tsp) tsp.style.display = ['pen','shape','eraser','text'].includes(t) ? 'block' : 'none';
 
         const po = this.getElement('penOptions');
-        if(po) po.style.display = t==='pen'||t==='text'?'block':'none';
+        if(po) po.style.display = t==='pen'?'block':'none';
 
         const so = this.getElement('shapeOptions');
         if(so) so.style.display = t==='shape'?'block':'none';
 
         const eo = this.getElement('eraserOptions');
         if(eo) eo.style.display = t==='eraser'?'block':'none';
+
+        const to = this.getElement('textOptions');
+        if(to) to.style.display = t==='text'?'block':'none';
 
         // Update the checkboxes based on current eraser options
         if(t==='eraser' && eo) {
@@ -172,27 +175,70 @@ export const ColorRmInput = {
     },
 
     setupDrawing() {
-        import('../spen_engine.js')
-            .then(({ initializeSPen }) => {
-                const canvas = this.getElement('canvas');
-                if (canvas) {
-                    console.log('Initializing S-Pen Engine for ColorRM...');
-                    initializeSPen(canvas);
-                }
-            })
-            .catch(err => {
-                console.log('S-Pen Engine not found, skipping initialization.');
-            });
+        // Load S-Pen preference from localStorage
+        const spenEnabled = this._loadSpenPreference();
+        this.state.spenEngineEnabled = spenEnabled;
 
-        // Initialize Eraser Pen Engine (button 32)
+        // Update the toggle UI to match saved preference
+        const spenToggle = this.getElement('spenEngineToggle');
+        if (spenToggle) {
+            spenToggle.checked = spenEnabled;
+        }
+
+        // Load stabilization preference from localStorage
+        const stabilization = this._loadStabilizationPreference();
+        this.state.stabilization = stabilization;
+
+        // Update the stabilization UI to match saved preference
+        const stabSlider = this.getElement('stabilizationSlider');
+        const stabLabel = this.getElement('stabilizationValue');
+        if (stabSlider) {
+            stabSlider.value = stabilization;
+        }
+        if (stabLabel) {
+            stabLabel.textContent = `${stabilization}%`;
+        }
+
+        // Initialize S-Pen Engine only if enabled
+        if (spenEnabled) {
+            import('../spen_engine.js')
+                .then(({ initializeSPen }) => {
+                    const canvas = this.getElement('canvas');
+                    if (canvas) {
+                        console.log('Initializing S-Pen Engine for ColorRM...');
+                        // Store cleanup function for toggle support
+                        this._spenEngineCleanup = initializeSPen(canvas);
+                    }
+                })
+                .catch(err => {
+                    console.log('S-Pen Engine not found, skipping initialization.');
+                });
+        } else {
+            console.log('S-Pen Engine disabled by user preference');
+        }
+
+        // Initialize Eraser Pen Engine (button 32) - for generic stylus erasers
         import('../eraser_engine.js')
             .then(({ initializeEraserPen }) => {
                 const canvas = this.getElement('canvas');
                 if (canvas) {
                     console.log('Initializing Eraser Pen Engine for ColorRM...');
-                    initializeEraserPen(canvas, (isErasing) => {
-                        // Dispatch custom events similar to S-Pen
-                        window.dispatchEvent(new CustomEvent(isErasing ? 'eraser-pen-down' : 'eraser-pen-up'));
+                    // Store cleanup function for toggle support
+                    this._eraserEngineCleanup = initializeEraserPen(canvas, (isErasing) => {
+                        // Switch tool SYNCHRONOUSLY before synthetic event fires
+                        if (isErasing) {
+                            if (this.state.tool !== 'eraser') {
+                                this._previousToolBeforeEraser = this.state.tool;
+                                this.setTool('eraser');
+                                console.log('Eraser Pen: Switched to Eraser');
+                            }
+                        } else {
+                            if (this._previousToolBeforeEraser) {
+                                this.setTool(this._previousToolBeforeEraser);
+                                console.log('Eraser Pen: Reverted to', this._previousToolBeforeEraser);
+                                this._previousToolBeforeEraser = null;
+                            }
+                        }
                     });
                 }
             })
@@ -204,6 +250,18 @@ export const ColorRmInput = {
         if (!c) return;
 
         c.addEventListener('contextmenu', e => e.preventDefault());
+
+        // Double-click to edit text
+        c.addEventListener('dblclick', e => {
+            const r = c.getBoundingClientRect();
+            const screenX = (e.clientX - r.left)*(c.width/r.width);
+            const screenY = (e.clientY - r.top)*(c.height/r.height);
+            const pt = {
+                x: (screenX - this.state.pan.x) / this.state.zoom,
+                y: (screenY - this.state.pan.y) / this.state.zoom
+            };
+            this._editTextAtPoint(pt);
+        });
 
         let startPt = null; this.isDragging = false;
         let dragStart = null; let startBounds = null; let startRotation = 0;
@@ -238,24 +296,8 @@ export const ColorRmInput = {
             }
         });
 
-        // --- Eraser Pen Button Logic (button 32) ---
-        window.addEventListener('eraser-pen-down', () => {
-            if (!isActiveInstance()) return;
-
-            if (this.state.tool !== 'eraser') {
-                previousTool = this.state.tool;
-                this.setTool('eraser');
-                console.log('Eraser Pen: Switched to Eraser');
-            }
-        });
-        window.addEventListener('eraser-pen-up', () => {
-            if (!isActiveInstance()) return;
-
-            if (this.state.tool === 'eraser') {
-                this.setTool(previousTool);
-                console.log('Eraser Pen: Reverted to', previousTool);
-            }
-        });
+        // Note: Eraser Pen (button 32) tool switching is handled synchronously
+        // in the callback passed to initializeEraserPen() above
 
         const getPt = e => {
             const r = c.getBoundingClientRect();
@@ -333,11 +375,8 @@ export const ColorRmInput = {
             }
 
             if(this.state.tool === 'text') {
-                this.ui.showInput("Add Text", "Type something...", (text) => {
-                    const img = this.state.images[this.state.idx]; const fs = this.state.textSize;
-                    img.history.push({ id: Date.now() + Math.random(), lastMod: Date.now(), tool: 'text', text: text, x: pt.x, y: pt.y, size: fs, color: this.state.penColor, rotation: 0, w: fs*text.length*0.6, h: fs });
-                    this.saveCurrentImg(); this.setTool('none'); this.state.selection = [img.history.length-1]; syncSidebarToSelection(); this.render();
-                }); return;
+                this._showInlineTextEditor(pt);
+                return;
             }
 
             if(['none','lasso'].includes(this.state.tool) && this.state.selection.length>0) {
@@ -1020,6 +1059,57 @@ export const ColorRmInput = {
         this.saveSessionState();
     },
 
+    /**
+     * Enables/disables the S-Pen engine (Samsung S-Pen button support)
+     */
+    setSpenEngine(enabled) {
+        this.state.spenEngineEnabled = enabled;
+
+        // Save preference to localStorage
+        try {
+            localStorage.setItem('colorRm_spenEngineEnabled', enabled ? 'true' : 'false');
+        } catch (e) {
+            console.log('Could not save S-Pen preference to localStorage');
+        }
+
+        if (enabled) {
+            // Re-initialize S-Pen engine
+            import('../spen_engine.js')
+                .then(({ initializeSPen }) => {
+                    const canvas = this.getElement('canvas');
+                    if (canvas) {
+                        console.log('S-Pen Engine: Enabled');
+                        this._spenEngineCleanup = initializeSPen(canvas);
+                    }
+                })
+                .catch(err => {
+                    console.log('S-Pen Engine not available:', err);
+                });
+        } else {
+            // Cleanup S-Pen engine
+            if (this._spenEngineCleanup) {
+                this._spenEngineCleanup();
+                this._spenEngineCleanup = null;
+                console.log('S-Pen Engine: Disabled');
+            }
+        }
+
+        this.saveSessionState();
+    },
+
+    /**
+     * Loads S-Pen engine preference from localStorage
+     */
+    _loadSpenPreference() {
+        try {
+            const saved = localStorage.getItem('colorRm_spenEngineEnabled');
+            // Default to true if not set
+            return saved === null ? true : saved === 'true';
+        } catch (e) {
+            return true; // Default to enabled
+        }
+    },
+
     // Helper function to determine if a point is inside a polygon using ray casting algorithm
     isPointInPolygon(x, y, vertices) {
         let inside = false;
@@ -1035,6 +1125,22 @@ export const ColorRmInput = {
     },
 
     // =============================================
+    // TEXT TOOL
+    // =============================================
+
+    /**
+     * Sets the text size
+     */
+    setTextSize(size) {
+        this.state.textSize = parseInt(size) || 24;
+        const range = this.getElement('brushSize');
+        if (range && this.state.tool === 'text') {
+            range.value = this.state.textSize;
+        }
+        this.saveSessionState();
+    },
+
+    // =============================================
     // PEN STABILIZATION (Lazy Brush Algorithm)
     // =============================================
 
@@ -1046,7 +1152,27 @@ export const ColorRmInput = {
         this.state.stabilization = parseInt(value) || 0;
         const label = this.getElement('stabilizationValue');
         if (label) label.textContent = `${this.state.stabilization}%`;
+
+        // Save to localStorage
+        try {
+            localStorage.setItem('colorRm_stabilization', this.state.stabilization.toString());
+        } catch (e) {
+            console.log('Could not save stabilization to localStorage');
+        }
+
         this.saveSessionState();
+    },
+
+    /**
+     * Loads stabilization preference from localStorage
+     */
+    _loadStabilizationPreference() {
+        try {
+            const saved = localStorage.getItem('colorRm_stabilization');
+            return saved !== null ? parseInt(saved) || 0 : 0;
+        } catch (e) {
+            return 0; // Default to no stabilization
+        }
     },
 
     /**
@@ -1222,5 +1348,286 @@ export const ColorRmInput = {
             maxY = Math.max(maxY, p.y);
         });
         return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+    },
+
+    // =============================================
+    // INLINE TEXT EDITOR
+    // =============================================
+
+    /**
+     * Shows an inline text editor on the canvas at the given position
+     * @param {Object} pt - Document coordinates {x, y}
+     * @param {Object} existingText - Optional existing text object to edit
+     * @param {number} historyIdx - Optional history index for editing
+     */
+    _showInlineTextEditor(pt, existingText = null, historyIdx = null) {
+        const c = this.getElement('canvas');
+        const viewport = this.getElement('viewport');
+        if (!c || !viewport) return;
+
+        // Remove any existing editor
+        this._removeInlineTextEditor();
+
+        const isEditing = existingText !== null;
+        const fs = isEditing ? existingText.size : this.state.textSize;
+        const color = isEditing ? existingText.color : this.state.penColor;
+        const initialText = isEditing ? existingText.text : '';
+
+        // Calculate screen position from document coordinates
+        const rect = c.getBoundingClientRect();
+        const scaleX = rect.width / c.width;
+        const scaleY = rect.height / c.height;
+
+        const screenX = (pt.x * this.state.zoom + this.state.pan.x) * scaleX + rect.left;
+        const screenY = (pt.y * this.state.zoom + this.state.pan.y) * scaleY + rect.top;
+
+        // Create the editor container
+        const editor = document.createElement('div');
+        editor.id = 'inlineTextEditor';
+        editor.style.cssText = `
+            position: fixed;
+            left: ${screenX}px;
+            top: ${screenY}px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        `;
+
+        // Create textarea for text input
+        const textarea = document.createElement('textarea');
+        textarea.id = 'inlineTextInput';
+        textarea.value = initialText;
+        textarea.placeholder = 'Type here...';
+        textarea.style.cssText = `
+            font-family: sans-serif;
+            font-size: ${fs * this.state.zoom * scaleY}px;
+            color: ${color};
+            background: rgba(255, 255, 255, 0.95);
+            border: 2px solid #0ea5e9;
+            border-radius: 4px;
+            padding: 8px 12px;
+            min-width: 200px;
+            min-height: 40px;
+            max-width: 400px;
+            resize: both;
+            outline: none;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        `;
+
+        // Create toolbar for text options
+        const toolbar = document.createElement('div');
+        toolbar.style.cssText = `
+            display: flex;
+            gap: 4px;
+            background: #000;
+            padding: 6px;
+            border-radius: 6px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        `;
+
+        // Size display
+        const sizeLabel = document.createElement('span');
+        sizeLabel.style.cssText = `
+            color: #888;
+            font-size: 0.7rem;
+            padding: 4px 8px;
+            background: #111;
+            border-radius: 4px;
+            font-family: monospace;
+        `;
+        sizeLabel.textContent = `${fs}px`;
+
+        // Confirm button
+        const confirmBtn = document.createElement('button');
+        confirmBtn.innerHTML = '<i class="bi bi-check-lg"></i>';
+        confirmBtn.style.cssText = `
+            background: #22c55e;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        `;
+
+        // Cancel button
+        const cancelBtn = document.createElement('button');
+        cancelBtn.innerHTML = '<i class="bi bi-x-lg"></i>';
+        cancelBtn.style.cssText = `
+            background: #333;
+            color: #888;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        `;
+
+        toolbar.appendChild(sizeLabel);
+        toolbar.appendChild(confirmBtn);
+        toolbar.appendChild(cancelBtn);
+
+        editor.appendChild(textarea);
+        editor.appendChild(toolbar);
+        document.body.appendChild(editor);
+
+        textarea.focus();
+        textarea.select();
+
+        // Handle confirm
+        const confirm = () => {
+            const text = textarea.value.trim();
+            if (text) {
+                this._commitTextEdit(pt, text, fs, color, isEditing, historyIdx);
+            }
+            this._removeInlineTextEditor();
+        };
+
+        // Handle cancel
+        const cancel = () => {
+            this._removeInlineTextEditor();
+        };
+
+        confirmBtn.onclick = confirm;
+        cancelBtn.onclick = cancel;
+
+        // Keyboard shortcuts
+        textarea.onkeydown = (e) => {
+            e.stopPropagation(); // Prevent tool shortcuts from triggering
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                confirm();
+            } else if (e.key === 'Escape') {
+                cancel();
+            }
+        };
+
+        // Click outside to confirm
+        this._textEditorClickHandler = (e) => {
+            if (!editor.contains(e.target)) {
+                confirm();
+            }
+        };
+        setTimeout(() => {
+            document.addEventListener('pointerdown', this._textEditorClickHandler);
+        }, 100);
+
+        // Store reference for cleanup
+        this._activeTextEditor = editor;
+    },
+
+    /**
+     * Removes the inline text editor
+     */
+    _removeInlineTextEditor() {
+        if (this._activeTextEditor) {
+            this._activeTextEditor.remove();
+            this._activeTextEditor = null;
+        }
+        if (this._textEditorClickHandler) {
+            document.removeEventListener('pointerdown', this._textEditorClickHandler);
+            this._textEditorClickHandler = null;
+        }
+    },
+
+    /**
+     * Commits text edit to history
+     */
+    _commitTextEdit(pt, text, size, color, isEditing, historyIdx) {
+        const img = this.state.images[this.state.idx];
+
+        // Calculate accurate text width using canvas
+        const c = this.getElement('canvas');
+        const ctx = c.getContext('2d');
+        ctx.font = `${size}px sans-serif`;
+        const metrics = ctx.measureText(text);
+        const textWidth = metrics.width;
+        const textHeight = size * 1.2; // Approximate line height
+
+        if (isEditing && historyIdx !== null) {
+            // Update existing text
+            const existingItem = img.history[historyIdx];
+            existingItem.text = text;
+            existingItem.w = textWidth;
+            existingItem.h = textHeight;
+            existingItem.lastMod = Date.now();
+        } else {
+            // Add new text
+            img.history.push({
+                id: Date.now() + Math.random(),
+                lastMod: Date.now(),
+                tool: 'text',
+                text: text,
+                x: pt.x,
+                y: pt.y,
+                size: size,
+                color: color,
+                rotation: 0,
+                w: textWidth,
+                h: textHeight
+            });
+            // Select the new text
+            this.state.selection = [img.history.length - 1];
+        }
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.setTool('lasso');
+        this.render();
+
+        // Sync with liveblocks if available
+        if (this.liveSync && !this.liveSync.isInitializing) {
+            const item = isEditing ? img.history[historyIdx] : img.history[img.history.length - 1];
+            if (isEditing) {
+                this.liveSync.updateStroke(this.state.idx, item);
+            } else {
+                this.liveSync.addStroke(this.state.idx, item);
+            }
+        }
+    },
+
+    /**
+     * Edit text on double-click
+     * @param {Object} pt - Document coordinates
+     */
+    _editTextAtPoint(pt) {
+        const img = this.state.images[this.state.idx];
+        if (!img || !img.history) return false;
+
+        // Find text item at this point (reverse order to get topmost)
+        for (let i = img.history.length - 1; i >= 0; i--) {
+            const item = img.history[i];
+            if (item.tool === 'text' && !item.deleted && !item.locked) {
+                // Check if point is within text bounds
+                const textX = item.x;
+                const textY = item.y;
+                const textW = item.w || item.size * item.text.length * 0.6;
+                const textH = item.h || item.size;
+
+                if (pt.x >= textX && pt.x <= textX + textW &&
+                    pt.y >= textY - textH && pt.y <= textY) {
+                    // Found text to edit
+                    this._showInlineTextEditor({ x: textX, y: textY }, item, i);
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
+
+    /**
+     * Edit selected text (called from context toolbar)
+     */
+    editSelectedText() {
+        if (this.state.selection.length !== 1) return;
+
+        const img = this.state.images[this.state.idx];
+        const idx = this.state.selection[0];
+        const item = img.history[idx];
+
+        if (item && item.tool === 'text' && !item.locked) {
+            this._showInlineTextEditor({ x: item.x, y: item.y }, item, idx);
+        }
     }
 };
