@@ -15,6 +15,20 @@ export const ColorRmRenderer = {
         });
     },
 
+    // Adaptive stroke cache threshold based on device performance
+    _getStrokeCacheThreshold() {
+        // On mobile/low-end devices, cache earlier
+        if (this._strokeCacheThreshold) return this._strokeCacheThreshold;
+
+        // Check for low-end device hints
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        const cores = navigator.hardwareConcurrency || 4;
+        const isLowEnd = isMobile || cores <= 4;
+
+        this._strokeCacheThreshold = isLowEnd ? 50 : 100;
+        return this._strokeCacheThreshold;
+    },
+
     // Build high-resolution cache at current zoom level for idle state
     _buildHiResCache(currentImg) {
         const zoom = this.state.zoom;
@@ -118,8 +132,9 @@ export const ColorRmRenderer = {
 
             // HYBRID RENDERING: Use cache when idle, render live when interacting
             const isInteracting = this.isDragging || this.state.selection.length > 0;
+            const cacheThreshold = this._getStrokeCacheThreshold();
 
-            if (isInteracting || activeHistory.length < 100) {
+            if (isInteracting || activeHistory.length < cacheThreshold) {
                 // LIVE RENDERING: Always render strokes directly for crispness
                 // Used when drawing, selecting, or when stroke count is low
                 activeHistory.forEach((st, idx) => {

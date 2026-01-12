@@ -8,7 +8,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="Color-RM" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>ColorRM Pro: Ultimate + Box</title>
     
     <!-- Fonts & Icons -->
@@ -38,63 +38,74 @@
             -webkit-font-smoothing: antialiased;
         }
 
-        /* UI Components */
+        /* UI Components - Touch Optimized */
         .btn {
             background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-main);
-            padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; font-weight: 500;
-            cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: 0.2s;
+            padding: 10px 14px; border-radius: 6px; font-size: 0.875rem; font-weight: 500;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: 0.15s;
+            min-height: 44px; /* Touch target minimum */
+            -webkit-tap-highlight-color: transparent;
         }
         .btn:hover { background: #1a1a1a; border-color: #555; }
+        .btn:active { transform: scale(0.97); background: #222; }
         .btn.active { background: var(--primary); border-color: var(--primary); color: #000; }
-        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .btn-primary { background: var(--primary); border-color: var(--primary); color: #000; }
-        .btn-primary:hover { background: #ccc; }
-        .btn-sm { padding: 4px 8px; font-size: 0.75rem; }
-        .btn-icon { width: 32px; height: 32px; justify-content: center; padding: 0; }
+        .btn-primary:hover { background: #e0e0e0; }
+        .btn-primary:active { background: #ccc; transform: scale(0.97); }
+        .btn-sm { padding: 8px 12px; font-size: 0.8rem; min-height: 36px; }
+        .btn-icon { width: 44px; height: 44px; justify-content: center; padding: 0; }
         
-        /* Sidebar Tabs */
+        /* Sidebar Tabs - Touch Optimized */
         .sb-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg-panel); flex-shrink: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; }
         .sb-tabs::-webkit-scrollbar { display: none; }
-        .sb-tab { flex: 1 0 auto; min-width: 80px; padding: 14px; text-align: center; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; border-bottom: 1px solid transparent; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; transition: 0.2s; white-space: nowrap; }
-        .sb-tab:hover { color: white; }
+        .sb-tab { flex: 1 0 auto; min-width: 80px; padding: 16px 12px; text-align: center; cursor: pointer; color: var(--text-muted); font-size: 0.8rem; border-bottom: 2px solid transparent; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; transition: 0.15s; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+        .sb-tab:hover { color: white; background: rgba(255,255,255,0.03); }
+        .sb-tab:active { background: rgba(255,255,255,0.08); }
         .sb-tab.active { color: white; border-bottom-color: white; }
 
-        /* Toolbar Pill */
+        /* Context Toolbar - Touch Optimized */
         .context-toolbar {
-            position: absolute; background: var(--menu-bg); padding: 6px; border-radius: 8px;
-            display: none; gap: 8px; align-items: center; z-index: 100;
+            position: absolute; background: var(--menu-bg); padding: 8px; border-radius: 10px;
+            display: none; gap: 6px; align-items: center; z-index: 100;
             box-shadow: 0 0 0 1px #333, 0 8px 30px rgba(0,0,0,0.5); border: none;
         }
-        .ctx-btn { background: none; border: none; color: #888; font-size: 1rem; cursor: pointer; padding: 6px; display: flex; align-items: center; border-radius: 4px; transition: 0.2s; }
+        .ctx-btn { background: none; border: none; color: #888; font-size: 1.1rem; cursor: pointer; padding: 10px; display: flex; align-items: center; justify-content: center; border-radius: 6px; transition: 0.15s; min-width: 44px; min-height: 44px; -webkit-tap-highlight-color: transparent; }
         .ctx-btn:hover { background: #222; color: #fff; }
+        .ctx-btn:active { background: #333; transform: scale(0.95); }
         .ctx-btn.delete { color: #888; }
         .ctx-btn.delete:hover { color: #ff4d4d; }
-        .ctx-divider { width: 1px; height: 16px; background: #333; }
+        .ctx-divider { width: 1px; height: 20px; background: #333; }
 
-        /* Dropdown Menu */
+        /* Dropdown Menu - Touch Optimized */
         .ctx-dropdown {
             position: absolute; top: 100%; right: 0; margin-top: 8px;
-            background: var(--menu-bg); border: 1px solid #333; border-radius: 6px;
-            width: 180px; padding: 4px; display: none; flex-direction: column; gap: 2px;
+            background: var(--menu-bg); border: 1px solid #333; border-radius: 8px;
+            width: 200px; padding: 6px; display: none; flex-direction: column; gap: 2px;
             box-shadow: 0 8px 30px rgba(0,0,0,0.5);
         }
         .ctx-dropdown.show { display: flex; }
-        .ctx-row { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; color: #888; transition: 0.2s; }
+        .ctx-row { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 6px; cursor: pointer; font-size: 0.875rem; color: #888; transition: 0.15s; min-height: 44px; -webkit-tap-highlight-color: transparent; }
         .ctx-row:hover { background: #111; color: white; }
+        .ctx-row:active { background: #1a1a1a; }
         
-        /* Switches */
-        .switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+        /* Switches - Touch Optimized */
+        .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
         .switch input { opacity: 0; width: 0; height: 0; }
-        .slider-switch { position: absolute; cursor: pointer; inset: 0; background-color: #000; border: 1px solid #333; transition: .2s; border-radius: 20px; }
-        .slider-switch:before { position: absolute; content: ""; height: 12px; width: 12px; left: 3px; bottom: 3px; background-color: #888; transition: .2s; border-radius: 50%; }
+        .slider-switch { position: absolute; cursor: pointer; inset: 0; background-color: #000; border: 1px solid #444; transition: .2s; border-radius: 24px; }
+        .slider-switch:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: #888; transition: .2s; border-radius: 50%; }
         input:checked + .slider-switch { background-color: #fff; border-color: #fff; }
-        input:checked + .slider-switch:before { transform: translateX(16px); background-color: #000; }
+        input:checked + .slider-switch:before { transform: translateX(20px); background-color: #000; }
 
-        .tool-row { display: flex; gap: 6px; margin-bottom: 6px; }
-        .tool-btn { flex: 1; justify-content: center; flex-direction: column; gap: 4px; padding: 8px; height: 56px; font-size: 0.7rem; border-radius: 6px; border-color: #333; }
-        .tool-btn i { font-size: 1.1rem; }
+        /* Tool Buttons - Touch Optimized */
+        .tool-row { display: flex; gap: 8px; margin-bottom: 8px; }
+        .tool-btn { flex: 1; justify-content: center; flex-direction: column; gap: 6px; padding: 12px 8px; min-height: 64px; font-size: 0.75rem; border-radius: 8px; border-color: #333; -webkit-tap-highlight-color: transparent; }
+        .tool-btn:active { transform: scale(0.96); }
+        .tool-btn i { font-size: 1.25rem; }
 
-        .color-dot { width: 22px; height: 22px; border-radius: 4px; border: 1px solid #333; cursor: pointer; }
+        /* Color Dots - Touch Optimized */
+        .color-dot { width: 32px; height: 32px; border-radius: 6px; border: 2px solid #333; cursor: pointer; transition: 0.15s; -webkit-tap-highlight-color: transparent; }
+        .color-dot:active { transform: scale(0.9); }
 
         /* Canvas & Viewport */
         .viewport { flex: 1; background: #000; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; }
@@ -112,9 +123,11 @@
         .split-view-active .viewport { display: none; }
         .split-view-active .workspace { display: flex; }
         
-        .shape-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 8px; }
-        .shape-btn { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 4px; cursor: pointer; border: 1px solid #333; transition: 0.2s; color: #888; }
+        /* Shape Grid - Touch Optimized */
+        .shape-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
+        .shape-btn { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #000; border-radius: 6px; cursor: pointer; border: 1px solid #333; transition: 0.15s; color: #888; min-width: 40px; min-height: 40px; -webkit-tap-highlight-color: transparent; }
         .shape-btn:hover { border-color: #666; color: #fff; }
+        .shape-btn:active { transform: scale(0.92); background: #111; }
         .shape-btn.active { background: #fff; color: #000; border-color: #fff; }
 
         header { height: 56px; background: var(--bg-panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; z-index: 50; flex-shrink: 0; }
@@ -141,41 +154,45 @@
             flex: 1;
             display: flex;
             flex-direction: column;
-            gap: 24px;
+            gap: 20px;
             min-height: 0;
+            -webkit-overflow-scrolling: touch;
         }
 
-        .sb-page-grid, .box-grid { overflow-x: auto; padding-bottom: 8px; min-width: 0; }
-        .sb-page-item, .box-item { flex-shrink: 0; min-width: 60px; min-height: 60px; }
+        .sb-page-grid, .box-grid { overflow-x: auto; padding-bottom: 8px; min-width: 0; -webkit-overflow-scrolling: touch; }
+        .sb-page-item, .box-item { flex-shrink: 0; min-width: 70px; min-height: 70px; }
         .sb-page-grid, .sb-page-list { min-width: 100%; }
+
+        .sidebar-footer { padding: 16px; border-top: 1px solid var(--border); display: grid; gap: 10px; background: #000; flex-shrink: 0; }
+        .control-section { display: flex; flex-direction: column; gap: 14px; }
+        .control-section h4 { font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); margin: 0; letter-spacing: 0.1em; font-weight: 700; }
         
-        .sidebar-footer { padding: 16px; border-top: 1px solid var(--border); display: grid; gap: 8px; background: #000; flex-shrink: 0; }
-        .control-section { display: flex; flex-direction: column; gap: 12px; }
-        .control-section h4 { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); margin: 0; letter-spacing: 0.1em; font-weight: 700; }
-        
-        /* Bookmarks */
-        .bm-list { display: flex; flex-direction: column; gap: 4px; }
-        .bm-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: transparent; border-radius: 4px; font-size: 0.8rem; cursor: pointer; transition: 0.2s; border: 1px solid #222; color: #888; }
+        /* Bookmarks - Touch Optimized */
+        .bm-list { display: flex; flex-direction: column; gap: 6px; }
+        .bm-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: transparent; border-radius: 6px; font-size: 0.85rem; cursor: pointer; transition: 0.15s; border: 1px solid #222; color: #888; min-height: 44px; -webkit-tap-highlight-color: transparent; }
         .bm-item:hover { background: #111; border-color: #444; color: #fff; }
-        .bm-del { color: #555; background: none; border: none; cursor: pointer; padding: 2px; transition: 0.2s; }
-        .bm-del:hover { color: #ff4d4d; }
+        .bm-item:active { background: #1a1a1a; }
+        .bm-del { color: #555; background: none; border: none; cursor: pointer; padding: 8px; transition: 0.15s; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 4px; }
+        .bm-del:hover { color: #ff4d4d; background: rgba(255,77,77,0.1); }
 
-        /* Sidebar Page Preview Grid */
-        .sb-page-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-        .sb-page-item { aspect-ratio: 1; background: #000; border-radius: 4px; cursor: pointer; position: relative; border: 1px solid #222; overflow: hidden; transition: 0.2s; }
+        /* Sidebar Page Preview Grid - Touch Optimized */
+        .sb-page-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .sb-page-item { aspect-ratio: 1; background: #000; border-radius: 6px; cursor: pointer; position: relative; border: 2px solid #222; overflow: hidden; transition: 0.15s; -webkit-tap-highlight-color: transparent; }
+        .sb-page-item:active { transform: scale(0.97); }
         .sb-page-item.active { border-color: white; }
-        .sb-page-item img { width: 100%; height: 100%; object-fit: cover; opacity: 0.5; transition: 0.2s; }
+        .sb-page-item img { width: 100%; height: 100%; object-fit: cover; opacity: 0.6; transition: 0.15s; }
         .sb-page-item:hover img { opacity: 1; }
-        .sb-page-num { position: absolute; bottom: 4px; right: 4px; background: rgba(0,0,0,0.8); font-size: 0.6rem; padding: 2px 4px; border-radius: 2px; color: #fff; border: 1px solid #333; }
+        .sb-page-num { position: absolute; bottom: 6px; right: 6px; background: rgba(0,0,0,0.85); font-size: 0.7rem; padding: 4px 6px; border-radius: 4px; color: #fff; border: 1px solid #333; font-weight: 600; }
 
-        /* Box / Clipboard Grid */
-        .box-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-        .box-item { position: relative; border: 1px solid #222; border-radius: 4px; overflow: hidden; background: #000; transition: 0.2s; }
+        /* Box / Clipboard Grid - Touch Optimized */
+        .box-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .box-item { position: relative; border: 2px solid #222; border-radius: 6px; overflow: hidden; background: #000; transition: 0.15s; -webkit-tap-highlight-color: transparent; }
         .box-item:hover { border-color: #444; }
+        .box-item:active { transform: scale(0.97); }
         .box-item img { width: 100%; height: auto; display: block; }
-        .box-del { position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,0.8); color: #fff; border: 1px solid #333; border-radius: 4px; padding: 4px; cursor: pointer; opacity: 0; transition: 0.2s; }
+        .box-del { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.85); color: #fff; border: 1px solid #333; border-radius: 6px; padding: 8px; cursor: pointer; opacity: 0; transition: 0.15s; min-width: 32px; min-height: 32px; display: flex; align-items: center; justify-content: center; }
         .box-item:hover .box-del { opacity: 1; }
-        .toast { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); background: #fff; color: #000; padding: 8px 16px; border-radius: 4px; font-weight: 600; font-size: 0.85rem; opacity: 0; pointer-events: none; transition: 0.3s; z-index: 150; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+        .toast { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); background: #fff; color: #000; padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 0.875rem; opacity: 0; pointer-events: none; transition: 0.3s; z-index: 150; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
         .toast.show { opacity: 1; top: 80px; }
 
         /* Floating Picker */
@@ -192,11 +209,68 @@
         @keyframes spin { 100% { transform: rotate(360deg); } }
         .spin { animation: spin 0.8s linear infinite; display: inline-block; }
 
-        .swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(28px, 1fr)); gap: 6px; }
-        .swatch { width: 28px; height: 28px; border-radius: 4px; cursor: pointer; border: 1px solid #333; transition: 0.2s; }
-        .swatch:hover { transform: scale(1.1); border-color: #fff; }
-        .slider { -webkit-appearance: none; width: 100%; height: 2px; background: #333; border-radius: 2px; }
-        .slider::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: #fff; cursor: pointer; border: 2px solid #000; }
+        /* Enhanced Loading States */
+        .skeleton {
+            background: linear-gradient(90deg, #1a1a1a 25%, #2a2a2a 50%, #1a1a1a 75%);
+            background-size: 200% 100%;
+            animation: skeleton-shimmer 1.5s infinite;
+            border-radius: 4px;
+        }
+        @keyframes skeleton-shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Loading overlay for buttons */
+        .btn.loading {
+            position: relative;
+            pointer-events: none;
+            color: transparent;
+        }
+        .btn.loading::after {
+            content: "";
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            border: 2px solid transparent;
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+        .btn-primary.loading::after {
+            border-top-color: #000;
+        }
+
+        /* Pulse animation for sync status */
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Fade-in animation for loaded content */
+        .fade-in {
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Swatches - Touch Optimized */
+        .swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); gap: 8px; }
+        .swatch { width: 36px; height: 36px; border-radius: 6px; cursor: pointer; border: 2px solid #333; transition: 0.15s; -webkit-tap-highlight-color: transparent; }
+        .swatch:hover { transform: scale(1.08); border-color: #fff; }
+        .swatch:active { transform: scale(0.95); }
+
+        /* Slider - Touch Optimized */
+        .slider { -webkit-appearance: none; width: 100%; height: 6px; background: #333; border-radius: 4px; }
+        .slider::-webkit-slider-thumb { -webkit-appearance: none; height: 22px; width: 22px; border-radius: 50%; background: #fff; cursor: pointer; border: 3px solid #000; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
 
         /* Export Modal Styles */
         .tab-btn { flex: 1; padding: 10px; background: transparent; border: none; border-bottom: 2px solid transparent; color: #888; cursor: pointer; font-size: 0.8rem; font-weight: 600; transition: 0.2s; }
@@ -239,16 +313,16 @@
         .user-item.self { border-color: #fff; color: #fff; }
         .user-dot { width: 6px; height: 6px; border-radius: 50%; }
 
-        /* Navigation Island */
-        .nav-island { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); background:#000; padding:6px 12px; border-radius:8px; border:1px solid #333; display:flex; gap:12px; align-items:center; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
+        /* Navigation Island - Touch Optimized */
+        .nav-island { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); background:#000; padding:8px 16px; border-radius:12px; border:1px solid #333; display:flex; gap:8px; align-items:center; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
 
-        /* --- Resizer Styles --- */
+        /* --- Resizer Styles - Touch Optimized --- */
         /* Desktop: Resizer on the Right Edge */
         .resize-handle-side {
             position: absolute;
             top: 0;
             right: 0;
-            width: 14px;
+            width: 20px;
             height: 100%;
             cursor: col-resize;
             z-index: 100;
@@ -256,17 +330,19 @@
             align-items: center;
             justify-content: center;
             background: transparent;
-            transition: background 0.2s;
+            transition: background 0.15s;
+            -webkit-tap-highlight-color: transparent;
         }
 
-        .resize-handle-side:hover {
+        .resize-handle-side:hover,
+        .resize-handle-side:active {
             background: rgba(255, 255, 255, 0.1);
         }
 
         .resize-handle-side::after {
             content: "⋮";
             color: #555;
-            font-size: 14px;
+            font-size: 16px;
             font-weight: bold;
             pointer-events: none;
         }
@@ -277,45 +353,82 @@
             top: 0;
             left: 0;
             width: 100%;
-            height: 18px;
+            height: 28px;
             cursor: row-resize;
             z-index: 100;
-            display: none; /* Hidden on desktop */
+            display: none;
             align-items: center;
             justify-content: center;
             background: var(--bg-panel);
             border-bottom: 1px solid var(--border);
             border-top: 1px solid var(--border);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .resize-handle-top:active {
+            background: rgba(255, 255, 255, 0.05);
         }
 
         .resize-handle-top::after {
-            content: "···";
-            color: #555;
-            font-size: 20px;
-            font-weight: bold;
-            letter-spacing: -1px;
-            margin-top: -6px;
+            content: "⬍";
+            color: #666;
+            font-size: 16px;
             pointer-events: none;
         }
 
+        /* Mobile Responsive - Touch Optimized */
         @media (max-width: 900px) {
             .workspace { flex-direction: column-reverse; }
-            .sidebar { 
-                width: 100% !important; 
-                height: 45vh; 
-                min-height: 20vh;
-                max-height: 80vh;
-                border-left: none; 
+            .sidebar {
+                width: 100% !important;
+                height: 40vh;
+                min-height: 25vh;
+                max-height: 70vh;
+                border-left: none;
                 border-top: none;
                 min-width: 100%;
             }
             .resize-handle-side {
-                display: none; 
+                display: none;
             }
             .resize-handle-top {
-                display: flex; 
+                display: flex;
             }
             .viewport { height: auto; flex: 1; }
+
+            /* Mobile: Larger touch targets */
+            .tool-btn { min-height: 58px; }
+            .btn-icon { width: 44px; height: 44px; }
+            .nav-island { padding: 10px 16px; gap: 6px; bottom: 16px; }
+            .sidebar-content { padding: 16px; gap: 16px; }
+            header { padding: 0 12px; height: 52px; }
+
+            /* Mobile: Compact tool rows */
+            .tool-row { gap: 6px; margin-bottom: 6px; }
+        }
+
+        /* Tablet Landscape */
+        @media (max-width: 900px) and (orientation: landscape) {
+            .sidebar {
+                height: 50vh;
+                min-height: 35vh;
+                max-height: 60vh;
+            }
+            .resize-handle-top { height: 24px; }
+            header { height: 48px; }
+        }
+
+        /* Small Mobile */
+        @media (max-width: 480px) {
+            .sidebar {
+                height: 45vh;
+                min-height: 30vh;
+            }
+            header { padding: 0 10px; }
+            .btn { padding: 8px 10px; font-size: 0.8rem; }
+            .sb-tab { padding: 14px 8px; font-size: 0.7rem; min-width: 60px; }
+            .tool-btn { font-size: 0.65rem; min-height: 54px; }
+            .nav-island { padding: 8px 12px; gap: 4px; bottom: 12px; border-radius: 10px; }
         }
 
         /* Hide Input Number Spinner */

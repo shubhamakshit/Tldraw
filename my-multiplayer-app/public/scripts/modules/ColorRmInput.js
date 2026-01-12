@@ -682,18 +682,19 @@ export const ColorRmInput = {
             }
         };
 
-        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointermove', onPointerMove, { passive: true });
 
         // Only main app listens to window resize for cursor re-rendering
         if (this.config.isMain) {
             window.addEventListener('resize', () => this.liveSync && this.liveSync.renderCursors && this.liveSync.renderCursors());
         }
         const vp = this.getElement('viewport');
-        if(vp) vp.addEventListener('scroll', () => this.liveSync && this.liveSync.renderCursors && this.liveSync.renderCursors());
+        if(vp) vp.addEventListener('scroll', () => this.liveSync && this.liveSync.renderCursors && this.liveSync.renderCursors(), { passive: true });
 
         // --- Zoom & Pan Logic ---
         let lastPinchDist = null;
         let lastMidpoint = null;
+        let pinchGestureDebounce = null;
 
         c.addEventListener('wheel', e => {
             if (e.ctrlKey) {
@@ -719,19 +720,33 @@ export const ColorRmInput = {
 
         c.addEventListener('touchstart', e => {
             if (e.touches.length === 2) {
-                this.isDragging = false;
-                this.currentStroke = null;
+                // Debounce: Don't immediately cancel stroke - wait a moment
+                if (pinchGestureDebounce) clearTimeout(pinchGestureDebounce);
+
+                pinchGestureDebounce = setTimeout(() => {
+                    // Store stroke data temporarily in case we need it
+                    this._pendingStroke = this.currentStroke;
+                    this.isDragging = false;
+                    this.currentStroke = null;
+                }, 50); // 50ms delay before canceling stroke
+
                 lastPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
                 lastMidpoint = {
                     x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
                     y: (e.touches[0].clientY + e.touches[1].clientY) / 2
                 };
             }
-        }, { passive: false });
+        }, { passive: true });
 
         c.addEventListener('touchmove', e => {
             if (e.touches.length === 2 && lastPinchDist !== null && lastMidpoint !== null) {
                 e.preventDefault();
+
+                // Clear any pending stroke data since we're definitely pinching
+                if (this._pendingStroke) {
+                    this._pendingStroke = null;
+                }
+
                 const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
                 const factor = dist / lastPinchDist;
                 const curMidpoint = {
@@ -755,10 +770,15 @@ export const ColorRmInput = {
 
         c.addEventListener('touchend', e => {
             if (e.touches.length < 2) {
+                // Clear pinch debounce
+                if (pinchGestureDebounce) {
+                    clearTimeout(pinchGestureDebounce);
+                    pinchGestureDebounce = null;
+                }
                 lastPinchDist = null;
                 lastMidpoint = null;
             }
-        });
+        }, { passive: true });
 
         window.addEventListener('pointerup', e => {
             // Scope: Only process if this instance was actively dragging or selecting
