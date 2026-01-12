@@ -216,9 +216,8 @@ export class LiveSyncClient {
             tool: tool,
             isDrawing: isDrawing,
             color: color,
-            size: size,
-            pageStructureVersion: Date.now(),
-            pageCount: this.app.state.images.length
+            size: size
+            // Note: pageStructureVersion and pageCount are only updated via notifyPageStructureChange()
         });
     }
 
@@ -284,19 +283,8 @@ export class LiveSyncClient {
                 return;
             }
 
-            // Check for page structure changes from this user
-            if (presence.pageStructureVersion !== undefined && presence.pageCount !== undefined) {
-                const userId = user.connectionId || user.id;
-                const currentVersion = this.otherUserVersions[userId];
-
-                // If this user's version is newer than what we last saw
-                if (!currentVersion || currentVersion < presence.pageStructureVersion) {
-                    this.otherUserVersions[userId] = presence.pageStructureVersion;
-
-                    // Another user made a page structure change
-                    this.handlePageStructureChange(presence);
-                }
-            }
+            // Note: Page structure changes are handled by the "others" subscription,
+            // no need to check here to avoid duplicate processing
 
             // --- Draw Live Trail ---
             if (presence.isDrawing && presence.tool === 'pen') {
@@ -609,8 +597,11 @@ export class LiveSyncClient {
     notifyPageStructureChange() {
         // Update presence with a timestamp to notify other users of changes
         if (this.room) {
+            // Set flag to ignore our own page structure change notification
+            this._ownPageStructureVersion = Date.now();
+
             this.room.updatePresence({
-                pageStructureVersion: Date.now(),
+                pageStructureVersion: this._ownPageStructureVersion,
                 pageCount: this.app.state.images.length,
                 pageIdx: this.app.state.idx
             });
@@ -619,6 +610,11 @@ export class LiveSyncClient {
 
     // Handle page structure change notifications from other users (debounced)
     handlePageStructureChange(message) {
+        // Ignore our own page structure change notification
+        if (message.pageStructureVersion === this._ownPageStructureVersion) {
+            return;
+        }
+
         // Debounce: Only process if we haven't processed recently
         const now = Date.now();
         const DEBOUNCE_MS = 2000; // 2 second debounce
@@ -637,27 +633,30 @@ export class LiveSyncClient {
         this._lastPageStructureChange = now;
         console.log('Page structure change detected, refreshing pages...');
 
+        // Store current page index before reload
+        const currentPageIdx = this.app.state.idx;
+
         // Reload the session pages to get the new structure
         this.app.loadSessionPages(this.app.state.sessionId).then(() => {
             // Update the page total display
             const pt = this.app.getElement('pageTotal');
             if (pt) pt.innerText = '/ ' + this.app.state.images.length;
 
-            // Update the page input if needed
+            // Restore the page index to what it was before reload
+            // (loadSessionPages may have changed it)
+            const restoredIdx = Math.min(currentPageIdx, this.app.state.images.length - 1);
+            if (restoredIdx >= 0 && restoredIdx !== this.app.state.idx) {
+                this.app.state.idx = restoredIdx;
+                this.app.loadPage(restoredIdx, false);
+            }
+
+            // Update the page input
             const pageInput = this.app.getElement('pageInput');
             if (pageInput) pageInput.value = this.app.state.idx + 1;
 
             // Update the sidebar if it's showing pages
             if (this.app.state.activeSideTab === 'pages') {
                 this.app.renderPageSidebar();
-            }
-
-            // If the current page index is out of bounds, adjust it
-            if (this.app.state.idx >= this.app.state.images.length) {
-                this.app.state.idx = Math.max(0, this.app.state.images.length - 1);
-                if (this.app.state.idx >= 0) {
-                    this.app.loadPage(this.app.state.idx, false);
-                }
             }
 
             // Update session metadata
