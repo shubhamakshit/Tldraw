@@ -116,6 +116,112 @@ export class LiveSyncClient {
 
         this.isInitializing = false;
         console.log("Liveblocks: Room Ready.");
+
+        // Start periodic page sync check (every 5 seconds)
+        this.startPeriodicPageSync();
+
+        // CRITICAL: Immediate page sync after initialization
+        // This ensures we catch any pages that were added while we were connecting
+        setTimeout(() => {
+            this._immediatePageSync();
+        }, 500);
+    }
+
+    /**
+     * Immediate page sync - called right after initialization
+     * Checks metadata for page count discrepancy and fetches missing pages
+     */
+    async _immediatePageSync() {
+        const project = this.getProject();
+        if (!project) return;
+
+        const metadata = project.get("metadata").toObject();
+        const remoteCount = metadata.pageCount || 0;
+        const localCount = this.app.state.images.length;
+
+        console.log(`[_immediatePageSync] Remote: ${remoteCount}, Local: ${localCount}`);
+
+        if (remoteCount > localCount) {
+            console.log(`[_immediatePageSync] Found missing pages! Fetching ${remoteCount - localCount} pages...`);
+            await this.fetchMissingPagesWithRetry(remoteCount);
+        }
+    }
+
+    /**
+     * Starts a periodic check to ensure pages are synced with remote
+     * This catches any missed updates due to race conditions or network issues
+     */
+    startPeriodicPageSync() {
+        // Clear any existing interval
+        if (this._pageSyncInterval) {
+            clearInterval(this._pageSyncInterval);
+        }
+
+        this._pageSyncInterval = setInterval(() => {
+            const project = this.getProject();
+            if (!project || this.isInitializing) return;
+
+            const metadata = project.get("metadata").toObject();
+            const remoteCount = metadata.pageCount || 0;
+            const localCount = this.app.state.images.length;
+
+            if (remoteCount > localCount) {
+                console.log(`[PeriodicSync] Remote has ${remoteCount} pages, local has ${localCount}. Fetching...`);
+                this.fetchMissingPages(remoteCount);
+            }
+        }, 5000); // Check every 5 seconds (faster catch-up)
+    }
+
+    /**
+     * Stops the periodic page sync
+     */
+    stopPeriodicPageSync() {
+        if (this._pageSyncInterval) {
+            clearInterval(this._pageSyncInterval);
+            this._pageSyncInterval = null;
+        }
+    }
+
+    /**
+     * Force sync all pages - use this for manual recovery
+     * This method is exposed globally for debugging via window.LiveSync.forceSyncPages()
+     */
+    async forceSyncPages() {
+        console.log('[forceSyncPages] Starting forced page synchronization...');
+
+        const project = this.getProject();
+        if (!project) {
+            console.error('[forceSyncPages] No project found!');
+            return;
+        }
+
+        const metadata = project.get("metadata").toObject();
+        const remoteCount = metadata.pageCount || 0;
+        const localCount = this.app.state.images.length;
+
+        console.log(`[forceSyncPages] Remote: ${remoteCount}, Local: ${localCount}`);
+
+        if (remoteCount === 0) {
+            console.log('[forceSyncPages] Remote has no pages, triggering base file fetch...');
+            if (this.app.retryBaseFetch) {
+                await this.app.retryBaseFetch();
+            }
+            return;
+        }
+
+        if (remoteCount > localCount) {
+            // Reset the fetch lock in case it's stuck
+            this._isFetchingMissingPages = false;
+
+            console.log(`[forceSyncPages] Fetching ${remoteCount - localCount} missing pages...`);
+            await this.fetchMissingPagesWithRetry(remoteCount, 5); // 5 retries for forced sync
+        } else if (localCount === remoteCount) {
+            console.log('[forceSyncPages] Page counts match. Syncing history...');
+            this.syncHistory();
+            this.app.render();
+        }
+
+        console.log('[forceSyncPages] Complete. Local pages:', this.app.state.images.length);
     }
 
     async setupProjectSync(projectId) {
@@ -155,7 +261,7 @@ export class LiveSyncClient {
              }
         }
 
-        this.syncStorageToLocal();
+        await this.syncStorageToLocal();
 
         // Refresh project-specific subscription
         this.unsubscribes.forEach(unsub => unsub());
@@ -397,7 +503,7 @@ export class LiveSyncClient {
         return this.root.get("projects").get(this.projectId);
     }
 
-    syncStorageToLocal() {
+    async syncStorageToLocal() {
         const project = this.getProject();
         if (!project) return;
 
@@ -415,6 +521,19 @@ export class LiveSyncClient {
 
         this.app.state.colors = project.get("colors").toArray();
         this.app.renderSwatches();
+
+        // CRITICAL: Fetch missing pages during initial sync
+        // This handles the case where a new user joins a room with existing pages
+        const remotePageCount = metadata.pageCount || 0;
+        const localPageCount = this.app.state.images.length;
+
+        console.log(`[syncStorageToLocal] Remote pageCount=${remotePageCount}, Local pageCount=${localPageCount}`);
+
+        if (remotePageCount > localPageCount) {
+            console.log(`[syncStorageToLocal] Fetching ${remotePageCount - localPageCount} missing pages...`);
+            // Use await to ensure pages are fetched before continuing
+            await this.fetchMissingPagesWithRetry(remotePageCount);
+        }
 
         this.syncHistory();
         this.app.loadPage(this.app.state.idx, false);
@@ -468,6 +587,12 @@ export class LiveSyncClient {
             }
         }
 
+        // AUTO-FETCH missing pages if remote has more pages than local
+        if (metadata.pageCount > this.app.state.images.length) {
+            console.log(`Liveblocks: Remote has ${metadata.pageCount} pages but local has ${this.app.state.images.length}. Fetching missing pages...`);
+            this.fetchMissingPages(metadata.pageCount);
+        }
+
         // AUTO-RETRY base file fetch if remote has pages but we don't
         if (metadata.pageCount > 0 && this.app.state.images.length === 0) {
             console.log("Liveblocks: Remote has content but local is empty. Triggering fetch...");
@@ -476,6 +601,187 @@ export class LiveSyncClient {
 
         this.syncHistory();
         this.app.updateLockUI();
+    }
+
+    /**
+     * Fetches missing pages from backend with retry logic (3 attempts per page)
+     * @param {number} expectedPageCount - The expected total page count from metadata
+     * @param {number} maxRetries - Maximum retries per page (default: 3)
+     */
+    async fetchMissingPagesWithRetry(expectedPageCount, maxRetries = 3) {
+        // Prevent concurrent fetches
+        if (this._isFetchingMissingPages) {
+            console.log('[fetchMissingPagesWithRetry] Already fetching missing pages, skipping...');
+            return;
+        }
+        this._isFetchingMissingPages = true;
+
+        console.log(`[fetchMissingPagesWithRetry] Starting fetch. Expected: ${expectedPageCount}, Current: ${this.app.state.images.length}`);
+
+        try {
+            let pagesAdded = 0;
+            const failedPages = [];
+
+            // First pass: try to fetch all missing pages
+            for (let i = this.app.state.images.length; i < expectedPageCount; i++) {
+                const success = await this._fetchSinglePageWithRetry(i, maxRetries);
+                if (success) {
+                    pagesAdded++;
+                } else {
+                    failedPages.push(i);
+                }
+            }
+
+            // Second pass: retry failed pages with longer delays
+            if (failedPages.length > 0) {
+                console.log(`[fetchMissingPagesWithRetry] Retrying ${failedPages.length} failed pages with extended delay...`);
+                await new Promise(r => setTimeout(r, 2000)); // Wait 2 seconds before retry
+
+                for (const pageIdx of failedPages) {
+                    const success = await this._fetchSinglePageWithRetry(pageIdx, maxRetries, 1500);
+                    if (success) {
+                        pagesAdded++;
+                    }
+                }
+            }
+
+            // Third pass: final attempt for any remaining missing pages
+            const stillMissing = expectedPageCount - this.app.state.images.length;
+            if (stillMissing > 0) {
+                console.log(`[fetchMissingPagesWithRetry] Final attempt for ${stillMissing} still-missing pages...`);
+                await new Promise(r => setTimeout(r, 3000)); // Wait 3 seconds
+
+                for (let i = this.app.state.images.length; i < expectedPageCount; i++) {
+                    await this._fetchSinglePageWithRetry(i, maxRetries, 2000);
+                }
+            }
+
+            if (pagesAdded > 0 || this.app.state.images.length > 0) {
+                // Update UI
+                const pt = this.app.getElement('pageTotal');
+                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+                if (this.app.state.activeSideTab === 'pages') {
+                    this.app.renderPageSidebar();
+                }
+
+                // Reload current page to ensure proper display
+                if (this.app.loadPage) {
+                    await this.app.loadPage(this.app.state.idx, false);
+                    this.app.render();
+                }
+
+                console.log(`[fetchMissingPagesWithRetry] Complete. Added ${pagesAdded} pages. Total: ${this.app.state.images.length}`);
+            }
+        } catch (error) {
+            console.error('[fetchMissingPagesWithRetry] Critical error:', error);
+        } finally {
+            this._isFetchingMissingPages = false;
+        }
+    }
+
+    /**
+     * Fetch a single page with retry logic
+     * @param {number} pageIndex - The page index to fetch
+     * @param {number} maxRetries - Maximum number of retries
+     * @param {number} retryDelay - Delay between retries in ms
+     * @returns {boolean} - Whether the fetch was successful
+     */
+    async _fetchSinglePageWithRetry(pageIndex, maxRetries = 3, retryDelay = 1000) {
+        // Skip if page already exists
+        if (this.app.state.images[pageIndex]) {
+            console.log(`[_fetchSinglePageWithRetry] Page ${pageIndex} already exists, skipping`);
+            return true;
+        }
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const url = window.Config?.apiUrl(`/api/color_rm/page_file/${this.app.state.sessionId}/${pageIndex}`) ||
+                    `/api/color_rm/page_file/${this.app.state.sessionId}/${pageIndex}`;
+
+                console.log(`[_fetchSinglePageWithRetry] Fetching page ${pageIndex}, attempt ${attempt}/${maxRetries}`);
+
+                const response = await fetch(url);
+
+                if (response.ok) {
+                    const blob = await response.blob();
+
+                    // Validate blob
+                    if (!blob || blob.size === 0) {
+                        console.warn(`[_fetchSinglePageWithRetry] Page ${pageIndex} returned empty blob, retry...`);
+                        if (attempt < maxRetries) {
+                            await new Promise(r => setTimeout(r, retryDelay));
+                            continue;
+                        }
+                        return false;
+                    }
+
+                    const pageObj = {
+                        id: `${this.app.state.sessionId}_${pageIndex}`,
+                        sessionId: this.app.state.sessionId,
+                        pageIndex: pageIndex,
+                        blob: blob,
+                        history: []
+                    };
+
+                    // Double-check if page still doesn't exist (race condition protection)
+                    if (!this.app.state.images[pageIndex]) {
+                        // Ensure we don't have gaps in the array
+                        while (this.app.state.images.length < pageIndex) {
+                            console.warn(`[_fetchSinglePageWithRetry] Filling gap at index ${this.app.state.images.length}`);
+                            // Create placeholder for missing pages
+                            this.app.state.images.push(null);
+                        }
+
+                        await this.app.dbPut('pages', pageObj);
+
+                        if (this.app.state.images.length === pageIndex) {
+                            this.app.state.images.push(pageObj);
+                        } else {
+                            this.app.state.images[pageIndex] = pageObj;
+                        }
+
+                        console.log(`[_fetchSinglePageWithRetry] Successfully added page ${pageIndex}`);
+                        return true;
+                    } else {
+                        console.log(`[_fetchSinglePageWithRetry] Page ${pageIndex} was added by another process`);
+                        return true;
+                    }
+                } else if (response.status === 404) {
+                    // Page doesn't exist on backend yet - might still be uploading
+                    console.log(`[_fetchSinglePageWithRetry] Page ${pageIndex} not found (404), waiting...`);
+                    if (attempt < maxRetries) {
+                        await new Promise(r => setTimeout(r, retryDelay * 2)); // Longer wait for 404
+                        continue;
+                    }
+                    return false;
+                } else {
+                    console.warn(`[_fetchSinglePageWithRetry] Page ${pageIndex} fetch failed (status: ${response.status})`);
+                    if (attempt < maxRetries) {
+                        await new Promise(r => setTimeout(r, retryDelay));
+                        continue;
+                    }
+                    return false;
+                }
+            } catch (err) {
+                console.error(`[_fetchSinglePageWithRetry] Error fetching page ${pageIndex}:`, err);
+                if (attempt < maxRetries) {
+                    await new Promise(r => setTimeout(r, retryDelay));
+                    continue;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Fetches missing pages from backend when remote has more pages than local
+     * @param {number} expectedPageCount - The expected total page count from metadata
+     */
+    async fetchMissingPages(expectedPageCount) {
+        // Delegate to the new retry-enabled method
+        return this.fetchMissingPagesWithRetry(expectedPageCount, 3);
     }
 
     syncHistory() {
@@ -497,8 +803,9 @@ export class LiveSyncClient {
             }
         }
 
-        // Background sync all other pages
+        // Background sync all other pages (with null check)
         this.app.state.images.forEach((img, idx) => {
+            if (!img) return; // Skip null/undefined pages (gaps)
             if (idx === this.app.state.idx) return; // Already handled
             const remote = pagesHistory.get(idx.toString());
             if (remote) img.history = remote.toArray();
@@ -621,7 +928,7 @@ export class LiveSyncClient {
 
         // Debounce: Only process if we haven't processed recently
         const now = Date.now();
-        const DEBOUNCE_MS = 2000; // 2 second debounce
+        const DEBOUNCE_MS = 1000; // 1 second debounce (reduced for faster sync)
 
         if (this._lastPageStructureChange && (now - this._lastPageStructureChange) < DEBOUNCE_MS) {
             // Skip - too soon since last change
@@ -635,51 +942,15 @@ export class LiveSyncClient {
         }
 
         this._lastPageStructureChange = now;
-        console.log('Page structure change detected, refreshing pages...');
+        console.log(`Page structure change detected: local=${this.app.state.images.length}, remote=${message.pageCount}`);
 
-        // Store current page index before reload
-        const currentPageIdx = this.app.state.idx;
-
-        // Reload the session pages to get the new structure
-        this.app.loadSessionPages(this.app.state.sessionId).then(() => {
-            // Update the page total display
-            const pt = this.app.getElement('pageTotal');
-            if (pt) pt.innerText = '/ ' + this.app.state.images.length;
-
-            // Restore the page index to what it was before reload
-            // (loadSessionPages may have changed it)
-            const restoredIdx = Math.min(currentPageIdx, this.app.state.images.length - 1);
-
-            // Always reload the current page to ensure proper display
-            // This is important because loadSessionPages may have fetched new page data
-            if (restoredIdx >= 0) {
-                this.app.state.idx = restoredIdx;
-                // Always call loadPage to ensure canvas is properly updated with current page
-                this.app.loadPage(restoredIdx, false).then(() => {
-                    // Force render after page load completes
-                    this.app.render();
-                });
-            } else {
-                // Just render if no valid page to load
-                this.app.render();
-            }
-
-            // Update the page input
-            const pageInput = this.app.getElement('pageInput');
-            if (pageInput) pageInput.value = this.app.state.idx + 1;
-
-            // Update the sidebar if it's showing pages
-            if (this.app.state.activeSideTab === 'pages') {
-                this.app.renderPageSidebar();
-            }
-
-            // Update session metadata
-            this.app.dbGet('sessions', this.app.state.sessionId).then(session => {
-                if (session) {
-                    session.pageCount = this.app.state.images.length;
-                    this.app.dbPut('sessions', session);
-                }
-            });
-        });
+        // Use the robust fetchMissingPages method
+        if (message.pageCount > this.app.state.images.length) {
+            this.fetchMissingPages(message.pageCount);
+        } else if (message.pageCount < this.app.state.images.length) {
+            // Remote has fewer pages - this might be a page deletion
+            // For now, just log it - page deletion sync would need more work
+            console.log('Remote has fewer pages than local - possible page deletion');
+        }
     }
 }
