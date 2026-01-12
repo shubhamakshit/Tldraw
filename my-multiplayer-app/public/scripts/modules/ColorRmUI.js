@@ -424,7 +424,49 @@ export const ColorRmUI = {
     resetZoom() {
         this.state.zoom = 1;
         this.state.pan = { x: 0, y: 0 };
+        this.updateZoomIndicator();
         this.render();
+    },
+
+    zoomIn() {
+        const c = this.getElement('canvas');
+        if (!c) return;
+
+        // Zoom towards center of canvas
+        const centerX = c.width / 2;
+        const centerY = c.height / 2;
+
+        const newZoom = Math.min(this.state.zoom * 1.25, 10); // Max 10x zoom
+        this.state.pan.x = centerX - (centerX - this.state.pan.x) * (newZoom / this.state.zoom);
+        this.state.pan.y = centerY - (centerY - this.state.pan.y) * (newZoom / this.state.zoom);
+        this.state.zoom = newZoom;
+
+        this.updateZoomIndicator();
+        this.render();
+    },
+
+    zoomOut() {
+        const c = this.getElement('canvas');
+        if (!c) return;
+
+        // Zoom towards center of canvas
+        const centerX = c.width / 2;
+        const centerY = c.height / 2;
+
+        const newZoom = Math.max(this.state.zoom / 1.25, 0.1); // Min 0.1x zoom
+        this.state.pan.x = centerX - (centerX - this.state.pan.x) * (newZoom / this.state.zoom);
+        this.state.pan.y = centerY - (centerY - this.state.pan.y) * (newZoom / this.state.zoom);
+        this.state.zoom = newZoom;
+
+        this.updateZoomIndicator();
+        this.render();
+    },
+
+    updateZoomIndicator() {
+        const zoomBtn = this.getElement('zoomBtn');
+        if (zoomBtn) {
+            zoomBtn.innerText = Math.round(this.state.zoom * 100) + '%';
+        }
     },
 
     togglePageLock() {

@@ -129,22 +129,11 @@ export class LiveSyncClient {
 
     /**
      * Immediate page sync - called right after initialization
-     * Checks metadata for page count discrepancy and fetches missing pages
+     * Simply runs reconciliation - R2 is the source of truth
      */
     async _immediatePageSync() {
-        const project = this.getProject();
-        if (!project) return;
-
-        const metadata = project.get("metadata").toObject();
-        const remoteCount = metadata.pageCount || 0;
-        const localCount = this.app.state.images.length;
-
-        console.log(`[_immediatePageSync] Remote: ${remoteCount}, Local: ${localCount}`);
-
-        if (remoteCount > localCount) {
-            console.log(`[_immediatePageSync] Found missing pages! Fetching ${remoteCount - localCount} pages...`);
-            await this.fetchMissingPagesWithRetry(remoteCount);
-        }
+        console.log(`[_immediatePageSync] Running reconciliation...`);
+        await this.reconcilePageStructure();
     }
 
     /**
@@ -158,18 +147,11 @@ export class LiveSyncClient {
         }
 
         this._pageSyncInterval = setInterval(() => {
-            const project = this.getProject();
-            if (!project || this.isInitializing) return;
+            if (this.isInitializing) return;
 
-            const metadata = project.get("metadata").toObject();
-            const remoteCount = metadata.pageCount || 0;
-            const localCount = this.app.state.images.length;
-
-            if (remoteCount > localCount) {
-                console.log(`[PeriodicSync] Remote has ${remoteCount} pages, local has ${localCount}. Fetching...`);
-                this.fetchMissingPages(remoteCount);
-            }
-        }, 5000); // Check every 5 seconds (faster catch-up)
+            // Just run reconciliation periodically - R2 is the source of truth
+            this.reconcilePageStructure();
+        }, 10000); // Check every 10 seconds
     }
 
     /**
@@ -189,37 +171,16 @@ export class LiveSyncClient {
     async forceSyncPages() {
         console.log('[forceSyncPages] Starting forced page synchronization...');
 
-        const project = this.getProject();
-        if (!project) {
-            console.error('[forceSyncPages] No project found!');
-            return;
-        }
+        // Reset locks in case they're stuck
+        this._isFetchingMissingPages = false;
+        this.app.isFetchingBase = false;
 
-        const metadata = project.get("metadata").toObject();
-        const remoteCount = metadata.pageCount || 0;
-        const localCount = this.app.state.images.length;
+        // Simply run reconciliation - R2 is the source of truth
+        await this.reconcilePageStructure();
 
-        console.log(`[forceSyncPages] Remote: ${remoteCount}, Local: ${localCount}`);
-
-        if (remoteCount === 0) {
-            console.log('[forceSyncPages] Remote has no pages, triggering base file fetch...');
-            if (this.app.retryBaseFetch) {
-                await this.app.retryBaseFetch();
-            }
-            return;
-        }
-
-        if (remoteCount > localCount) {
-            // Reset the fetch lock in case it's stuck
-            this._isFetchingMissingPages = false;
-
-            console.log(`[forceSyncPages] Fetching ${remoteCount - localCount} missing pages...`);
-            await this.fetchMissingPagesWithRetry(remoteCount, 5); // 5 retries for forced sync
-        } else if (localCount === remoteCount) {
-            console.log('[forceSyncPages] Page counts match. Syncing history...');
-            this.syncHistory();
-            this.app.render();
-        }
+        // Sync history and render
+        this.syncHistory();
+        this.app.render();
 
         console.log('[forceSyncPages] Complete. Local pages:', this.app.state.images.length);
     }
@@ -315,6 +276,12 @@ export class LiveSyncClient {
         });
 
         this.renderUsers();
+
+        // Perform initial page structure reconciliation after a short delay
+        // This ensures we have the correct pages in the correct order
+        setTimeout(() => {
+            this.reconcilePageStructure();
+        }, 1500);
     }
 
     updateCursor(pt, tool, isDrawing, color, size) {
@@ -512,6 +479,7 @@ export class LiveSyncClient {
         this.app.state.idx = metadata.idx;
         this.app.state.pageLocked = metadata.pageLocked;
         this.app.state.ownerId = metadata.ownerId;
+        this.app.state.baseFileName = metadata.baseFileName || null;
 
         const titleEl = this.app.getElement('headerTitle');
         if(titleEl) titleEl.innerText = metadata.name;
@@ -522,18 +490,9 @@ export class LiveSyncClient {
         this.app.state.colors = project.get("colors").toArray();
         this.app.renderSwatches();
 
-        // CRITICAL: Fetch missing pages during initial sync
-        // This handles the case where a new user joins a room with existing pages
-        const remotePageCount = metadata.pageCount || 0;
-        const localPageCount = this.app.state.images.length;
-
-        console.log(`[syncStorageToLocal] Remote pageCount=${remotePageCount}, Local pageCount=${localPageCount}`);
-
-        if (remotePageCount > localPageCount) {
-            console.log(`[syncStorageToLocal] Fetching ${remotePageCount - localPageCount} missing pages...`);
-            // Use await to ensure pages are fetched before continuing
-            await this.fetchMissingPagesWithRetry(remotePageCount);
-        }
+        // Page sync: R2 is the source of truth - just run reconciliation
+        console.log(`[syncStorageToLocal] Running reconciliation to sync pages from R2...`);
+        await this.reconcilePageStructure();
 
         this.syncHistory();
         this.app.loadPage(this.app.state.idx, false);
@@ -587,16 +546,10 @@ export class LiveSyncClient {
             }
         }
 
-        // AUTO-FETCH missing pages if remote has more pages than local
-        if (metadata.pageCount > this.app.state.images.length) {
-            console.log(`Liveblocks: Remote has ${metadata.pageCount} pages but local has ${this.app.state.images.length}. Fetching missing pages...`);
-            this.fetchMissingPages(metadata.pageCount);
-        }
-
-        // AUTO-RETRY base file fetch if remote has pages but we don't
-        if (metadata.pageCount > 0 && this.app.state.images.length === 0) {
-            console.log("Liveblocks: Remote has content but local is empty. Triggering fetch...");
-            this.app.retryBaseFetch();
+        // Page sync: Just run reconciliation - R2 is the source of truth
+        if (metadata.pageCount !== this.app.state.images.length) {
+            console.log(`Liveblocks: Page count mismatch (remote: ${metadata.pageCount}, local: ${this.app.state.images.length}). Reconciling...`);
+            this.reconcilePageStructure();
         }
 
         this.syncHistory();
@@ -681,7 +634,97 @@ export class LiveSyncClient {
     }
 
     /**
-     * Fetch a single page with retry logic
+     * Fetch a single page by its UUID with retry logic
+     * @param {string} pageId - The unique page ID (e.g., 'pdf_0', 'user_abc123')
+     * @param {number} targetIndex - The index where this page should be inserted
+     * @param {number} maxRetries - Maximum number of retries
+     * @param {number} retryDelay - Delay between retries in ms
+     * @returns {boolean} - Whether the fetch was successful
+     */
+    async _fetchPageByIdWithRetry(pageId, targetIndex, maxRetries = 3, retryDelay = 1000) {
+        // Check if page with this pageId already exists
+        const existingPage = this.app.state.images.find(img => img && img.pageId === pageId);
+        if (existingPage) {
+            console.log(`[_fetchPageByIdWithRetry] Page ${pageId} already exists, skipping`);
+            return true;
+        }
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                // Use new UUID-based endpoint
+                const url = window.Config?.apiUrl(`/api/color_rm/page/${this.app.state.sessionId}/${pageId}`) ||
+                    `/api/color_rm/page/${this.app.state.sessionId}/${pageId}`;
+
+                console.log(`[_fetchPageByIdWithRetry] Fetching page ${pageId} for index ${targetIndex}, attempt ${attempt}/${maxRetries}`);
+
+                const response = await fetch(url);
+
+                if (response.ok) {
+                    const blob = await response.blob();
+
+                    // Validate blob
+                    if (!blob || blob.size === 0) {
+                        console.warn(`[_fetchPageByIdWithRetry] Page ${pageId} returned empty blob, retry...`);
+                        if (attempt < maxRetries) {
+                            await new Promise(r => setTimeout(r, retryDelay));
+                            continue;
+                        }
+                        return false;
+                    }
+
+                    const pageObj = {
+                        id: `${this.app.state.sessionId}_${targetIndex}`,
+                        sessionId: this.app.state.sessionId,
+                        pageIndex: targetIndex,
+                        pageId: pageId, // Store the UUID
+                        blob: blob,
+                        history: []
+                    };
+
+                    // Double-check if page still doesn't exist (race condition protection)
+                    const existsNow = this.app.state.images.find(img => img && img.pageId === pageId);
+                    if (!existsNow) {
+                        await this.app.dbPut('pages', pageObj);
+
+                        // Just add the page - _reorderPagesToMatchStructure will handle correct positioning
+                        this.app.state.images.push(pageObj);
+
+                        console.log(`[_fetchPageByIdWithRetry] Successfully added page ${pageId}`);
+                        return true;
+                    } else {
+                        console.log(`[_fetchPageByIdWithRetry] Page ${pageId} was added by another process`);
+                        return true;
+                    }
+                } else if (response.status === 404) {
+                    // Page doesn't exist on backend - might be a PDF page (not uploaded individually)
+                    console.log(`[_fetchPageByIdWithRetry] Page ${pageId} not found (404)`);
+                    if (attempt < maxRetries) {
+                        await new Promise(r => setTimeout(r, retryDelay * 2));
+                        continue;
+                    }
+                    return false;
+                } else {
+                    console.warn(`[_fetchPageByIdWithRetry] Page ${pageId} fetch failed (status: ${response.status})`);
+                    if (attempt < maxRetries) {
+                        await new Promise(r => setTimeout(r, retryDelay));
+                        continue;
+                    }
+                    return false;
+                }
+            } catch (err) {
+                console.error(`[_fetchPageByIdWithRetry] Error fetching page ${pageId}:`, err);
+                if (attempt < maxRetries) {
+                    await new Promise(r => setTimeout(r, retryDelay));
+                    continue;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Fetch a single page with retry logic (legacy index-based - for backwards compatibility)
      * @param {number} pageIndex - The page index to fetch
      * @param {number} maxRetries - Maximum number of retries
      * @param {number} retryDelay - Delay between retries in ms
@@ -696,10 +739,12 @@ export class LiveSyncClient {
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const url = window.Config?.apiUrl(`/api/color_rm/page_file/${this.app.state.sessionId}/${pageIndex}`) ||
-                    `/api/color_rm/page_file/${this.app.state.sessionId}/${pageIndex}`;
+                // Try new UUID-based endpoint first with pdf_X format
+                const pageId = `pdf_${pageIndex}`;
+                const url = window.Config?.apiUrl(`/api/color_rm/page/${this.app.state.sessionId}/${pageId}`) ||
+                    `/api/color_rm/page/${this.app.state.sessionId}/${pageId}`;
 
-                console.log(`[_fetchSinglePageWithRetry] Fetching page ${pageIndex}, attempt ${attempt}/${maxRetries}`);
+                console.log(`[_fetchSinglePageWithRetry] Fetching page ${pageIndex} (pageId: ${pageId}), attempt ${attempt}/${maxRetries}`);
 
                 const response = await fetch(url);
 
@@ -720,6 +765,7 @@ export class LiveSyncClient {
                         id: `${this.app.state.sessionId}_${pageIndex}`,
                         sessionId: this.app.state.sessionId,
                         pageIndex: pageIndex,
+                        pageId: pageId, // Store the UUID
                         blob: blob,
                         history: []
                     };
@@ -773,6 +819,238 @@ export class LiveSyncClient {
             }
         }
         return false;
+    }
+
+    /**
+     * Fetches the page structure from the server and reconciles with local pages
+     * This is the main method for UUID-based page sync
+     *
+     * SOURCE OF TRUTH: The page structure file + base PDF + user-added pages in R2
+     * - PDF pages (pdf_*) are rendered from the base PDF file
+     * - User pages (user_*) are fetched individually from R2
+     */
+    async reconcilePageStructure() {
+        console.log('[reconcilePageStructure] Starting page structure reconciliation...');
+
+        try {
+            // STEP 1: Get the page structure (this is the source of truth for ordering)
+            const structureUrl = window.Config?.apiUrl(`/api/color_rm/page_structure/${this.app.state.sessionId}`) ||
+                `/api/color_rm/page_structure/${this.app.state.sessionId}`;
+
+            const structureResponse = await fetch(structureUrl);
+
+            if (!structureResponse.ok) {
+                console.log('[reconcilePageStructure] No structure file found, nothing to sync');
+                return;
+            }
+
+            const structure = await structureResponse.json();
+            const remotePageIds = structure.pageIds || [];
+            const pdfPageCount = structure.pdfPageCount || 0;
+
+            console.log(`[reconcilePageStructure] Remote structure: ${remotePageIds.length} pages (${pdfPageCount} from PDF)`);
+
+            if (remotePageIds.length === 0) {
+                console.log('[reconcilePageStructure] Empty structure, nothing to sync');
+                return;
+            }
+
+            // STEP 2: Get local page IDs
+            const localPageIds = this.app.state.images.map(img => img?.pageId).filter(Boolean);
+            console.log(`[reconcilePageStructure] Local has ${localPageIds.length} pages`);
+
+            // STEP 3: Find missing pages
+            const missingPageIds = remotePageIds.filter(pid => !localPageIds.includes(pid));
+
+            if (missingPageIds.length > 0) {
+                console.log(`[reconcilePageStructure] Missing ${missingPageIds.length} pages: ${missingPageIds.join(', ')}`);
+
+                // Separate PDF pages from user pages
+                const missingPdfPages = missingPageIds.filter(pid => pid.startsWith('pdf_'));
+                const missingUserPages = missingPageIds.filter(pid => pid.startsWith('user_'));
+
+                // For PDF pages: render from base PDF
+                if (missingPdfPages.length > 0) {
+                    console.log(`[reconcilePageStructure] Rendering ${missingPdfPages.length} PDF pages from base file...`);
+                    await this._renderPdfPagesFromBase(missingPdfPages);
+                }
+
+                // For user pages: fetch from R2
+                if (missingUserPages.length > 0) {
+                    console.log(`[reconcilePageStructure] Fetching ${missingUserPages.length} user pages from R2...`);
+                    for (const pageId of missingUserPages) {
+                        const targetIndex = this.app.state.images.length;
+                        await this._fetchPageByIdWithRetry(pageId, targetIndex);
+                    }
+                }
+            }
+
+            // STEP 4: Reorder local pages to match remote structure
+            await this._reorderPagesToMatchStructure(remotePageIds);
+
+            // STEP 5: Update UI
+            const pt = this.app.getElement('pageTotal');
+            if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+            if (this.app.state.activeSideTab === 'pages') {
+                this.app.renderPageSidebar();
+            }
+
+            // Reload current page if anything changed
+            if (missingPageIds.length > 0) {
+                this.app.invalidateCache();
+                await this.app.loadPage(this.app.state.idx, false);
+            }
+
+            console.log(`[reconcilePageStructure] Complete. Local pages: ${this.app.state.images.length}`);
+        } catch (error) {
+            console.error('[reconcilePageStructure] Error:', error);
+        }
+    }
+
+    /**
+     * Renders PDF pages from the base PDF file
+     * @param {string[]} pdfPageIds - Array of PDF page IDs like ['pdf_0', 'pdf_1', ...]
+     */
+    async _renderPdfPagesFromBase(pdfPageIds) {
+        try {
+            // Fetch the base PDF file
+            const baseUrl = window.Config?.apiUrl(`/api/color_rm/base_file/${this.app.state.sessionId}`) ||
+                `/api/color_rm/base_file/${this.app.state.sessionId}`;
+
+            const response = await fetch(baseUrl);
+            if (!response.ok) {
+                console.error('[_renderPdfPagesFromBase] Failed to fetch base PDF');
+                return;
+            }
+
+            const blob = await response.blob();
+
+            // Check if it's a PDF
+            if (!blob.type.includes('pdf')) {
+                console.log('[_renderPdfPagesFromBase] Base file is not a PDF, treating as single image');
+                // Handle single image base file
+                if (pdfPageIds.includes('pdf_0')) {
+                    const pageObj = {
+                        id: `${this.app.state.sessionId}_${this.app.state.images.length}`,
+                        sessionId: this.app.state.sessionId,
+                        pageIndex: this.app.state.images.length,
+                        pageId: 'pdf_0',
+                        blob: blob,
+                        history: []
+                    };
+                    await this.app.dbPut('pages', pageObj);
+                    this.app.state.images.push(pageObj);
+                }
+                return;
+            }
+
+            // Load PDF with pdf.js
+            const arrayBuffer = await blob.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+
+            console.log(`[_renderPdfPagesFromBase] PDF has ${pdf.numPages} pages, rendering ${pdfPageIds.length} missing pages`);
+
+            for (const pageId of pdfPageIds) {
+                // Extract page number from pageId (e.g., 'pdf_0' -> 0, 'pdf_5' -> 5)
+                const pageNum = parseInt(pageId.replace('pdf_', ''), 10);
+
+                if (pageNum >= pdf.numPages) {
+                    console.warn(`[_renderPdfPagesFromBase] Page ${pageNum} exceeds PDF page count ${pdf.numPages}`);
+                    continue;
+                }
+
+                // pdf.js uses 1-indexed pages
+                const page = await pdf.getPage(pageNum + 1);
+                const viewport = page.getViewport({ scale: 1.5 });
+
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+
+                await page.render({
+                    canvasContext: canvas.getContext('2d'),
+                    viewport: viewport
+                }).promise;
+
+                const pageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+
+                const pageObj = {
+                    id: `${this.app.state.sessionId}_${this.app.state.images.length}`,
+                    sessionId: this.app.state.sessionId,
+                    pageIndex: this.app.state.images.length,
+                    pageId: pageId,
+                    blob: pageBlob,
+                    history: []
+                };
+
+                await this.app.dbPut('pages', pageObj);
+                this.app.state.images.push(pageObj);
+
+                console.log(`[_renderPdfPagesFromBase] Rendered page ${pageId}`);
+            }
+        } catch (error) {
+            console.error('[_renderPdfPagesFromBase] Error:', error);
+        }
+    }
+
+    /**
+     * Reorders local pages to match the remote structure order
+     * @param {string[]} remotePageIds - Ordered array of page IDs from server
+     */
+    async _reorderPagesToMatchStructure(remotePageIds) {
+        const reorderedPages = [];
+        const pageMap = new Map();
+        const usedPageIds = new Set();
+
+        // Build a map of pageId -> page object
+        this.app.state.images.forEach(page => {
+            if (page && page.pageId) {
+                pageMap.set(page.pageId, page);
+            }
+        });
+
+        // Reorder based on remote structure
+        remotePageIds.forEach((pageId, index) => {
+            const page = pageMap.get(pageId);
+            if (page) {
+                page.pageIndex = index;
+                page.id = `${this.app.state.sessionId}_${index}`;
+                reorderedPages.push(page);
+                usedPageIds.add(pageId);
+            }
+        });
+
+        // Append any local-only pages that weren't in the remote structure at the end
+        this.app.state.images.forEach(page => {
+            if (page && page.pageId && !usedPageIds.has(page.pageId)) {
+                const newIndex = reorderedPages.length;
+                page.pageIndex = newIndex;
+                page.id = `${this.app.state.sessionId}_${newIndex}`;
+                reorderedPages.push(page);
+                console.log(`[_reorderPagesToMatchStructure] Appending local-only page ${page.pageId} at index ${newIndex}`);
+            }
+        });
+
+        // Only update if there were actual changes
+        if (reorderedPages.length > 0) {
+            // Check if order actually changed (or if page count changed)
+            const orderChanged = reorderedPages.length !== this.app.state.images.length ||
+                reorderedPages.some((page, idx) =>
+                    this.app.state.images[idx]?.pageId !== page.pageId
+                );
+
+            if (orderChanged) {
+                this.app.state.images = reorderedPages;
+
+                // Update IndexedDB with new page indices
+                for (const page of reorderedPages) {
+                    await this.app.dbPut('pages', page);
+                }
+
+                console.log(`[_reorderPagesToMatchStructure] Reordered ${reorderedPages.length} pages`);
+            }
+        }
     }
 
     /**
@@ -920,7 +1198,7 @@ export class LiveSyncClient {
     }
 
     // Handle page structure change notifications from other users (debounced)
-    handlePageStructureChange(message) {
+    async handlePageStructureChange(message) {
         // Ignore our own page structure change notification
         if (message.pageStructureVersion === this._ownPageStructureVersion) {
             return;
@@ -935,22 +1213,18 @@ export class LiveSyncClient {
             return;
         }
 
-        // Check if page count actually differs
-        if (this.app.state.images.length === message.pageCount) {
-            // No change needed
-            return;
-        }
-
         this._lastPageStructureChange = now;
+
+        // Always run reconciliation when notified of structure change
+        // The reconciliation will determine if anything actually needs to change
         console.log(`Page structure change detected: local=${this.app.state.images.length}, remote=${message.pageCount}`);
 
-        // Use the robust fetchMissingPages method
-        if (message.pageCount > this.app.state.images.length) {
-            this.fetchMissingPages(message.pageCount);
-        } else if (message.pageCount < this.app.state.images.length) {
-            // Remote has fewer pages - this might be a page deletion
-            // For now, just log it - page deletion sync would need more work
-            console.log('Remote has fewer pages than local - possible page deletion');
-        }
+        // Add a small delay to allow server to receive the page structure update
+        // This prevents race conditions where we fetch stale structure
+        await new Promise(r => setTimeout(r, 300));
+
+        // Simply run reconciliation - it will fetch from R2 (source of truth)
+        console.log('[handlePageStructureChange] Running reconciliation...');
+        await this.reconcilePageStructure();
     }
 }

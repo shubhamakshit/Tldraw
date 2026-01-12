@@ -1,7 +1,7 @@
 import { handleUnfurlRequest } from 'cloudflare-workers-unfurl'
 import { AutoRouter, error, IRequest } from 'itty-router'
 import { handleAssetDownload, handleAssetUpload } from './assetUploads'
-import { handleColorRmDownload, handleColorRmUpload, handleColorRmDelete, handleColorRmPageUpload, handleColorRmPageDownload, handleColorRmPageDelete } from './colorRmAssets'
+import { handleColorRmDownload, handleColorRmUpload, handleColorRmDelete, handleColorRmPageUpload, handleColorRmPageDownload, handleColorRmPageDelete, handleGetPageStructure, handleSetPageStructure, handleListPages } from './colorRmAssets'
 import { Liveblocks } from '@liveblocks/node'
 
 // make sure our sync durable object is made available to cloudflare
@@ -335,10 +335,15 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	.get('/api/color_rm/base_file/:roomId', handleColorRmDownload)
 	.delete('/api/color_rm/base_file/:roomId', handleColorRmDelete)
 
-	// New routes for color_rm page image sync
-	.post('/api/color_rm/page_upload/:roomId/:pageIndex', handleColorRmPageUpload)
-	.get('/api/color_rm/page_file/:roomId/:pageIndex', handleColorRmPageDownload)
-	.delete('/api/color_rm/page_file/:roomId/:pageIndex', handleColorRmPageDelete)
+	// UUID-based page routes (pageId can be "pdf_0", "pdf_1", "user_abc123", etc.)
+	.post('/api/color_rm/page/:roomId/:pageId', handleColorRmPageUpload)
+	.get('/api/color_rm/page/:roomId/:pageId', handleColorRmPageDownload)
+	.delete('/api/color_rm/page/:roomId/:pageId', handleColorRmPageDelete)
+
+	// Page structure API - ordered list of page IDs
+	.get('/api/color_rm/page_structure/:roomId', handleGetPageStructure)
+	.post('/api/color_rm/page_structure/:roomId', handleSetPageStructure)
+	.get('/api/color_rm/pages/:roomId', handleListPages)
 
     // --- Color RM Registry Routes ---
 

@@ -21,16 +21,32 @@ export const ColorRmSession = {
     // =============================================
 
     /**
+     * Generates a unique page ID
+     * @param {string} type - 'pdf' for PDF-derived pages, 'user' for user-added pages
+     * @param {number} pdfIndex - For PDF pages, the index within the PDF (optional)
+     * @returns {string} Unique page ID
+     */
+    _generatePageId(type = 'user', pdfIndex = null) {
+        if (type === 'pdf' && pdfIndex !== null) {
+            return `pdf_${pdfIndex}`;
+        }
+        return `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    },
+
+    /**
      * Creates a page object with consistent structure
      * @param {number} pageIndex - The index for the new page
      * @param {Blob} blob - The image blob for the page
+     * @param {string} pageId - Optional unique page ID (generated if not provided)
      * @returns {Object} Page object ready for storage
      */
-    _createPageObject(pageIndex, blob) {
+    _createPageObject(pageIndex, blob, pageId = null) {
+        const id = pageId || this._generatePageId('user');
         return {
             id: `${this.state.sessionId}_${pageIndex}`,
             sessionId: this.state.sessionId,
             pageIndex: pageIndex,
+            pageId: id, // UUID-based identifier for server storage
             blob: blob,
             history: []
         };
@@ -94,16 +110,17 @@ export const ColorRmSession = {
 
     /**
      * Uploads a page blob to the backend (collaborative mode)
-     * @param {number} pageIndex - The page index
+     * @param {string} pageId - The unique page ID (e.g., 'pdf_0', 'user_abc123')
      * @param {Blob} blob - The image blob to upload
      * @returns {boolean} True if upload succeeded or skipped (non-collaborative)
      */
-    async _uploadPageBlob(pageIndex, blob) {
+    async _uploadPageBlob(pageId, blob) {
         if (!this.config.collaborative || !this.state.ownerId) return true;
 
         try {
-            const url = window.Config?.apiUrl(`/api/color_rm/page_upload/${this.state.sessionId}/${pageIndex}`)
-                     || `/api/color_rm/page_upload/${this.state.sessionId}/${pageIndex}`;
+            // Use new UUID-based endpoint
+            const url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${pageId}`)
+                     || `/api/color_rm/page/${this.state.sessionId}/${pageId}`;
 
             const res = await fetch(url, {
                 method: 'POST',
@@ -123,6 +140,88 @@ export const ColorRmSession = {
             console.error('Error uploading page:', err);
             return false;
         }
+    },
+
+    /**
+     * Fetches the page structure from the server
+     * @returns {Object} Page structure with pageIds array and pdfPageCount
+     */
+    async _fetchPageStructure() {
+        if (!this.config.collaborative || !this.state.ownerId) {
+            return { pageIds: [], pdfPageCount: 0 };
+        }
+
+        try {
+            const url = window.Config?.apiUrl(`/api/color_rm/page_structure/${this.state.sessionId}`)
+                     || `/api/color_rm/page_structure/${this.state.sessionId}`;
+
+            const res = await fetch(url);
+            if (res.ok) {
+                return await res.json();
+            }
+            return { pageIds: [], pdfPageCount: 0 };
+        } catch (err) {
+            console.error('Error fetching page structure:', err);
+            return { pageIds: [], pdfPageCount: 0 };
+        }
+    },
+
+    /**
+     * Updates the page structure on the server
+     * @param {string[]} pageIds - Ordered array of page IDs
+     * @param {number} pdfPageCount - Number of pages that came from PDF
+     * @returns {boolean} True if update succeeded
+     */
+    async _updatePageStructure(pageIds, pdfPageCount) {
+        if (!this.config.collaborative || !this.state.ownerId) return true;
+
+        try {
+            const url = window.Config?.apiUrl(`/api/color_rm/page_structure/${this.state.sessionId}`)
+                     || `/api/color_rm/page_structure/${this.state.sessionId}`;
+
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pageIds, pdfPageCount })
+            });
+
+            if (!res.ok) {
+                console.error('Page structure update failed:', await res.text());
+                return false;
+            }
+            return true;
+        } catch (err) {
+            console.error('Error updating page structure:', err);
+            return false;
+        }
+    },
+
+    /**
+     * Gets the current page structure as an ordered array of pageIds
+     * @returns {string[]} Array of page IDs in order
+     */
+    _getLocalPageStructure() {
+        return this.state.images.map(img => img.pageId || `legacy_${img.pageIndex}`);
+    },
+
+    /**
+     * Calculates the PDF page count from current pages
+     * @returns {number} Number of pages that came from PDF
+     */
+    _calculatePdfPageCount() {
+        // Count pages with pageId starting with 'pdf_'
+        return this.state.images.filter(img => img && img.pageId && img.pageId.startsWith('pdf_')).length;
+    },
+
+    /**
+     * Syncs page structure to server after any page changes
+     */
+    async _syncPageStructureToServer() {
+        const pageIds = this._getLocalPageStructure();
+        // Calculate pdfPageCount from actual pages, not from state (which might not be set)
+        const pdfPageCount = this._calculatePdfPageCount();
+        console.log(`[_syncPageStructureToServer] Syncing ${pageIds.length} pages (${pdfPageCount} from PDF)`);
+        await this._updatePageStructure(pageIds, pdfPageCount);
     },
 
     // =============================================
@@ -513,14 +612,37 @@ export const ColorRmSession = {
             q.onsuccess = async () => {
                 this.state.images = q.result.sort((a, b) => a.pageIndex - b.pageIndex);
 
-                // Retroactively assign IDs to legacy items
-                this.state.images.forEach(img => {
+                // Retroactively assign IDs to legacy items (history items)
+                let needsUpdate = false;
+                this.state.images.forEach((img, idx) => {
                     if (img.history) {
                         img.history.forEach(item => {
                             if (!item.id) item.id = Date.now() + '_' + Math.random();
                         });
                     }
+                    // Retroactively assign pageId to legacy pages
+                    if (!img.pageId) {
+                        // Assume pages without pageId are PDF pages (legacy)
+                        img.pageId = `pdf_${idx}`;
+                        needsUpdate = true;
+                        console.log(`[loadSessionPages] Assigned pageId ${img.pageId} to legacy page ${idx}`);
+                    }
                 });
+
+                // Update IndexedDB if we assigned pageIds
+                if (needsUpdate) {
+                    for (const img of this.state.images) {
+                        await this.dbPut('pages', img);
+                    }
+                    console.log(`[loadSessionPages] Updated ${this.state.images.length} pages with pageIds`);
+
+                    // CRITICAL: Sync updated page structure to server after assigning pageIds
+                    // This ensures the server has the correct page structure for reconciliation
+                    if (this.config.collaborative && this.state.ownerId) {
+                        console.log(`[loadSessionPages] Syncing page structure to server after pageId assignment...`);
+                        await this._syncPageStructureToServer();
+                    }
+                }
 
                 // Check if we have all pages according to the project metadata
                 if (this.liveSync && this.config.collaborative) {
@@ -823,8 +945,14 @@ export const ColorRmSession = {
                         if (this.registry) this.registry.upsert(session);
                     }
 
+                    // Store the PDF page count for sync purposes
+                    this.state.pdfPageCount = idx;
+
                     // Final reload to ensure everything is synced
                     await this.loadSessionPages(this.state.sessionId);
+
+                    // Sync page structure to server (pageIds array)
+                    await this._syncPageStructureToServer();
 
                     // Signal readiness to Liveblocks
                     if (this.liveSync && !this.liveSync.isInitializing) {
@@ -861,14 +989,19 @@ export const ColorRmSession = {
                                         viewport: v
                                     }).promise;
                                     const b = await new Promise(r => cvs.toBlob(r, 'image/jpeg', 0.9)); // Higher quality JPEG
+                                    const pageIdx = idx + j;
+                                    const pageId = this._generatePageId('pdf', pNum - 1); // PDF pages are 1-indexed, we want 0-indexed
                                     const pageObj = {
-                                        id: `${this.state.sessionId}_${idx+j}`,
+                                        id: `${this.state.sessionId}_${pageIdx}`,
                                         sessionId: this.state.sessionId,
-                                        pageIndex: idx + j,
+                                        pageIndex: pageIdx,
+                                        pageId: pageId, // UUID-based identifier (pdf_0, pdf_1, etc.)
                                         blob: b,
                                         history: []
                                     };
                                     await this.dbPut('pages', pageObj);
+                                    // NOTE: PDF pages are NOT uploaded individually - base PDF is uploaded once
+                                    // and clients render pages from it. Only user-added pages go to R2.
                                     return pageObj;
                                 }));
                             }
@@ -895,10 +1028,12 @@ export const ColorRmSession = {
                         this.ui.showToast("Failed to load PDF");
                     }
                 } else {
+                    const pageId = this._generatePageId('user');
                     const pageObj = {
                         id: `${this.state.sessionId}_${idx}`,
                         sessionId: this.state.sessionId,
                         pageIndex: idx,
+                        pageId: pageId, // UUID-based identifier for user-added pages
                         blob: f,
                         history: []
                     };
@@ -1201,7 +1336,7 @@ export const ColorRmSession = {
         // Determine where to insert the page
         const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
 
-        // Create and insert page using helpers
+        // Create and insert page using helpers (generates UUID pageId)
         const pageObj = this._createPageObject(newPageIndex, blob);
         await this._insertPageAtIndex(pageObj, newPageIndex);
 
@@ -1214,8 +1349,9 @@ export const ColorRmSession = {
         // Update session metadata
         await this._persistSessionMetadata();
 
-        // Upload and sync
-        const uploadSuccess = await this._uploadPageBlob(newPageIndex, blob);
+        // Upload page with UUID and sync structure to server
+        const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
+        await this._syncPageStructureToServer();
         this._syncPageStructureToLive();
 
         // Show toast based on upload result
@@ -1253,7 +1389,7 @@ export const ColorRmSession = {
         // Determine where to insert the page
         const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
 
-        // Create and insert page using helpers
+        // Create and insert page using helpers (generates UUID pageId)
         const pageObj = this._createPageObject(newPageIndex, blob);
         await this._insertPageAtIndex(pageObj, newPageIndex);
 
@@ -1266,8 +1402,9 @@ export const ColorRmSession = {
         // Update session metadata
         await this._persistSessionMetadata();
 
-        // Upload and sync
-        await this._uploadPageBlob(newPageIndex, blob);
+        // Upload page with UUID and sync structure to server
+        await this._uploadPageBlob(pageObj.pageId, blob);
+        await this._syncPageStructureToServer();
         this._syncPageStructureToLive();
 
         // Update canvas dimensions
@@ -1664,7 +1801,7 @@ export const ColorRmSession = {
         // Always append for templates
         const newPageIndex = this.state.images.length;
 
-        // Create and insert page using helpers
+        // Create and insert page using helpers (generates UUID pageId)
         const pageObj = this._createPageObject(newPageIndex, blob);
         await this._insertPageAtIndex(pageObj, newPageIndex);
 
@@ -1677,8 +1814,9 @@ export const ColorRmSession = {
         // Update session metadata
         await this._persistSessionMetadata();
 
-        // Upload and sync
-        await this._uploadPageBlob(newPageIndex, blob);
+        // Upload page with UUID and sync structure to server
+        await this._uploadPageBlob(pageObj.pageId, blob);
+        await this._syncPageStructureToServer();
         this._syncPageStructureToLive();
 
         // Update canvas dimensions

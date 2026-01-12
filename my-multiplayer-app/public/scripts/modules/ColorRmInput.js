@@ -166,6 +166,10 @@ export const ColorRmInput = {
                 this.render(); this.saveSessionState();
                 return;
             }
+            // Zoom keyboard shortcuts
+            if((e.ctrlKey||e.metaKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); this.zoomIn(); return; }
+            if((e.ctrlKey||e.metaKey) && e.key === '-') { e.preventDefault(); this.zoomOut(); return; }
+            if((e.ctrlKey||e.metaKey) && e.key === '0') { e.preventDefault(); this.resetZoom(); return; }
             if((e.ctrlKey||e.metaKey) && key==='z') { e.preventDefault(); if(e.shiftKey) this.redo(); else this.undo(); }
             if(key==='v' && !e.ctrlKey && !e.metaKey) this.setTool('none'); if(key==='l') this.setTool('lasso'); if(key==='p') this.setTool('pen');
             if(key==='e') this.setTool('eraser'); if(key==='s') this.setTool('shape'); if(key==='t') this.setTool('text');
@@ -709,6 +713,7 @@ export const ColorRmInput = {
                 this.state.pan.x = mouseX - (mouseX - this.state.pan.x) * (newZoom / this.state.zoom);
                 this.state.pan.y = mouseY - (mouseY - this.state.pan.y) * (newZoom / this.state.zoom);
                 this.state.zoom = newZoom;
+                this.updateZoomIndicator();
                 this.render();
             } else if (this.state.tool === 'none' || e.shiftKey) {
                 e.preventDefault();
@@ -764,6 +769,7 @@ export const ColorRmInput = {
                 this.state.zoom = newZoom;
                 lastPinchDist = dist;
                 lastMidpoint = curMidpoint;
+                this.updateZoomIndicator();
                 this.render();
             }
         }, { passive: false });
