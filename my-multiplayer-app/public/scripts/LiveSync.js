@@ -179,15 +179,19 @@ export class LiveSyncClient {
                     if (presence && presence.pageStructureVersion !== undefined &&
                         presence.pageCount !== undefined) {
 
-                        const userId = user.connectionId || user.id;
-                        const currentVersion = this.otherUserVersions[userId];
+                        const oderId = user.connectionId || user.id;
+                        const currentVersion = this.otherUserVersions[oderId];
 
-                        // If this user's version is newer than what we last saw
-                        if (!currentVersion || currentVersion < presence.pageStructureVersion) {
-                            this.otherUserVersions[userId] = presence.pageStructureVersion;
+                        // Only trigger if we've seen this user before AND their version changed
+                        // This prevents triggering on initial connection when we first see other users
+                        if (currentVersion !== undefined && currentVersion < presence.pageStructureVersion) {
+                            this.otherUserVersions[oderId] = presence.pageStructureVersion;
 
                             // Another user made a page structure change
                             this.handlePageStructureChange(presence);
+                        } else if (currentVersion === undefined) {
+                            // First time seeing this user - just record their version, don't trigger
+                            this.otherUserVersions[oderId] = presence.pageStructureVersion;
                         }
                     }
                 });
@@ -645,9 +649,19 @@ export class LiveSyncClient {
             // Restore the page index to what it was before reload
             // (loadSessionPages may have changed it)
             const restoredIdx = Math.min(currentPageIdx, this.app.state.images.length - 1);
-            if (restoredIdx >= 0 && restoredIdx !== this.app.state.idx) {
+
+            // Always reload the current page to ensure proper display
+            // This is important because loadSessionPages may have fetched new page data
+            if (restoredIdx >= 0) {
                 this.app.state.idx = restoredIdx;
-                this.app.loadPage(restoredIdx, false);
+                // Always call loadPage to ensure canvas is properly updated with current page
+                this.app.loadPage(restoredIdx, false).then(() => {
+                    // Force render after page load completes
+                    this.app.render();
+                });
+            } else {
+                // Just render if no valid page to load
+                this.app.render();
             }
 
             // Update the page input
