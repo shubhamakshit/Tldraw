@@ -326,6 +326,10 @@ export const ColorRmBox = {
 
         const format = this.getElement('boxExportFormat') ? this.getElement('boxExportFormat').value : 'zip';
 
+        // High quality export option
+        const boxHiQuality = this.getElement('boxHiQuality');
+        const hiQuality = boxHiQuality ? boxHiQuality.checked : false;
+
         if (format === 'pdf') {
              if (!window.jspdf) {
                  this.ui.showToast("jsPDF library not loaded");
@@ -347,11 +351,14 @@ export const ColorRmBox = {
              for(let i=0; i<pages.length; i++) {
                  this.ui.updateProgress((i/pages.length)*100, `Adding Page ${i+1}/${pages.length}...`);
                  if (i > 0) pdf.addPage();
-                 
+
                  const pCanvas = pages[i];
-                 const imgData = pCanvas.toDataURL('image/jpeg', 0.85);
-                 pdf.addImage(imgData, 'JPEG', 0, 0, pdfW, pdfH);
-                 
+                 const imgFormat = hiQuality ? 'image/png' : 'image/jpeg';
+                 const imgQuality = hiQuality ? 1.0 : 0.85;
+                 const pdfFormat = hiQuality ? 'PNG' : 'JPEG';
+                 const imgData = pCanvas.toDataURL(imgFormat, imgQuality);
+                 pdf.addImage(imgData, pdfFormat, 0, 0, pdfW, pdfH);
+
                  await new Promise(r => setTimeout(r, 0));
              }
              
@@ -417,8 +424,8 @@ export const ColorRmBox = {
                 }
                 const zip = new window.JSZip();
 
-                // Use JPEG for smaller file sizes (especially on Android)
-                const useJpeg = pages.length > 2 || (window.Capacitor !== undefined);
+                // High quality: always PNG. Normal: use JPEG for smaller sizes
+                const useJpeg = !hiQuality && (pages.length > 2 || (window.Capacitor !== undefined));
                 const format = useJpeg ? 'image/jpeg' : 'image/png';
                 const ext = useJpeg ? 'jpg' : 'png';
                 const quality = useJpeg ? 0.85 : undefined;
@@ -431,10 +438,12 @@ export const ColorRmBox = {
                 }
 
                 this.ui.updateProgress(100, "Generating zip...");
+                // Use STORE compression for high quality (faster, no quality loss)
+                const compressionLevel = hiQuality ? 0 : 6;
                 const content = await zip.generateAsync({
                     type: "blob",
-                    compression: "DEFLATE",
-                    compressionOptions: { level: 6 }
+                    compression: hiQuality ? "STORE" : "DEFLATE",
+                    compressionOptions: { level: compressionLevel }
                 });
 
                 const filename = `${sanitizedProjectName}_Sheets.zip`;

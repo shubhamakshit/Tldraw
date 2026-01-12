@@ -5,6 +5,7 @@ import { ColorRmInput } from './modules/ColorRmInput.js';
 import { ColorRmUI } from './modules/ColorRmUI.js';
 import { ColorRmSession } from './modules/ColorRmSession.js';
 import { ColorRmExport } from './modules/ColorRmExport.js';
+import { PerformanceManager } from './modules/ColorRmPerformance.js';
 
 export class ColorRmApp {
     constructor(config = {}) {
@@ -58,6 +59,9 @@ export class ColorRmApp {
         this.liveSync = null;
         this.registry = null;
         this.iroP = null;
+
+        // SOTA Performance Manager
+        this.performanceManager = new PerformanceManager();
 
         this.lastCursorUpdateTime = 0;
         this.cursorUpdateThrottle = 30; // 30ms throttle, approx 33fps
@@ -743,6 +747,13 @@ export class ColorRmApp {
             if(!this.state.bookmarks) this.state.bookmarks = [];
             if(!this.state.clipboardBox) this.state.clipboardBox = [];
             if(this.state.showCursors === undefined) this.state.showCursors = true;
+            // SOTA preference defaults
+            if(!this.state.eraserOptions) this.state.eraserOptions = { scribble: true, text: true, shapes: true, images: false };
+            if(!this.state.lassoOptions) this.state.lassoOptions = { scribble: true, text: true, shapes: true, images: true };
+            if(this.state.eraserType === undefined) this.state.eraserType = 'stroke';
+            if(this.state.stabilization === undefined) this.state.stabilization = 0;
+            if(this.state.holdToShape === undefined) this.state.holdToShape = false;
+            if(this.state.spenEngineEnabled === undefined) this.state.spenEngineEnabled = true;
             const cToggle = this.getElement('cursorToggle');
             if(cToggle) cToggle.checked = this.state.showCursors;
             this.renderBookmarks();
@@ -770,6 +781,44 @@ export class ColorRmApp {
 
     async loadPage(i, broadcast = true) {
         if(i<0 || i>=this.state.images.length) return;
+
+        // Debounce rapid navigation - queue the target and animate to it
+        const now = Date.now();
+        const navigationCooldown = 150; // ms between actual page loads
+
+        if (this._lastNavTime && now - this._lastNavTime < navigationCooldown) {
+            // Queue this as the target page
+            this._queuedPage = i;
+            if (!this._navDebounceTimer) {
+                this._navDebounceTimer = setTimeout(() => {
+                    this._navDebounceTimer = null;
+                    if (this._queuedPage !== null && this._queuedPage !== this.state.idx) {
+                        this.loadPage(this._queuedPage, broadcast);
+                    }
+                    this._queuedPage = null;
+                }, navigationCooldown);
+            }
+            return;
+        }
+        this._lastNavTime = now;
+
+        // Determine animation direction
+        const direction = i > this.state.idx ? 'left' : 'right';
+        const viewport = this.getElement('viewport');
+        const canvas = this.getElement('canvas');
+
+        // Skip animation if only one page or same page
+        const shouldAnimate = this.state.images.length > 1 && this.state.idx !== i;
+
+        // Apply exit animation
+        if (canvas && viewport && shouldAnimate) {
+            canvas.style.transition = 'transform 0.2s ease-out, opacity 0.15s ease-out';
+            canvas.style.transform = direction === 'left' ? 'translateX(-30px)' : 'translateX(30px)';
+            canvas.style.opacity = '0.3';
+
+            // Wait for exit animation
+            await new Promise(r => setTimeout(r, 100));
+        }
 
         // Auto-compact current page before switching (if leaving a page)
         if (this.state.idx !== i && this.state.images[this.state.idx]) {
@@ -865,6 +914,22 @@ export class ColorRmApp {
                 if(w>max || h>max) { const r = Math.min(max/w, max/h); w*=r; h*=r; }
                 c.width=w; c.height=h; this.state.viewW=w; this.state.viewH=h;
 
+                // Toggle infinite canvas mode for seamless fullscreen display
+                const viewport = this.getElement('viewport');
+                if (viewport) {
+                    if (item.isInfinite) {
+                        viewport.classList.add('infinite-canvas-mode');
+                        // For infinite canvas, resize canvas to fill viewport
+                        const vRect = viewport.getBoundingClientRect();
+                        c.width = vRect.width;
+                        c.height = vRect.height;
+                        this.state.viewW = c.width;
+                        this.state.viewH = c.height;
+                    } else {
+                        viewport.classList.remove('infinite-canvas-mode');
+                    }
+                }
+
                 const ctx = c.getContext('2d', {willReadFrequently:true});
                 ctx.drawImage(img,0,0,w,h);
                 const d = ctx.getImageData(0,0,w,h).data;
@@ -874,9 +939,30 @@ export class ColorRmApp {
                     this.cache.lab[j]=l; this.cache.lab[j+1]=a; this.cache.lab[j+2]=b;
                 }
 
+                // Apply enter animation (only if multiple pages)
+                if (canvas && shouldAnimate) {
+                    canvas.style.transform = direction === 'left' ? 'translateX(30px)' : 'translateX(-30px)';
+                    canvas.style.opacity = '0.3';
+                    // Force reflow
+                    canvas.offsetHeight;
+                    // Animate in
+                    canvas.style.transition = 'transform 0.2s ease-out, opacity 0.15s ease-out';
+                    canvas.style.transform = 'translateX(0)';
+                    canvas.style.opacity = '1';
+                } else if (canvas) {
+                    // Reset any lingering transform/opacity without animation
+                    canvas.style.transition = 'none';
+                    canvas.style.transform = 'translateX(0)';
+                    canvas.style.opacity = '1';
+                }
+
                 this.render();
                 if (broadcast) {
                     this.saveSessionState();
+                    // Use debounced page navigation notification
+                    if (this.liveSync) {
+                        this.liveSync.notifyPageNavigation(this.state.idx);
+                    }
                 }
                 resolve();
             };

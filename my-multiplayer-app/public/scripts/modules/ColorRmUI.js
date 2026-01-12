@@ -142,6 +142,7 @@ export const ColorRmUI = {
                     this.state.colors.push({hex, lab:this.rgbToLab((i>>16)&255,(i>>8)&255,i&255)});
                     this.renderSwatches();
                     this.saveSessionState();
+                    this.invalidatePreviewCache();
                     if (this.liveSync) this.liveSync.updateColors(this.state.colors);
                 } else {
                     this.renderCustomSwatches();
@@ -202,13 +203,13 @@ export const ColorRmUI = {
 
         const strictRange = this.getElement('strictRange');
         if(strictRange) {
-            strictRange.oninput = e => { this.state.strict=e.target.value; this.render(); };
+            strictRange.oninput = e => { this.state.strict=e.target.value; this.invalidatePreviewCache(); this.requestPreviewRender(); };
             strictRange.onchange = () => this.saveSessionState();
         }
 
         const previewToggle = this.getElement('previewToggle');
         if(previewToggle) {
-            previewToggle.onchange = e => { this.state.previewOn=e.target.checked; this.render(); this.saveSessionState(); };
+            previewToggle.onchange = e => { this.state.previewOn=e.target.checked; this.invalidatePreviewCache(); this.requestPreviewRender(); this.saveSessionState(); };
         }
 
         const cursorToggle = this.getElement('cursorToggle');
@@ -243,7 +244,10 @@ export const ColorRmUI = {
         if (nextPageBtn) nextPageBtn.onclick = () => this.loadPage(this.state.idx + 1);
 
         const zoomBtn = this.getElement('zoomBtn');
-        if (zoomBtn) zoomBtn.onclick = () => this.resetZoom();
+        if (zoomBtn) {
+            zoomBtn.onclick = () => this.resetZoom();
+            zoomBtn.ondblclick = () => this.fitToScreen();
+        }
 
         this.renderCustomSwatches();
         this.setupDragAndDrop();
@@ -673,6 +677,7 @@ export const ColorRmUI = {
             d.onclick=()=>{
                 this.state.colors = this.state.colors.filter(c => c.hex !== col.hex);
                 this.renderSwatches(); // Re-render swatches after removal
+                this.invalidatePreviewCache();
                 this.render();
                 this.saveSessionState();
                 if (this.liveSync) this.liveSync.updateColors(this.state.colors);
@@ -697,5 +702,109 @@ export const ColorRmUI = {
             };
             c.appendChild(d);
         });
+    },
+
+    /**
+     * Shows a keyboard shortcuts help modal
+     */
+    showShortcutsHelp() {
+        // Remove existing modal if any
+        let modal = document.getElementById('shortcutsHelpModal');
+        if (modal) {
+            modal.style.display = 'flex';
+            return;
+        }
+
+        // Create modal
+        modal = document.createElement('div');
+        modal.id = 'shortcutsHelpModal';
+        modal.className = 'overlay';
+        modal.style.cssText = 'display:flex; z-index:400;';
+
+        const shortcuts = [
+            { category: 'Tools', items: [
+                { key: 'V', desc: 'Move/Select tool' },
+                { key: 'L', desc: 'Lasso selection' },
+                { key: 'P', desc: 'Pen/Draw tool' },
+                { key: 'E', desc: 'Eraser tool' },
+                { key: 'S', desc: 'Shape tool' },
+                { key: 'T', desc: 'Text tool' },
+                { key: 'B', desc: 'Box capture tool' },
+                { key: 'H', desc: 'Hand/Pan tool' },
+            ]},
+            { category: 'Navigation', items: [
+                { key: '← / →', desc: 'Previous / Next page' },
+                { key: 'PageUp / PageDown', desc: 'Previous / Next page' },
+                { key: 'Home / End', desc: 'First / Last page' },
+            ]},
+            { category: 'View', items: [
+                { key: 'F', desc: 'Fit to screen' },
+                { key: 'Ctrl + 1', desc: 'Fit to screen' },
+                { key: 'Ctrl + 0', desc: 'Reset zoom to 100%' },
+                { key: 'Ctrl + +', desc: 'Zoom in' },
+                { key: 'Ctrl + -', desc: 'Zoom out' },
+                { key: 'Space', desc: 'Toggle preview mode' },
+            ]},
+            { category: 'Editing', items: [
+                { key: 'Ctrl + Z', desc: 'Undo' },
+                { key: 'Ctrl + Shift + Z', desc: 'Redo' },
+                { key: 'Ctrl + Y', desc: 'Redo' },
+                { key: 'Ctrl + A', desc: 'Select all items' },
+                { key: 'Ctrl + D', desc: 'Duplicate selection' },
+                { key: 'Delete / Backspace', desc: 'Delete selected' },
+                { key: 'Escape', desc: 'Cancel action / Deselect' },
+            ]},
+        ];
+
+        let html = `
+            <div class="card" style="max-width:600px; max-height:85vh; overflow-y:auto;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:15px; border-bottom:1px solid var(--border);">
+                    <h3 style="margin:0; color:white; display:flex; align-items:center; gap:10px;">
+                        <i class="bi bi-keyboard" style="color:#8b5cf6;"></i> Keyboard Shortcuts
+                    </h3>
+                    <button onclick="document.getElementById('shortcutsHelpModal').style.display='none'" style="background:var(--bg-surface); border:1px solid var(--border); color:#888; cursor:pointer; width:32px; height:32px; border-radius:4px; display:flex; align-items:center; justify-content:center;">×</button>
+                </div>
+                <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:20px;">
+        `;
+
+        shortcuts.forEach(cat => {
+            html += `
+                <div>
+                    <h4 style="margin:0 0 10px 0; color:#8b5cf6; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em;">${cat.category}</h4>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+            `;
+            cat.items.forEach(item => {
+                html += `
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:var(--bg-surface); border-radius:4px;">
+                        <span style="color:#888; font-size:0.8rem;">${item.desc}</span>
+                        <kbd style="background:#000; color:#fff; padding:3px 8px; border-radius:4px; font-family:monospace; font-size:0.75rem; border:1px solid #333;">${item.key}</kbd>
+                    </div>
+                `;
+            });
+            html += `</div></div>`;
+        });
+
+        html += `
+                </div>
+                <div style="margin-top:20px; padding-top:15px; border-top:1px solid var(--border); text-align:center;">
+                    <span style="color:#666; font-size:0.75rem;">Press <kbd style="background:#000; color:#fff; padding:2px 6px; border-radius:3px; font-family:monospace; font-size:0.7rem; border:1px solid #333;">?</kbd> anytime to show this help</span>
+                </div>
+            </div>
+        `;
+
+        modal.innerHTML = html;
+        modal.onclick = (e) => {
+            if (e.target === modal) modal.style.display = 'none';
+        };
+
+        document.body.appendChild(modal);
+    },
+
+    /**
+     * Hides the shortcuts help modal
+     */
+    hideShortcutsHelp() {
+        const modal = document.getElementById('shortcutsHelpModal');
+        if (modal) modal.style.display = 'none';
     }
 };

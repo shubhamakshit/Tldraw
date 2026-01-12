@@ -17,6 +17,10 @@ export class LiveSyncClient {
         this.lastLocalPageChange = 0;
         this.PAGE_CHANGE_GRACE_PERIOD = 2000; // 2 seconds grace period
         this.remoteTrails = {};
+
+        // Lock to prevent reconciliation during local page operations
+        this._isLocalPageOperation = false;
+        this._localPageOperationTimeout = null;
     }
 
     async init(ownerId, projectId) {
@@ -137,6 +141,31 @@ export class LiveSyncClient {
     }
 
     /**
+     * Start a local page operation - blocks reconciliation
+     * Call this BEFORE adding/deleting/reordering pages locally
+     */
+    startLocalPageOperation() {
+        this._isLocalPageOperation = true;
+        // Clear any existing timeout
+        if (this._localPageOperationTimeout) {
+            clearTimeout(this._localPageOperationTimeout);
+        }
+        console.log('[LiveSync] Local page operation started - reconciliation blocked');
+    }
+
+    /**
+     * End a local page operation - allows reconciliation after a delay
+     * Call this AFTER the page operation is complete and synced to server
+     */
+    endLocalPageOperation() {
+        // Add a grace period before allowing reconciliation
+        this._localPageOperationTimeout = setTimeout(() => {
+            this._isLocalPageOperation = false;
+            console.log('[LiveSync] Local page operation ended - reconciliation unblocked');
+        }, 3000); // 3 second grace period
+    }
+
+    /**
      * Starts a periodic check to ensure pages are synced with remote
      * This catches any missed updates due to race conditions or network issues
      */
@@ -243,7 +272,10 @@ export class LiveSyncClient {
                 // Check if any other user has updated their page structure version
                 others.forEach(user => {
                     const presence = user.presence;
-                    if (presence && presence.pageStructureVersion !== undefined &&
+                    if (!presence) return;
+
+                    // Handle page structure version changes
+                    if (presence.pageStructureVersion !== undefined &&
                         presence.pageCount !== undefined) {
 
                         const oderId = user.connectionId || user.id;
@@ -261,6 +293,9 @@ export class LiveSyncClient {
                             this.otherUserVersions[oderId] = presence.pageStructureVersion;
                         }
                     }
+
+                    // Infinite canvas bounds are now auto-calculated from synced strokes
+                    // No need for explicit bounds sync via presence
                 });
             })
         ];
@@ -540,20 +575,33 @@ export class LiveSyncClient {
                 // Skip - this is likely our own change echoing back
                 console.log(`Liveblocks: Ignoring remote idx=${metadata.idx}, local change was ${timeSinceLocalChange}ms ago`);
             } else {
-                // Accept remote page change (from another user)
+                // Instant navigation - no debounce for following other users
                 console.log(`Liveblocks: Accepting remote page change to idx=${metadata.idx}`);
                 this.app.loadPage(metadata.idx, false);
             }
         }
 
-        // Page sync: Just run reconciliation - R2 is the source of truth
+        // Page sync: Debounce reconciliation
         if (metadata.pageCount !== this.app.state.images.length) {
-            console.log(`Liveblocks: Page count mismatch (remote: ${metadata.pageCount}, local: ${this.app.state.images.length}). Reconciling...`);
-            this.reconcilePageStructure();
+            console.log(`Liveblocks: Page count mismatch (remote: ${metadata.pageCount}, local: ${this.app.state.images.length}). Scheduling reconciliation...`);
+            this._scheduleReconciliation();
         }
 
         this.syncHistory();
         this.app.updateLockUI();
+    }
+
+    // Debounced scheduler for page reconciliation (add/delete pages only)
+    _scheduleReconciliation() {
+        // Clear any pending reconciliation
+        if (this._reconcileDebounceTimer) {
+            clearTimeout(this._reconcileDebounceTimer);
+        }
+
+        // Debounce: wait 300ms before reconciling (coalesces rapid changes)
+        this._reconcileDebounceTimer = setTimeout(() => {
+            this.reconcilePageStructure();
+        }, 300);
     }
 
     /**
@@ -830,6 +878,12 @@ export class LiveSyncClient {
      * - User pages (user_*) are fetched individually from R2
      */
     async reconcilePageStructure() {
+        // Skip if a local page operation is in progress
+        if (this._isLocalPageOperation) {
+            console.log('[reconcilePageStructure] Skipped - local page operation in progress');
+            return;
+        }
+
         console.log('[reconcilePageStructure] Starting page structure reconciliation...');
 
         try {
@@ -1078,6 +1132,11 @@ export class LiveSyncClient {
                 localImg.history = newHist;
                 currentIdxChanged = true;
                 if (this.app.invalidateCache) this.app.invalidateCache();
+
+                // Auto-recalculate infinite canvas bounds from synced strokes
+                if (localImg.isInfinite && this.app.recalculateInfiniteCanvasBounds) {
+                    this.app.recalculateInfiniteCanvasBounds(this.app.state.idx);
+                }
             }
         }
 
@@ -1086,7 +1145,14 @@ export class LiveSyncClient {
             if (!img) return; // Skip null/undefined pages (gaps)
             if (idx === this.app.state.idx) return; // Already handled
             const remote = pagesHistory.get(idx.toString());
-            if (remote) img.history = remote.toArray();
+            if (remote) {
+                img.history = remote.toArray();
+
+                // Auto-recalculate infinite canvas bounds for all infinite pages
+                if (img.isInfinite && this.app.recalculateInfiniteCanvasBounds) {
+                    this.app.recalculateInfiniteCanvasBounds(idx);
+                }
+            }
         });
 
         if (currentIdxChanged) this.app.render();
@@ -1114,6 +1180,20 @@ export class LiveSyncClient {
         if (!project) return;
         const pagesHistory = project.get("pagesHistory");
         pagesHistory.set(pageIdx.toString(), new LiveList(history || []));
+    }
+
+    // DEPRECATED: Bounds are now auto-calculated from synced strokes via math
+    // Kept for backwards compatibility but does nothing
+    updateInfiniteCanvasBounds(pageIdx, bounds) {
+        // No-op: bounds are derived from stroke history automatically
+        // console.log(`[LiveSync] updateInfiniteCanvasBounds deprecated - bounds auto-calculated from strokes`);
+    }
+
+    // DEPRECATED: Bounds are now auto-calculated from synced strokes via math
+    // Kept for backwards compatibility but does nothing
+    handleInfiniteCanvasBoundsUpdate(presence) {
+        // No-op: bounds are derived from stroke history automatically
+        // When strokes sync via Liveblocks, recalculateInfiniteCanvasBounds() is called
     }
 
     updateBookmarks(bookmarks) {
@@ -1182,8 +1262,20 @@ export class LiveSyncClient {
         }
     }
 
-    // Notify other users about page structure changes using presence
+    // Notify other users about page structure changes using presence (debounced)
     notifyPageStructureChange() {
+        // Debounce notifications to prevent flooding during rapid page changes
+        if (this._notifyDebounceTimer) {
+            clearTimeout(this._notifyDebounceTimer);
+        }
+
+        this._notifyDebounceTimer = setTimeout(() => {
+            this._doNotifyPageStructureChange();
+        }, 100); // 100ms debounce for outgoing notifications
+    }
+
+    // Internal: Actually send the page structure change notification
+    _doNotifyPageStructureChange() {
         // Update presence with a timestamp to notify other users of changes
         if (this.room) {
             // Set flag to ignore our own page structure change notification
@@ -1194,7 +1286,33 @@ export class LiveSyncClient {
                 pageCount: this.app.state.images.length,
                 pageIdx: this.app.state.idx
             });
+
+            console.log(`[LiveSync] Notified page structure change: ${this.app.state.images.length} pages`);
         }
+    }
+
+    // Notify other users about page navigation (debounced)
+    notifyPageNavigation(pageIdx) {
+        // Debounce to prevent flooding during rapid page flipping
+        if (this._pageNavDebounceTimer) {
+            clearTimeout(this._pageNavDebounceTimer);
+        }
+
+        this._pageNavDebounceTimer = setTimeout(() => {
+            // Mark the time of local change to prevent echo-back
+            this.lastLocalPageChange = Date.now();
+
+            // Update metadata
+            const project = this.getProject();
+            if (project) {
+                project.get("metadata").update({ idx: pageIdx });
+            }
+
+            // Update presence
+            if (this.room) {
+                this.room.updatePresence({ pageIdx: pageIdx });
+            }
+        }, 150); // 150ms debounce for page navigation
     }
 
     // Handle page structure change notifications from other users (debounced)
@@ -1204,23 +1322,32 @@ export class LiveSyncClient {
             return;
         }
 
-        // Debounce: Only process if we haven't processed recently
+        // Debounce: Coalesce multiple rapid changes into one reconciliation
+        if (this._handleStructureDebounceTimer) {
+            clearTimeout(this._handleStructureDebounceTimer);
+        }
+
+        this._handleStructureDebounceTimer = setTimeout(async () => {
+            await this._doHandlePageStructureChange(message);
+        }, 500); // 500ms debounce for incoming changes
+    }
+
+    // Internal: Actually handle the page structure change
+    async _doHandlePageStructureChange(message) {
+        // Double-check we haven't processed very recently
         const now = Date.now();
-        const DEBOUNCE_MS = 1000; // 1 second debounce (reduced for faster sync)
+        const DEBOUNCE_MS = 800;
 
         if (this._lastPageStructureChange && (now - this._lastPageStructureChange) < DEBOUNCE_MS) {
-            // Skip - too soon since last change
             return;
         }
 
         this._lastPageStructureChange = now;
 
         // Always run reconciliation when notified of structure change
-        // The reconciliation will determine if anything actually needs to change
         console.log(`Page structure change detected: local=${this.app.state.images.length}, remote=${message.pageCount}`);
 
         // Add a small delay to allow server to receive the page structure update
-        // This prevents race conditions where we fetch stale structure
         await new Promise(r => setTimeout(r, 300));
 
         // Simply run reconciliation - it will fetch from R2 (source of truth)

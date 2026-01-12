@@ -13,7 +13,7 @@ export const ColorRmInput = {
         }
 
         const tsp = this.getElement('toolSettingsPanel');
-        if(tsp) tsp.style.display = ['pen','shape','eraser','text'].includes(t) ? 'block' : 'none';
+        if(tsp) tsp.style.display = ['pen','shape','eraser','text','lasso'].includes(t) ? 'block' : 'none';
 
         const po = this.getElement('penOptions');
         if(po) po.style.display = t==='pen'?'block':'none';
@@ -26,6 +26,29 @@ export const ColorRmInput = {
 
         const to = this.getElement('textOptions');
         if(to) to.style.display = t==='text'?'block':'none';
+
+        const lo = this.getElement('lassoOptions');
+        if(lo) lo.style.display = t==='lasso'?'block':'none';
+
+        // Update the checkboxes based on current lasso options
+        if(t==='lasso' && lo) {
+            const options = this.state.lassoOptions || {
+                scribble: true,
+                text: true,
+                shapes: true,
+                images: true
+            };
+
+            const scribbleCb = this.getElement('lassoScribble');
+            const textCb = this.getElement('lassoText');
+            const shapesCb = this.getElement('lassoShapes');
+            const imagesCb = this.getElement('lassoImages');
+
+            if(scribbleCb) scribbleCb.checked = options.scribble;
+            if(textCb) textCb.checked = options.text;
+            if(shapesCb) shapesCb.checked = options.shapes;
+            if(imagesCb) imagesCb.checked = options.images;
+        }
 
         // Update the checkboxes based on current eraser options
         if(t==='eraser' && eo) {
@@ -70,6 +93,34 @@ export const ColorRmInput = {
 
     undo() {
         const img = this.state.images[this.state.idx];
+
+        // First check if there's a modification undo (for align, etc.)
+        if (img._modificationUndo && img._modificationUndo.length > 0) {
+            const undoEntry = img._modificationUndo.pop();
+            if (!img._modificationRedo) img._modificationRedo = [];
+
+            // Save current state for redo
+            const redoEntry = {
+                type: undoEntry.type,
+                items: undoEntry.indices.map(idx => ({
+                    idx,
+                    state: JSON.parse(JSON.stringify(img.history[idx]))
+                }))
+            };
+            img._modificationRedo.push(redoEntry);
+
+            // Restore previous state
+            undoEntry.items.forEach(({ idx, state }) => {
+                img.history[idx] = state;
+            });
+
+            this.invalidateCache();
+            this.saveCurrentImg();
+            this.render();
+            return;
+        }
+
+        // Fallback to standard undo (add/remove operations)
         if(img.history.length > 0) {
             if(!img.redo) img.redo = [];
             img.redo.push(img.history.pop());
@@ -79,9 +130,67 @@ export const ColorRmInput = {
 
     redo() {
         const img = this.state.images[this.state.idx];
+
+        // First check if there's a modification redo
+        if (img._modificationRedo && img._modificationRedo.length > 0) {
+            const redoEntry = img._modificationRedo.pop();
+            if (!img._modificationUndo) img._modificationUndo = [];
+
+            // Save current state for undo
+            const undoEntry = {
+                type: redoEntry.type,
+                indices: redoEntry.items.map(i => i.idx),
+                items: redoEntry.items.map(({ idx }) => ({
+                    idx,
+                    state: JSON.parse(JSON.stringify(img.history[idx]))
+                }))
+            };
+            img._modificationUndo.push(undoEntry);
+
+            // Apply redo state
+            redoEntry.items.forEach(({ idx, state }) => {
+                img.history[idx] = state;
+            });
+
+            this.invalidateCache();
+            this.saveCurrentImg();
+            this.render();
+            return;
+        }
+
+        // Fallback to standard redo
         if(img.redo && img.redo.length > 0) {
             img.history.push(img.redo.pop());
             this.saveCurrentImg(); this.render();
+        }
+    },
+
+    /**
+     * Saves modification state for undo before making in-place changes
+     * @param {string} type - Type of modification (e.g., 'align', 'distribute')
+     * @param {number[]} indices - Indices of items being modified
+     */
+    _pushModificationUndo(type, indices) {
+        const img = this.state.images[this.state.idx];
+        if (!img._modificationUndo) img._modificationUndo = [];
+
+        // Clear redo stack when new modification is made
+        img._modificationRedo = [];
+
+        // Save current state of items being modified
+        const undoEntry = {
+            type,
+            indices,
+            items: indices.map(idx => ({
+                idx,
+                state: JSON.parse(JSON.stringify(img.history[idx]))
+            }))
+        };
+        img._modificationUndo.push(undoEntry);
+
+        // Limit undo stack size
+        if (img._modificationUndo.length > 50) {
+            img._modificationUndo.shift();
         }
     },
 
@@ -156,26 +265,164 @@ export const ColorRmInput = {
         }
 
         target.addEventListener('keydown', e => {
-            if(e.target.tagName === 'INPUT') return;
+            if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             const key = e.key.toLowerCase();
+
+            // === ESCAPE: Cancel current action or deselect ===
+            if(e.key === 'Escape') {
+                e.preventDefault();
+                // Cancel any active drawing
+                if(this.isDragging) {
+                    this.isDragging = false;
+                    this.currentStroke = null;
+                    this.render();
+                    return;
+                }
+                // Close any open modals/pickers
+                const picker = this.getElement('floatingPicker');
+                if(picker && picker.style.display !== 'none') {
+                    picker.style.display = 'none';
+                    return;
+                }
+                const ctxDrop = this.getElement('ctxDrop');
+                if(ctxDrop && ctxDrop.classList.contains('show')) {
+                    ctxDrop.classList.remove('show');
+                    return;
+                }
+                // Deselect all
+                if(this.state.selection.length > 0) {
+                    this.state.selection = [];
+                    const tb = this.getElement('contextToolbar');
+                    if(tb) tb.style.display = 'none';
+                    this.render();
+                    return;
+                }
+                // Reset tool to selection
+                this.setTool('none');
+                return;
+            }
+
             if(e.key === ' ') {
                 e.preventDefault();
                 this.state.previewOn = !this.state.previewOn;
                 const pt = this.getElement('previewToggle');
                 if(pt) pt.checked = this.state.previewOn;
                 this.render(); this.saveSessionState();
+                this.ui.showToast(this.state.previewOn ? 'Preview ON' : 'Preview OFF');
                 return;
             }
-            // Zoom keyboard shortcuts
+
+            // === Zoom keyboard shortcuts ===
             if((e.ctrlKey||e.metaKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); this.zoomIn(); return; }
             if((e.ctrlKey||e.metaKey) && e.key === '-') { e.preventDefault(); this.zoomOut(); return; }
             if((e.ctrlKey||e.metaKey) && e.key === '0') { e.preventDefault(); this.resetZoom(); return; }
-            if((e.ctrlKey||e.metaKey) && key==='z') { e.preventDefault(); if(e.shiftKey) this.redo(); else this.undo(); }
-            if(key==='v' && !e.ctrlKey && !e.metaKey) this.setTool('none'); if(key==='l') this.setTool('lasso'); if(key==='p') this.setTool('pen');
-            if(key==='e') this.setTool('eraser'); if(key==='s') this.setTool('shape'); if(key==='t') this.setTool('text');
-            if(key==='b') this.setTool('capture'); if(key==='h') this.setTool('hand');
-            if(e.key==='ArrowLeft') this.loadPage(this.state.idx-1); if(e.key==='ArrowRight') this.loadPage(this.state.idx+1); if(e.key==='Delete' || e.key==='Backspace') this.deleteSelected();
+
+            // === Undo/Redo ===
+            if((e.ctrlKey||e.metaKey) && key==='z') { e.preventDefault(); if(e.shiftKey) this.redo(); else this.undo(); return; }
+            if((e.ctrlKey||e.metaKey) && key==='y') { e.preventDefault(); this.redo(); return; }
+
+            // === Fit to screen (F key or Ctrl+1) ===
+            if(key==='f' && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                this.fitToScreen();
+                return;
+            }
+            if((e.ctrlKey||e.metaKey) && e.key === '1') { e.preventDefault(); this.fitToScreen(); return; }
+
+            // === Duplicate selection (Ctrl+D) ===
+            if((e.ctrlKey||e.metaKey) && key==='d' && this.state.selection.length > 0) {
+                e.preventDefault();
+                this.copySelected(false);
+                this.ui.showToast('Duplicated');
+                return;
+            }
+
+            // === Group (Ctrl+G) ===
+            if((e.ctrlKey||e.metaKey) && key==='g' && !e.shiftKey && this.state.selection.length >= 2) {
+                e.preventDefault();
+                this.groupSelected();
+                return;
+            }
+
+            // === Ungroup (Ctrl+Shift+G) ===
+            if((e.ctrlKey||e.metaKey) && e.shiftKey && key==='g' && this.state.selection.length === 1) {
+                e.preventDefault();
+                this.ungroupSelected();
+                return;
+            }
+
+            // === Select All (Ctrl+A) ===
+            if((e.ctrlKey||e.metaKey) && key==='a') {
+                e.preventDefault();
+                const img = this.state.images[this.state.idx];
+                if(img && img.history) {
+                    this.state.selection = img.history.map((_, i) => i).filter(i => !img.history[i].deleted && !img.history[i].locked);
+                    if(this.state.selection.length > 0) {
+                        this.setTool('lasso');
+                        this.ui.showToast(`Selected ${this.state.selection.length} items`);
+                    }
+                    this.render();
+                }
+                return;
+            }
+
+            // === Tool shortcuts (single keys) ===
+            if(key==='v' && !e.ctrlKey && !e.metaKey) this.setTool('none');
+            if(key==='l' && !e.ctrlKey && !e.metaKey) this.setTool('lasso');
+            if(key==='p' && !e.ctrlKey && !e.metaKey) this.setTool('pen');
+            if(key==='e' && !e.ctrlKey && !e.metaKey) this.setTool('eraser');
+            if(key==='s' && !e.ctrlKey && !e.metaKey) this.setTool('shape');
+            if(key==='t' && !e.ctrlKey && !e.metaKey) this.setTool('text');
+            if(key==='b' && !e.ctrlKey && !e.metaKey) this.setTool('capture');
+            if(key==='h' && !e.ctrlKey && !e.metaKey) this.setTool('hand');
+
+            // === Page Navigation ===
+            if(e.key==='ArrowLeft' || e.key==='PageUp') { this.loadPage(this.state.idx-1); return; }
+            if(e.key==='ArrowRight' || e.key==='PageDown') { this.loadPage(this.state.idx+1); return; }
+            if(e.key==='Home') { this.loadPage(0); return; }
+            if(e.key==='End') { this.loadPage(this.state.images.length - 1); return; }
+
+            // === Delete selected ===
+            if(e.key==='Delete' || (e.key==='Backspace' && !e.ctrlKey && !e.metaKey)) {
+                if(this.state.selection.length > 0) {
+                    this.deleteSelected();
+                }
+            }
+
+            // === Shortcuts Help (? key) ===
+            if(e.key === '?' || (e.shiftKey && e.key === '/')) {
+                e.preventDefault();
+                if(this.showShortcutsHelp) this.showShortcutsHelp();
+            }
         });
+    },
+
+    /**
+     * Fits the current page to fill the viewport
+     */
+    fitToScreen() {
+        const canvas = this.getElement('canvas');
+        const viewport = this.getElement('viewport');
+        if (!canvas || !viewport) return;
+
+        const viewRect = viewport.getBoundingClientRect();
+        const canvasWidth = this.state.viewW;
+        const canvasHeight = this.state.viewH;
+
+        // Calculate zoom to fit with some padding
+        const padding = 40;
+        const scaleX = (viewRect.width - padding * 2) / canvasWidth;
+        const scaleY = (viewRect.height - padding * 2) / canvasHeight;
+        const newZoom = Math.min(scaleX, scaleY, 2); // Cap at 2x
+
+        // Center the canvas
+        this.state.zoom = newZoom;
+        this.state.pan.x = (viewRect.width - canvasWidth * newZoom) / 2;
+        this.state.pan.y = (viewRect.height - canvasHeight * newZoom) / 2;
+
+        this.updateZoomIndicator();
+        this.render();
+        this.ui.showToast('Fit to screen');
     },
 
     setupDrawing() {
@@ -451,38 +698,52 @@ export const ColorRmInput = {
                     const st = img.history[idx];
                     const orig = initialHistoryState[i];
 
-                    // Calculate scale factors based on which handle is being dragged
-                    let scaleX = 1, scaleY = 1;
-                    let newX = orig.x, newY = orig.y, newW = orig.w, newH = orig.h;
-
-                    if (resizeHandle.includes('r')) { // right handles
-                        newW = orig.w + dx;
-                        scaleX = newW / orig.w;
-                    }
-                    if (resizeHandle.includes('l')) { // left handles
-                        newX = orig.x + dx;
-                        newW = orig.w - dx;
-                        scaleX = newW / orig.w;
-                    }
-                    if (resizeHandle.includes('b')) { // bottom handles
-                        newH = orig.h + dy;
-                        scaleY = newH / orig.h;
-                    }
-                    if (resizeHandle.includes('t')) { // top handles
-                        newY = orig.y + dy;
-                        newH = orig.h - dy;
-                        scaleY = newH / orig.h;
-                    }
-
-                    // Apply to shape/text
+                    // For pen/eraser strokes, calculate bounds from points
                     if (st.tool === 'pen' || st.tool === 'eraser') {
-                        // Scale pen points relative to original bounds
                         const origBounds = this._getPenBounds(orig.pts);
+                        if (!origBounds || origBounds.w === 0 || origBounds.h === 0) return;
+
+                        // Calculate new bounds based on handle
+                        let newMinX = origBounds.minX, newMinY = origBounds.minY;
+                        let newMaxX = origBounds.maxX, newMaxY = origBounds.maxY;
+
+                        if (resizeHandle.includes('l')) newMinX += dx;
+                        if (resizeHandle.includes('r')) newMaxX += dx;
+                        if (resizeHandle.includes('t')) newMinY += dy;
+                        if (resizeHandle.includes('b')) newMaxY += dy;
+
+                        const newW = newMaxX - newMinX;
+                        const newH = newMaxY - newMinY;
+                        const scaleX = newW / origBounds.w;
+                        const scaleY = newH / origBounds.h;
+
+                        // Prevent collapse
+                        if (Math.abs(scaleX) < 0.01 || Math.abs(scaleY) < 0.01) return;
+
+                        // Scale points relative to original bounds
                         st.pts = orig.pts.map(p => ({
-                            x: origBounds.minX + (p.x - origBounds.minX) * scaleX + (resizeHandle.includes('l') ? dx : 0),
-                            y: origBounds.minY + (p.y - origBounds.minY) * scaleY + (resizeHandle.includes('t') ? dy : 0)
+                            x: newMinX + (p.x - origBounds.minX) * scaleX,
+                            y: newMinY + (p.y - origBounds.minY) * scaleY
                         }));
                     } else {
+                        // For shapes/text with x, y, w, h
+                        let newX = orig.x, newY = orig.y, newW = orig.w, newH = orig.h;
+
+                        if (resizeHandle.includes('r')) {
+                            newW = orig.w + dx;
+                        }
+                        if (resizeHandle.includes('l')) {
+                            newX = orig.x + dx;
+                            newW = orig.w - dx;
+                        }
+                        if (resizeHandle.includes('b')) {
+                            newH = orig.h + dy;
+                        }
+                        if (resizeHandle.includes('t')) {
+                            newY = orig.y + dy;
+                            newH = orig.h - dy;
+                        }
+
                         st.x = newX;
                         st.y = newY;
                         st.w = newW;
@@ -675,6 +936,12 @@ export const ColorRmInput = {
                 // Apply stabilization to the point
                 const stabilizedPt = this._applyStabilization(pt);
                 this.currentStroke.push(stabilizedPt);
+
+                // Expand infinite canvas if drawing near edges
+                if (this.expandInfiniteCanvasIfNeeded) {
+                    this.expandInfiniteCanvasIfNeeded(stabilizedPt.x, stabilizedPt.y);
+                }
+
                 const ctx=c.getContext('2d');
                 ctx.save();
                 ctx.translate(this.state.pan.x, this.state.pan.y);
@@ -690,7 +957,24 @@ export const ColorRmInput = {
 
         // Only main app listens to window resize for cursor re-rendering
         if (this.config.isMain) {
-            window.addEventListener('resize', () => this.liveSync && this.liveSync.renderCursors && this.liveSync.renderCursors());
+            window.addEventListener('resize', () => {
+                if (this.liveSync && this.liveSync.renderCursors) this.liveSync.renderCursors();
+
+                // Update infinite canvas dimensions on resize
+                const currentPage = this.state.images[this.state.idx];
+                if (currentPage && currentPage.isInfinite) {
+                    const viewport = this.getElement('viewport');
+                    const canvas = this.getElement('canvas');
+                    if (viewport && canvas) {
+                        const vRect = viewport.getBoundingClientRect();
+                        canvas.width = vRect.width;
+                        canvas.height = vRect.height;
+                        this.state.viewW = canvas.width;
+                        this.state.viewH = canvas.height;
+                        this.render();
+                    }
+                }
+            });
         }
         const vp = this.getElement('viewport');
         if(vp) vp.addEventListener('scroll', () => this.liveSync && this.liveSync.renderCursors && this.liveSync.renderCursors(), { passive: true });
@@ -854,19 +1138,11 @@ export const ColorRmInput = {
                 this.state.images[this.state.idx].history.forEach((st,i)=>{
                     if(st.locked || st.deleted) return;
 
-                    let cx, cy;
-                    if(st.tool==='pen'){
-                        // For pen strokes, use the first point as center
-                        cx = st.pts[0].x;
-                        cy = st.pts[0].y;
-                    } else {
-                        // For other objects, calculate center in document coordinates
-                        cx = st.x + st.w/2;
-                        cy = st.y + st.h/2;
-                    }
+                    // Filter by lasso options
+                    if(!this._filterByLassoOptions(st)) return;
 
-                    // Check if the point is within the lasso path using point-in-polygon algorithm
-                    if(this.isPointInPolygon(cx, cy, lassoPath)) {
+                    // Check if object intersects with lasso (partial selection)
+                    if(this._doesObjectIntersectLasso(st, lassoPath)) {
                         this.state.selection.push(i);
                     }
                 });
@@ -1071,6 +1347,39 @@ export const ColorRmInput = {
         this.saveSessionState();
     },
 
+    setLassoOption(option, checked) {
+        if (!this.state.lassoOptions) {
+            this.state.lassoOptions = {
+                scribble: true,
+                text: true,
+                shapes: true,
+                images: true
+            };
+        }
+        this.state.lassoOptions[option] = checked;
+        console.log("Lasso options updated:", this.state.lassoOptions);
+        this.saveSessionState();
+    },
+
+    /**
+     * Filters items based on lasso selection options
+     */
+    _filterByLassoOptions(item) {
+        const options = this.state.lassoOptions || {
+            scribble: true,
+            text: true,
+            shapes: true,
+            images: true
+        };
+
+        if ((item.tool === 'pen' || item.tool === 'eraser') && !options.scribble) return false;
+        if (item.tool === 'text' && !options.text) return false;
+        if (item.tool === 'shape' && !options.shapes) return false;
+        if (item.tool === 'image' && !options.images) return false;
+
+        return true;
+    },
+
     setEraserMode(isStrokeEraser) {
         if (!this.state.eraserOptions) {
             this.state.eraserOptions = {
@@ -1148,6 +1457,130 @@ export const ColorRmInput = {
             if (intersect) inside = !inside;
         }
         return inside;
+    },
+
+    /**
+     * Checks if an object intersects with a lasso polygon (partial selection)
+     * Returns true if any part of the object is inside or crosses the lasso
+     * @param {Object} st - The stroke/object to check
+     * @param {Array} lassoPath - Array of {x, y} points defining the lasso polygon
+     * @returns {boolean} True if object intersects with lasso
+     */
+    _doesObjectIntersectLasso(st, lassoPath) {
+        if (!lassoPath || lassoPath.length < 3) return false;
+
+        // For pen/eraser strokes, check if any point is inside the lasso
+        if (st.tool === 'pen' || st.tool === 'eraser') {
+            if (!st.pts || st.pts.length === 0) return false;
+
+            // Check if any point of the stroke is inside the lasso
+            for (const pt of st.pts) {
+                if (this.isPointInPolygon(pt.x, pt.y, lassoPath)) {
+                    return true;
+                }
+            }
+
+            // Also check if any lasso point is inside the stroke's bounding box
+            // (handles case where lasso is drawn inside a large stroke)
+            const bounds = this._getPenBounds(st.pts);
+            for (const pt of lassoPath) {
+                if (pt.x >= bounds.minX && pt.x <= bounds.maxX &&
+                    pt.y >= bounds.minY && pt.y <= bounds.maxY) {
+                    // Lasso touches the bounding box - do line intersection check
+                    return this._doesLassoIntersectStroke(st.pts, lassoPath);
+                }
+            }
+
+            return false;
+        }
+
+        // For shapes, text, and other objects - check bounding box corners and center
+        const bounds = this._getItemBounds(st);
+
+        // Check if any corner or center is inside the lasso
+        const checkPoints = [
+            { x: bounds.minX, y: bounds.minY }, // top-left
+            { x: bounds.maxX, y: bounds.minY }, // top-right
+            { x: bounds.maxX, y: bounds.maxY }, // bottom-right
+            { x: bounds.minX, y: bounds.maxY }, // bottom-left
+            { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 } // center
+        ];
+
+        for (const pt of checkPoints) {
+            if (this.isPointInPolygon(pt.x, pt.y, lassoPath)) {
+                return true;
+            }
+        }
+
+        // Check if any lasso point is inside the object's bounding box
+        for (const pt of lassoPath) {
+            if (pt.x >= bounds.minX && pt.x <= bounds.maxX &&
+                pt.y >= bounds.minY && pt.y <= bounds.maxY) {
+                return true;
+            }
+        }
+
+        // Check if lasso edges intersect with object edges
+        return this._doesLassoIntersectRect(bounds, lassoPath);
+    },
+
+    /**
+     * Checks if lasso path intersects with a stroke's line segments
+     */
+    _doesLassoIntersectStroke(pts, lassoPath) {
+        // Check if any lasso segment intersects any stroke segment
+        for (let i = 0; i < lassoPath.length; i++) {
+            const l1 = lassoPath[i];
+            const l2 = lassoPath[(i + 1) % lassoPath.length];
+
+            for (let j = 0; j < pts.length - 1; j++) {
+                const s1 = pts[j];
+                const s2 = pts[j + 1];
+
+                if (this._linesIntersect(l1.x, l1.y, l2.x, l2.y, s1.x, s1.y, s2.x, s2.y)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
+
+    /**
+     * Checks if lasso path intersects with a rectangle
+     */
+    _doesLassoIntersectRect(bounds, lassoPath) {
+        const rectEdges = [
+            [{ x: bounds.minX, y: bounds.minY }, { x: bounds.maxX, y: bounds.minY }], // top
+            [{ x: bounds.maxX, y: bounds.minY }, { x: bounds.maxX, y: bounds.maxY }], // right
+            [{ x: bounds.maxX, y: bounds.maxY }, { x: bounds.minX, y: bounds.maxY }], // bottom
+            [{ x: bounds.minX, y: bounds.maxY }, { x: bounds.minX, y: bounds.minY }]  // left
+        ];
+
+        for (let i = 0; i < lassoPath.length; i++) {
+            const l1 = lassoPath[i];
+            const l2 = lassoPath[(i + 1) % lassoPath.length];
+
+            for (const edge of rectEdges) {
+                if (this._linesIntersect(l1.x, l1.y, l2.x, l2.y,
+                                          edge[0].x, edge[0].y, edge[1].x, edge[1].y)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
+
+    /**
+     * Checks if two line segments intersect
+     */
+    _linesIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
+        const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+        if (Math.abs(denom) < 0.0001) return false; // Parallel lines
+
+        const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
+        const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+
+        return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
     },
 
     // =============================================
@@ -1374,6 +1807,251 @@ export const ColorRmInput = {
             maxY = Math.max(maxY, p.y);
         });
         return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+    },
+
+    // =============================================
+    // SOTA ALIGNMENT & DISTRIBUTION
+    // =============================================
+
+    /**
+     * Gets bounds for a single item
+     */
+    _getItemBounds(item) {
+        if (item.tool === 'pen' || item.tool === 'eraser') {
+            return this._getPenBounds(item.pts);
+        } else {
+            let x = item.x, y = item.y, w = item.w || 0, h = item.h || 0;
+            if (w < 0) { x += w; w = -w; }
+            if (h < 0) { y += h; h = -h; }
+            return { minX: x, minY: y, maxX: x + w, maxY: y + h, w, h };
+        }
+    },
+
+    /**
+     * Aligns selected items
+     */
+    alignSelection(direction) {
+        if (this.state.selection.length < 2) {
+            this.ui.showToast('Select at least 2 items to align');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+
+        // Save state for undo before making changes
+        this._pushModificationUndo('align', this.state.selection);
+
+        const items = this.state.selection.map(i => ({ idx: i, item: img.history[i], bounds: this._getItemBounds(img.history[i]) }));
+
+        // Calculate the reference point (from all selected items)
+        let targetValue;
+        switch (direction) {
+            case 'left':
+                targetValue = Math.min(...items.map(i => i.bounds.minX));
+                items.forEach(i => this._moveItemTo(i.item, targetValue, null));
+                break;
+            case 'center':
+                const allMinX = Math.min(...items.map(i => i.bounds.minX));
+                const allMaxX = Math.max(...items.map(i => i.bounds.maxX));
+                targetValue = (allMinX + allMaxX) / 2;
+                items.forEach(i => {
+                    const itemCenterX = (i.bounds.minX + i.bounds.maxX) / 2;
+                    const dx = targetValue - itemCenterX;
+                    this._moveItemBy(i.item, dx, 0);
+                });
+                break;
+            case 'right':
+                targetValue = Math.max(...items.map(i => i.bounds.maxX));
+                items.forEach(i => {
+                    const dx = targetValue - i.bounds.maxX;
+                    this._moveItemBy(i.item, dx, 0);
+                });
+                break;
+            case 'top':
+                targetValue = Math.min(...items.map(i => i.bounds.minY));
+                items.forEach(i => this._moveItemTo(i.item, null, targetValue));
+                break;
+            case 'middle':
+                const allMinY = Math.min(...items.map(i => i.bounds.minY));
+                const allMaxY = Math.max(...items.map(i => i.bounds.maxY));
+                targetValue = (allMinY + allMaxY) / 2;
+                items.forEach(i => {
+                    const itemCenterY = (i.bounds.minY + i.bounds.maxY) / 2;
+                    const dy = targetValue - itemCenterY;
+                    this._moveItemBy(i.item, 0, dy);
+                });
+                break;
+            case 'bottom':
+                targetValue = Math.max(...items.map(i => i.bounds.maxY));
+                items.forEach(i => {
+                    const dy = targetValue - i.bounds.maxY;
+                    this._moveItemBy(i.item, 0, dy);
+                });
+                break;
+        }
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+
+        // Sync with liveblocks
+        if (this.liveSync) {
+            items.forEach(i => {
+                this.liveSync.updateStroke(this.state.idx, i.item);
+            });
+        }
+
+        this.ui.showToast(`Aligned ${direction}`);
+    },
+
+    /**
+     * Distributes selected items evenly
+     */
+    distributeSelection(direction) {
+        if (this.state.selection.length < 3) {
+            this.ui.showToast('Select at least 3 items to distribute');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+
+        // Save state for undo before making changes
+        this._pushModificationUndo('distribute', this.state.selection);
+
+        const items = this.state.selection.map(i => ({ idx: i, item: img.history[i], bounds: this._getItemBounds(img.history[i]) }));
+
+        if (direction === 'horizontal') {
+            // Sort by center X
+            items.sort((a, b) => ((a.bounds.minX + a.bounds.maxX) / 2) - ((b.bounds.minX + b.bounds.maxX) / 2));
+            const firstCenter = (items[0].bounds.minX + items[0].bounds.maxX) / 2;
+            const lastCenter = (items[items.length - 1].bounds.minX + items[items.length - 1].bounds.maxX) / 2;
+            const spacing = (lastCenter - firstCenter) / (items.length - 1);
+
+            items.forEach((item, i) => {
+                const currentCenter = (item.bounds.minX + item.bounds.maxX) / 2;
+                const targetCenter = firstCenter + spacing * i;
+                this._moveItemBy(item.item, targetCenter - currentCenter, 0);
+            });
+        } else {
+            // Sort by center Y
+            items.sort((a, b) => ((a.bounds.minY + a.bounds.maxY) / 2) - ((b.bounds.minY + b.bounds.maxY) / 2));
+            const firstCenter = (items[0].bounds.minY + items[0].bounds.maxY) / 2;
+            const lastCenter = (items[items.length - 1].bounds.minY + items[items.length - 1].bounds.maxY) / 2;
+            const spacing = (lastCenter - firstCenter) / (items.length - 1);
+
+            items.forEach((item, i) => {
+                const currentCenter = (item.bounds.minY + item.bounds.maxY) / 2;
+                const targetCenter = firstCenter + spacing * i;
+                this._moveItemBy(item.item, 0, targetCenter - currentCenter);
+            });
+        }
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+
+        // Sync with liveblocks
+        if (this.liveSync) {
+            items.forEach(i => {
+                this.liveSync.updateStroke(this.state.idx, i.item);
+            });
+        }
+
+        this.ui.showToast(`Distributed ${direction}ly`);
+    },
+
+    /**
+     * Changes layer order of selected items
+     */
+    changeLayerOrder(direction) {
+        if (this.state.selection.length === 0) {
+            this.ui.showToast('Select items first');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+        const history = img.history;
+
+        // Sort selection indices
+        const sortedSelection = [...this.state.selection].sort((a, b) => a - b);
+
+        switch (direction) {
+            case 'front':
+                // Move all selected to end (maintain relative order)
+                sortedSelection.forEach(idx => {
+                    const item = history.splice(idx, 1)[0];
+                    history.push(item);
+                });
+                // Update selection to new indices
+                this.state.selection = sortedSelection.map((_, i) => history.length - sortedSelection.length + i);
+                break;
+
+            case 'back':
+                // Move all selected to beginning (maintain relative order)
+                sortedSelection.reverse().forEach((idx, i) => {
+                    const item = history.splice(idx, 1)[0];
+                    history.unshift(item);
+                });
+                this.state.selection = sortedSelection.map((_, i) => i);
+                break;
+
+            case 'forward':
+                // Move each selected item one step forward
+                for (let i = sortedSelection.length - 1; i >= 0; i--) {
+                    const idx = sortedSelection[i];
+                    if (idx < history.length - 1) {
+                        [history[idx], history[idx + 1]] = [history[idx + 1], history[idx]];
+                        sortedSelection[i] = idx + 1;
+                    }
+                }
+                this.state.selection = sortedSelection;
+                break;
+
+            case 'backward':
+                // Move each selected item one step backward
+                for (let i = 0; i < sortedSelection.length; i++) {
+                    const idx = sortedSelection[i];
+                    if (idx > 0) {
+                        [history[idx], history[idx - 1]] = [history[idx - 1], history[idx]];
+                        sortedSelection[i] = idx - 1;
+                    }
+                }
+                this.state.selection = sortedSelection;
+                break;
+        }
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+    },
+
+    /**
+     * Moves an item to absolute position
+     */
+    _moveItemTo(item, x, y) {
+        if (item.tool === 'pen' || item.tool === 'eraser') {
+            const bounds = this._getPenBounds(item.pts);
+            const dx = x !== null ? x - bounds.minX : 0;
+            const dy = y !== null ? y - bounds.minY : 0;
+            item.pts.forEach(p => { p.x += dx; p.y += dy; });
+        } else {
+            if (x !== null) item.x = x;
+            if (y !== null) item.y = y;
+        }
+        item.lastMod = Date.now();
+    },
+
+    /**
+     * Moves an item by delta
+     */
+    _moveItemBy(item, dx, dy) {
+        if (item.tool === 'pen' || item.tool === 'eraser') {
+            item.pts.forEach(p => { p.x += dx; p.y += dy; });
+        } else {
+            item.x += dx;
+            item.y += dy;
+        }
+        item.lastMod = Date.now();
     },
 
     // =============================================
@@ -1655,5 +2333,167 @@ export const ColorRmInput = {
         if (item && item.tool === 'text' && !item.locked) {
             this._showInlineTextEditor({ x: item.x, y: item.y }, item, idx);
         }
+    },
+
+    // =============================================
+    // GROUP / UNGROUP
+    // =============================================
+
+    /**
+     * Groups selected items into a single group object
+     */
+    groupSelected() {
+        if (this.state.selection.length < 2) {
+            this.ui.showToast('Select at least 2 items to group');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+        const history = img.history;
+
+        // Sort selection by index (ascending) to maintain z-order
+        const sortedSelection = [...this.state.selection].sort((a, b) => a - b);
+
+        // Collect items to group
+        const itemsToGroup = sortedSelection.map(i => JSON.parse(JSON.stringify(history[i])));
+
+        // Calculate combined bounding box
+        const bounds = this._getGroupBounds(itemsToGroup);
+
+        // Create group object
+        const groupObj = {
+            id: Date.now() + Math.random(),
+            lastMod: Date.now(),
+            tool: 'group',
+            x: bounds.minX,
+            y: bounds.minY,
+            w: bounds.w,
+            h: bounds.h,
+            children: itemsToGroup,
+            deleted: false,
+            locked: false
+        };
+
+        // Mark original items as deleted (we keep them for undo purposes)
+        sortedSelection.forEach(i => {
+            history[i].deleted = true;
+            history[i].lastMod = Date.now();
+        });
+
+        // Add group to history
+        history.push(groupObj);
+
+        // Select the new group
+        this.state.selection = [history.length - 1];
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+
+        // Sync with liveblocks
+        if (this.liveSync) {
+            sortedSelection.forEach(i => {
+                this.liveSync.updateStroke(this.state.idx, history[i]);
+            });
+            this.liveSync.addStroke(this.state.idx, groupObj);
+        }
+
+        this.ui.showToast(`Grouped ${itemsToGroup.length} items`);
+    },
+
+    /**
+     * Ungroups the selected group back into individual items
+     */
+    ungroupSelected() {
+        if (this.state.selection.length !== 1) {
+            this.ui.showToast('Select a single group to ungroup');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+        const history = img.history;
+        const groupIdx = this.state.selection[0];
+        const groupObj = history[groupIdx];
+
+        if (!groupObj || groupObj.tool !== 'group') {
+            this.ui.showToast('Selected item is not a group');
+            return;
+        }
+
+        // Calculate offset from original group position
+        const originalBounds = this._getGroupBounds(groupObj.children);
+        const dx = groupObj.x - originalBounds.minX;
+        const dy = groupObj.y - originalBounds.minY;
+
+        // Extract children and add as new items
+        const newIndices = [];
+        groupObj.children.forEach(child => {
+            // Apply any offset from group movement
+            const newItem = JSON.parse(JSON.stringify(child));
+            newItem.id = Date.now() + Math.random();
+            newItem.lastMod = Date.now();
+            newItem.deleted = false;
+
+            // Apply offset based on tool type
+            if (newItem.tool === 'pen' || newItem.tool === 'eraser') {
+                if (newItem.pts) {
+                    newItem.pts.forEach(p => {
+                        p.x += dx;
+                        p.y += dy;
+                    });
+                }
+            } else {
+                newItem.x += dx;
+                newItem.y += dy;
+            }
+
+            history.push(newItem);
+            newIndices.push(history.length - 1);
+        });
+
+        // Mark group as deleted
+        groupObj.deleted = true;
+        groupObj.lastMod = Date.now();
+
+        // Select the ungrouped items
+        this.state.selection = newIndices;
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+
+        // Sync with liveblocks
+        if (this.liveSync) {
+            this.liveSync.updateStroke(this.state.idx, groupObj);
+            newIndices.forEach(i => {
+                this.liveSync.addStroke(this.state.idx, history[i]);
+            });
+        }
+
+        this.ui.showToast(`Ungrouped ${groupObj.children.length} items`);
+    },
+
+    /**
+     * Gets combined bounding box for an array of items
+     */
+    _getGroupBounds(items) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        items.forEach(item => {
+            const bounds = this._getItemBounds(item);
+            minX = Math.min(minX, bounds.minX);
+            minY = Math.min(minY, bounds.minY);
+            maxX = Math.max(maxX, bounds.maxX);
+            maxY = Math.max(maxY, bounds.maxY);
+        });
+
+        return {
+            minX,
+            minY,
+            maxX,
+            maxY,
+            w: maxX - minX,
+            h: maxY - minY
+        };
     }
 };

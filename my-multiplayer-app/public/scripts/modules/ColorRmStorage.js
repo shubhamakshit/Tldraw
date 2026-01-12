@@ -29,7 +29,14 @@ export const ColorRmStorage = {
                 shapeWidth: this.state.shapeWidth,
                 bookmarks: this.state.bookmarks,
                 clipboardBox: this.state.clipboardBox,
-                showCursors: this.state.showCursors
+                showCursors: this.state.showCursors,
+                // SOTA preferences
+                eraserType: this.state.eraserType,
+                eraserOptions: this.state.eraserOptions,
+                lassoOptions: this.state.lassoOptions,
+                stabilization: this.state.stabilization,
+                holdToShape: this.state.holdToShape,
+                spenEngineEnabled: this.state.spenEngineEnabled
             };
             this.dbPut('sessions', s);
             if (this.registry) this.registry.upsert(s);

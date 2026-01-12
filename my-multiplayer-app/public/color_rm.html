@@ -111,6 +111,16 @@
         .viewport { flex: 1; background: #000; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; }
         canvas { max-width: 98%; max-height: 98%; box-shadow: 0 0 0 1px #222; background-color: #000; }
 
+        /* Infinite Canvas Mode - seamless fullscreen display */
+        .viewport.infinite-canvas-mode { align-items: stretch; justify-content: stretch; }
+        .viewport.infinite-canvas-mode canvas {
+            max-width: 100% !important;
+            max-height: 100% !important;
+            width: 100% !important;
+            height: 100% !important;
+            box-shadow: none;
+        }
+
         /* Split View */
         .split-view-container { display: flex; flex-direction: column; flex: 1; overflow: hidden; background: var(--border); position: relative; }
         .split-view-container > div:first-child { display: flex; flex: 1; overflow: hidden; gap: 1px; }
@@ -502,6 +512,30 @@
             background: rgba(139, 92, 246, 0.2);
         }
 
+        /* Template tab insert position buttons */
+        .insert-pos-btn-template, .insert-pos-btn-infinite {
+            flex: 1;
+            padding: 12px;
+            background: var(--bg);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            color: white;
+            transition: all 0.2s;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .insert-pos-btn-template:hover, .insert-pos-btn-infinite:hover {
+            border-color: #8b5cf6;
+        }
+        .insert-pos-btn-template.active, .insert-pos-btn-infinite.active {
+            border-color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.2);
+        }
+
         .template-btn {
             padding: 0;
             background: var(--bg);
@@ -694,16 +728,52 @@
                         <input type="color" id="exFooterColor" value="#333333" class="opt-input" style="padding:0; width:40px; height:26px;">
                     </div>
                 </div>
+                <div style="margin-top:10px; background:rgba(255,255,255,0.05); padding:10px; border-radius:6px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="font-weight:600; font-size:0.9rem;">Highest Quality Export</span>
+                            <span style="font-size:0.7rem; color:#888; display:block;">Full resolution, uncompressed (larger files)</span>
+                        </div>
+                        <label class="switch" style="transform:scale(0.8)"><input type="checkbox" id="exHiQuality"><span class="slider-switch"></span></label>
+                    </div>
+                </div>
+
+                <div style="margin-top:10px; background:rgba(255,255,255,0.05); padding:10px; border-radius:6px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="font-weight:600; font-size:0.9rem;">Include Background</span>
+                            <span style="font-size:0.7rem; color:#888; display:block;">Export with page background (infinite/custom pages)</span>
+                        </div>
+                        <label class="switch" style="transform:scale(0.8)"><input type="checkbox" id="exIncludeBackground" checked><span class="slider-switch"></span></label>
+                    </div>
+                </div>
+
+                <div style="margin-top:10px; background:rgba(255,255,255,0.05); padding:10px; border-radius:6px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="font-weight:600; font-size:0.9rem;">Export as Vector (SVG)</span>
+                            <span style="font-size:0.7rem; color:#888; display:block;">Strokes remain editable, crisp at any size</span>
+                        </div>
+                        <label class="switch" style="transform:scale(0.8)"><input type="checkbox" id="exVectorExport"><span class="slider-switch"></span></label>
+                    </div>
+                </div>
                 <p style="font-size:0.8rem; color:#888; text-align:center; margin-top: 15px;">Content will be scaled to fit a standard A4 page with headers/footers.</p>
             </div>
 
-            <button class="btn btn-primary" style="margin-top:auto; justify-content:center;" onclick="App.processExport()">Download PDF</button>
+            <div style="display:flex; gap:8px; margin-top:auto;">
+                <button class="btn btn-primary" style="flex:1; justify-content:center;" onclick="App.processExport()">Download PDF</button>
+                <button class="btn" style="justify-content:center; background:var(--bg-tertiary); border:1px solid var(--border);" onclick="App.exportAsSVG()" title="Export current page as SVG (vector)">
+                    <i class="bi bi-filetype-svg"></i> SVG
+                </button>
+            </div>
         </div>
     </div>
 
     <!-- Context Menu -->
     <div id="contextToolbar" class="context-toolbar">
         <button class="ctx-btn" id="ctxEditText" title="Edit Text" onclick="App.editSelectedText()" style="display:none;"><i class="bi bi-pencil"></i></button>
+        <button class="ctx-btn" id="ctxGroup" title="Group (Ctrl+G)" onclick="App.groupSelected()" style="display:none;"><i class="bi bi-collection"></i></button>
+        <button class="ctx-btn" id="ctxUngroup" title="Ungroup (Ctrl+Shift+G)" onclick="App.ungroupSelected()" style="display:none;"><i class="bi bi-collection-fill"></i></button>
         <button class="ctx-btn" title="Border/Stroke Color" onclick="App.openPicker('selectionStroke')"><i class="bi bi-circle"></i></button>
         <button class="ctx-btn" title="Fill Color" onclick="App.openPicker('selectionFill')"><i class="bi bi-circle-fill"></i></button>
         <div class="ctx-divider"></div>
@@ -716,6 +786,8 @@
                 <div class="ctx-row" onclick="App.copySelected()"><i class="bi bi-clipboard"></i> Copy</div>
                 <div class="ctx-row" onclick="App.copySelected(true)"><i class="bi bi-scissors"></i> Cut</div>
                 <div class="ctx-row" onclick="App.lockSelected()"><i class="bi bi-lock"></i> Lock</div>
+                <div class="ctx-row" id="ctxGroupMenu" onclick="App.groupSelected()" style="display:none;"><i class="bi bi-collection"></i> Group</div>
+                <div class="ctx-row" id="ctxUngroupMenu" onclick="App.ungroupSelected()" style="display:none;"><i class="bi bi-collection-fill"></i> Ungroup</div>
             </div>
         </div>
     </div>
@@ -770,6 +842,7 @@
         <div style="display:flex; gap:12px;">
             <button class="btn btn-icon" title="Undo (Ctrl+Z)" onclick="window.App?.undo()" style="background:transparent; border:none;"><i class="bi bi-arrow-counterclockwise"></i></button>
             <button class="btn btn-icon" title="Redo (Ctrl+Shift+Z)" onclick="window.App?.redo()" style="background:transparent; border:none;"><i class="bi bi-arrow-clockwise"></i></button>
+            <button class="btn btn-icon" title="Keyboard Shortcuts (?)" onclick="window.App?.showShortcutsHelp()" style="background:transparent; border:none;"><i class="bi bi-keyboard"></i></button>
             <div style="width:1px; height:24px; background:#333; margin:0 4px;"></div>
             <button class="btn" onclick="window.UI?.showDashboard()" style="background:transparent; border:1px solid #333; font-weight:600;">Projects</button>
             <button class="btn" id="splitViewToggle" onclick="window.App?.toggleSplitView()" style="background:transparent; border:1px solid #333; font-weight:600;" title="Toggle Split View Mode"><i class="bi bi-diagram-2"></i> Split</button>
@@ -835,7 +908,53 @@
                             </label>
                         </div>
                     </div>
-                    
+
+                    <!-- Lasso Options Panel -->
+                    <div id="lassoOptions" style="display:none; padding:10px; background:rgba(0,0,0,0.2); border-radius:8px; margin-top:8px;">
+                        <div style="margin-bottom:8px;">
+                            <span style="font-size:0.75rem; color:#888; font-weight:600; text-transform:uppercase;">Select Types</span>
+                        </div>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="lassoScribble" checked onchange="App.setLassoOption('scribble', this.checked)"> Scribble
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="lassoText" checked onchange="App.setLassoOption('text', this.checked)"> Text
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="lassoShapes" checked onchange="App.setLassoOption('shapes', this.checked)"> Shapes
+                            </label>
+                            <label style="display:flex; align-items:center; gap:4px; font-size:0.75rem; color:#888;">
+                                <input type="checkbox" id="lassoImages" checked onchange="App.setLassoOption('images', this.checked)"> Images
+                            </label>
+                        </div>
+                        <!-- SOTA Alignment Tools -->
+                        <div style="border-top:1px solid #333; padding-top:10px; margin-top:5px;">
+                            <span style="font-size:0.75rem; color:#888; font-weight:600; text-transform:uppercase; display:block; margin-bottom:8px;">Align Selected</span>
+                            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" onclick="App.alignSelection('left')" title="Align Left" style="padding:6px 8px;"><i class="bi bi-align-start"></i></button>
+                                <button class="btn btn-sm" onclick="App.alignSelection('center')" title="Align Center" style="padding:6px 8px;"><i class="bi bi-align-center"></i></button>
+                                <button class="btn btn-sm" onclick="App.alignSelection('right')" title="Align Right" style="padding:6px 8px;"><i class="bi bi-align-end"></i></button>
+                                <div style="width:1px; height:24px; background:#333;"></div>
+                                <button class="btn btn-sm" onclick="App.alignSelection('top')" title="Align Top" style="padding:6px 8px;"><i class="bi bi-align-top"></i></button>
+                                <button class="btn btn-sm" onclick="App.alignSelection('middle')" title="Align Middle" style="padding:6px 8px;"><i class="bi bi-align-middle"></i></button>
+                                <button class="btn btn-sm" onclick="App.alignSelection('bottom')" title="Align Bottom" style="padding:6px 8px;"><i class="bi bi-align-bottom"></i></button>
+                            </div>
+                            <span style="font-size:0.75rem; color:#888; font-weight:600; text-transform:uppercase; display:block; margin:10px 0 8px 0;">Distribute</span>
+                            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" onclick="App.distributeSelection('horizontal')" title="Distribute Horizontally" style="padding:6px 8px;"><i class="bi bi-distribute-horizontal"></i></button>
+                                <button class="btn btn-sm" onclick="App.distributeSelection('vertical')" title="Distribute Vertically" style="padding:6px 8px;"><i class="bi bi-distribute-vertical"></i></button>
+                            </div>
+                            <span style="font-size:0.75rem; color:#888; font-weight:600; text-transform:uppercase; display:block; margin:10px 0 8px 0;">Layer Order</span>
+                            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                                <button class="btn btn-sm" onclick="App.changeLayerOrder('front')" title="Bring to Front" style="padding:6px 8px;"><i class="bi bi-front"></i></button>
+                                <button class="btn btn-sm" onclick="App.changeLayerOrder('forward')" title="Bring Forward" style="padding:6px 8px;"><i class="bi bi-chevron-up"></i></button>
+                                <button class="btn btn-sm" onclick="App.changeLayerOrder('backward')" title="Send Backward" style="padding:6px 8px;"><i class="bi bi-chevron-down"></i></button>
+                                <button class="btn btn-sm" onclick="App.changeLayerOrder('back')" title="Send to Back" style="padding:6px 8px;"><i class="bi bi-back"></i></button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; padding:12px; border:1px solid #222; border-radius:6px; background:#0a0a0a;">
                         <span style="font-size:0.75rem; color:#888; font-weight:600; text-transform:uppercase;">Preview</span>
                         <label class="switch">
@@ -1116,6 +1235,18 @@
 
                         <!-- Template Tab -->
                         <div id="pageModalTemplate" class="page-modal-content" style="display:none;">
+                            <!-- Insert Position (unified with blank tab) -->
+                            <div style="margin-bottom:20px;">
+                                <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:10px; font-weight:600;">INSERT POSITION</label>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="insert-pos-btn-template active" data-pos="end" onclick="window.App.selectInsertPosition('end', this, 'template')">
+                                        <i class="bi bi-box-arrow-in-down"></i> At End
+                                    </button>
+                                    <button class="insert-pos-btn-template" data-pos="after" onclick="window.App.selectInsertPosition('after', this, 'template')">
+                                        <i class="bi bi-box-arrow-in-right"></i> After Current
+                                    </button>
+                                </div>
+                            </div>
                             <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:12px;">
                                 <button class="template-btn" onclick="window.App.createPageFromModal('white')">
                                     <div class="template-preview" style="background:#ffffff;"></div>
@@ -1133,7 +1264,103 @@
                                     <div class="template-preview" style="background:radial-gradient(circle, #ccc 1px, transparent 1px); background-size:12px 12px; background-color:#ffffff;"></div>
                                     <div class="template-label">Dotted Grid</div>
                                 </button>
+                                <button class="template-btn" onclick="window.App.showInfiniteCanvasOptions()" style="grid-column: span 2;">
+                                    <div class="template-preview" style="background:linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); position:relative; overflow:hidden;">
+                                        <div style="position:absolute; inset:0; background:radial-gradient(circle at 30% 40%, rgba(99,102,241,0.3) 0%, transparent 40%), radial-gradient(circle at 70% 60%, rgba(139,92,246,0.3) 0%, transparent 40%);"></div>
+                                        <i class="bi bi-infinity" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:1.5rem; color:rgba(255,255,255,0.6);"></i>
+                                    </div>
+                                    <div class="template-label">Infinite Canvas <span style="font-size:0.7rem; color:#8b5cf6; font-weight:normal;">∞ Expand as you draw</span></div>
+                                </button>
                             </div>
+                        </div>
+
+                        <!-- Infinite Canvas Options Panel (hidden by default) -->
+                        <div id="infiniteCanvasOptions" class="page-modal-content" style="display:none;">
+                            <div style="margin-bottom:20px;">
+                                <button class="btn" onclick="window.App.switchPageModalTab('template')" style="padding:6px 12px; font-size:0.85rem;">
+                                    <i class="bi bi-arrow-left"></i> Back to Templates
+                                </button>
+                            </div>
+
+                            <h4 style="color:white; margin-bottom:15px; font-size:1rem;">
+                                <i class="bi bi-infinity" style="color:#8b5cf6;"></i> Infinite Canvas Options
+                            </h4>
+
+                            <!-- Insert Position (unified with other tabs) -->
+                            <div style="margin-bottom:20px;">
+                                <label style="color:#888; font-size:0.85rem; display:block; margin-bottom:8px;">Insert Position</label>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="insert-pos-btn-infinite active" data-pos="end" onclick="window.App.selectInsertPosition('end', this, 'infinite')" style="flex:1; padding:10px; border:2px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; color:white; font-size:0.85rem;">
+                                        <i class="bi bi-box-arrow-in-down"></i> At End
+                                    </button>
+                                    <button class="insert-pos-btn-infinite" data-pos="after" onclick="window.App.selectInsertPosition('after', this, 'infinite')" style="flex:1; padding:10px; border:2px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; color:white; font-size:0.85rem;">
+                                        <i class="bi bi-box-arrow-in-right"></i> After Current
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Background Style -->
+                            <div style="margin-bottom:20px;">
+                                <label style="color:#888; font-size:0.85rem; display:block; margin-bottom:8px;">Background Style</label>
+                                <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+                                    <button class="infinite-bg-btn active" data-bg="dark" onclick="window.App.selectInfiniteBg('dark', this)" style="padding:12px 8px; border:2px solid var(--border); border-radius:8px; background:linear-gradient(135deg, #1a1a2e, #0f3460); cursor:pointer; transition:all 0.2s;">
+                                        <div style="font-size:0.75rem; color:white;">Dark</div>
+                                    </button>
+                                    <button class="infinite-bg-btn" data-bg="light" onclick="window.App.selectInfiniteBg('light', this)" style="padding:12px 8px; border:2px solid var(--border); border-radius:8px; background:linear-gradient(135deg, #f8fafc, #e2e8f0); cursor:pointer; transition:all 0.2s;">
+                                        <div style="font-size:0.75rem; color:#333;">Light</div>
+                                    </button>
+                                    <button class="infinite-bg-btn" data-bg="custom" onclick="window.App.selectInfiniteBg('custom', this)" style="padding:12px 8px; border:2px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; transition:all 0.2s;">
+                                        <div style="font-size:0.75rem; color:white;">Custom</div>
+                                    </button>
+                                </div>
+                                <div id="infiniteCustomBgPicker" style="display:none; margin-top:10px;">
+                                    <div id="iroBgColorWheel" style="display:flex; justify-content:center;"></div>
+                                    <input type="hidden" id="infiniteBgColor" value="#1a1a2e">
+                                </div>
+                            </div>
+
+                            <!-- Grid Style -->
+                            <div style="margin-bottom:20px;">
+                                <label style="color:#888; font-size:0.85rem; display:block; margin-bottom:8px;">Grid Pattern</label>
+                                <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
+                                    <button class="infinite-grid-btn active" data-grid="subtle" onclick="window.App.selectInfiniteGrid('subtle', this)" style="padding:10px 6px; border:2px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; transition:all 0.2s;">
+                                        <i class="bi bi-grid" style="font-size:1rem; color:#666;"></i>
+                                        <div style="font-size:0.65rem; color:#888; margin-top:4px;">Subtle</div>
+                                    </button>
+                                    <button class="infinite-grid-btn" data-grid="dots" onclick="window.App.selectInfiniteGrid('dots', this)" style="padding:10px 6px; border:2px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; transition:all 0.2s;">
+                                        <i class="bi bi-grid-3x3-gap" style="font-size:1rem; color:#666;"></i>
+                                        <div style="font-size:0.65rem; color:#888; margin-top:4px;">Dots</div>
+                                    </button>
+                                    <button class="infinite-grid-btn" data-grid="lines" onclick="window.App.selectInfiniteGrid('lines', this)" style="padding:10px 6px; border:2px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; transition:all 0.2s;">
+                                        <i class="bi bi-border-all" style="font-size:1rem; color:#666;"></i>
+                                        <div style="font-size:0.65rem; color:#888; margin-top:4px;">Lines</div>
+                                    </button>
+                                    <button class="infinite-grid-btn" data-grid="none" onclick="window.App.selectInfiniteGrid('none', this)" style="padding:10px 6px; border:2px solid var(--border); border-radius:8px; background:var(--bg); cursor:pointer; transition:all 0.2s;">
+                                        <i class="bi bi-x-lg" style="font-size:1rem; color:#666;"></i>
+                                        <div style="font-size:0.65rem; color:#888; margin-top:4px;">None</div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Grid Color -->
+                            <div style="margin-bottom:20px;">
+                                <label style="color:#888; font-size:0.85rem; display:block; margin-bottom:8px;">Grid Color & Opacity</label>
+                                <div style="display:flex; align-items:flex-start; gap:15px;">
+                                    <div id="iroGridColorWheel"></div>
+                                    <div style="flex:1; padding-top:10px;">
+                                        <input type="hidden" id="infiniteGridColor" value="#ffffff">
+                                        <div id="gridColorPreview" style="width:40px; height:40px; border-radius:8px; border:2px solid var(--border); background:#ffffff; margin-bottom:10px;"></div>
+                                        <label style="font-size:0.75rem; color:#666; display:block; margin-bottom:4px;">Opacity</label>
+                                        <input type="range" id="infiniteGridOpacity" min="1" max="30" value="5" style="width:100%;">
+                                        <span id="infiniteGridOpacityLabel" style="color:#666; font-size:0.75rem;">5%</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Create Button -->
+                            <button class="btn" onclick="window.App.createInfiniteCanvasWithOptions()" style="width:100%; justify-content:center; background:linear-gradient(135deg, #6366f1, #8b5cf6); color:white; font-weight:600; padding:14px;">
+                                <i class="bi bi-plus-lg"></i> Create Infinite Canvas
+                            </button>
                         </div>
 
                         <!-- Import Tab -->
@@ -1291,6 +1518,15 @@
                              <option value="zip">ZIP Archive (Images)</option>
                          </select>
                     </div>
+                    <div style="margin-bottom:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <span style="font-size:0.8rem; color:#aaa">Highest Quality</span>
+                                <span style="font-size:0.65rem; color:#666; display:block;">PNG @ full resolution (larger files)</span>
+                            </div>
+                            <label class="switch" style="transform:scale(0.7)"><input type="checkbox" id="boxHiQuality"><span class="slider-switch"></span></label>
+                        </div>
+                    </div>
                     <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="window.App.generateBoxImage()">Export Sheet</button>
                 </div>
             </div>
@@ -1402,8 +1638,9 @@
 
                 <!-- Zoom Controls -->
                 <button class="btn btn-icon" style="border-radius:4px; background:transparent; border:none;" onclick="App.zoomOut()" title="Zoom Out (Ctrl+-)"><i class="bi bi-dash-lg" style="font-size:0.8rem"></i></button>
-                <button id="zoomBtn" class="btn btn-sm" style="background:transparent; border:none; font-family:monospace; font-size:0.75rem; min-width:50px; color:#888;" onclick="App.resetZoom()" title="Reset Zoom">100%</button>
+                <button id="zoomBtn" class="btn btn-sm" style="background:transparent; border:none; font-family:monospace; font-size:0.75rem; min-width:50px; color:#888;" onclick="App.resetZoom()" ondblclick="App.fitToScreen()" title="Click: Reset | Double-click: Fit">100%</button>
                 <button class="btn btn-icon" style="border-radius:4px; background:transparent; border:none;" onclick="App.zoomIn()" title="Zoom In (Ctrl++)"><i class="bi bi-plus-lg" style="font-size:0.8rem"></i></button>
+                <button class="btn btn-icon" style="border-radius:4px; background:transparent; border:none;" onclick="App.fitToScreen()" title="Fit to Screen (F)"><i class="bi bi-arrows-fullscreen" style="font-size:0.7rem"></i></button>
 
                 <div style="width:1px; height:16px; background:#333;"></div>
                 

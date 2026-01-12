@@ -12,6 +12,29 @@ export const UI = {
         const em = document.getElementById('exportModal');
         if (em) em.style.display='flex';
         if (window.App && window.App.renderDlGrid) window.App.renderDlGrid();
+
+        // Load persisted export preferences
+        try {
+            const prefs = JSON.parse(localStorage.getItem('colorRm_exportPrefs') || '{}');
+            const exHiQuality = document.getElementById('exHiQuality');
+            const exIncludeBackground = document.getElementById('exIncludeBackground');
+            const exVectorExport = document.getElementById('exVectorExport');
+
+            if (exHiQuality && prefs.hiQuality !== undefined) {
+                exHiQuality.checked = prefs.hiQuality;
+            }
+            if (exIncludeBackground && prefs.includeBackground !== undefined) {
+                exIncludeBackground.checked = prefs.includeBackground;
+            } else if (exIncludeBackground) {
+                // Default to checked for infinite/custom pages
+                exIncludeBackground.checked = true;
+            }
+            if (exVectorExport && prefs.vectorExport !== undefined) {
+                exVectorExport.checked = prefs.vectorExport;
+            }
+        } catch (e) {
+            console.log('Could not load export preferences');
+        }
     },
     toggleLoader: (show, text) => {
         const loader = document.getElementById('loader');

@@ -3,6 +3,244 @@ export const ColorRmRenderer = {
     invalidateCache() {
         this.cache.isDirty = true;
         this.cache.hiResCache = null; // Clear high-res cache
+        this._previewCache = null; // Clear preview cache
+        // Also invalidate performance manager caches
+        if (this.performanceManager) {
+            this.performanceManager.invalidateAll();
+        }
+    },
+
+    // Invalidate only the preview cache (call when colors/strict change)
+    invalidatePreviewCache() {
+        this._previewCache = null;
+        this._previewCacheKey = null;
+    },
+
+    // Render vector grid for infinite canvas (high DPI support)
+    _renderVectorGrid(ctx, currentPage) {
+        if (!currentPage || !currentPage.isInfinite || !currentPage.vectorGrid) return;
+
+        const grid = currentPage.vectorGrid;
+        const bounds = currentPage.bounds || { minX: 0, minY: 0, maxX: 4000, maxY: 3000 };
+        const gridSize = grid.gridSize || 100;
+        const zoom = this.state.zoom;
+        const pan = this.state.pan;
+
+        // Calculate visible area in world coordinates
+        const viewW = this.state.viewW / zoom;
+        const viewH = this.state.viewH / zoom;
+        const worldX = -pan.x / zoom;
+        const worldY = -pan.y / zoom;
+
+        // Calculate grid bounds (only render visible grids)
+        const startX = Math.floor(worldX / gridSize) * gridSize;
+        const startY = Math.floor(worldY / gridSize) * gridSize;
+        const endX = Math.ceil((worldX + viewW) / gridSize) * gridSize;
+        const endY = Math.ceil((worldY + viewH) / gridSize) * gridSize;
+
+        ctx.save();
+
+        // Parse grid color with opacity
+        const gridColorHex = grid.gridColor || '#ffffff';
+        const r = parseInt(gridColorHex.slice(1, 3), 16) || 255;
+        const g = parseInt(gridColorHex.slice(3, 5), 16) || 255;
+        const b = parseInt(gridColorHex.slice(5, 7), 16) || 255;
+        const opacity = grid.gridOpacity || 0.05;
+        const gridColorRgba = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+
+        if (grid.gridStyle === 'subtle' || grid.gridStyle === 'lines') {
+            ctx.strokeStyle = gridColorRgba;
+            // Scale line width based on zoom for consistent appearance
+            ctx.lineWidth = (grid.gridStyle === 'lines' ? 1 : 0.5) / zoom;
+
+            ctx.beginPath();
+
+            // Vertical lines
+            for (let x = startX; x <= endX; x += gridSize) {
+                ctx.moveTo(x, startY);
+                ctx.lineTo(x, endY);
+            }
+            // Horizontal lines
+            for (let y = startY; y <= endY; y += gridSize) {
+                ctx.moveTo(startX, y);
+                ctx.lineTo(endX, y);
+            }
+
+            ctx.stroke();
+        } else if (grid.gridStyle === 'dots') {
+            ctx.fillStyle = gridColorRgba;
+            const dotSpacing = 50;
+            // Scale dot size based on zoom
+            const dotSize = Math.max(1, 2 / zoom);
+
+            const dotStartX = Math.floor(worldX / dotSpacing) * dotSpacing;
+            const dotStartY = Math.floor(worldY / dotSpacing) * dotSpacing;
+            const dotEndX = Math.ceil((worldX + viewW) / dotSpacing) * dotSpacing;
+            const dotEndY = Math.ceil((worldY + viewH) / dotSpacing) * dotSpacing;
+
+            for (let x = dotStartX; x < dotEndX; x += dotSpacing) {
+                for (let y = dotStartY; y < dotEndY; y += dotSpacing) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, dotSize, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Draw center crosshair (at origin 0,0)
+        ctx.strokeStyle = grid.bgStyle === 'light' ? 'rgba(99, 102, 241, 0.3)' : 'rgba(139, 92, 246, 0.2)';
+        ctx.lineWidth = 2 / zoom;
+
+        ctx.beginPath();
+        ctx.moveTo(-50, 0);
+        ctx.lineTo(50, 0);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(0, -50);
+        ctx.lineTo(0, 50);
+        ctx.stroke();
+
+        ctx.restore();
+    },
+
+    // Render complete vector background for infinite canvas (background fill + grid)
+    // This provides crisp rendering at any zoom level
+    _renderVectorBackground(ctx, currentPage) {
+        if (!currentPage || !currentPage.isInfinite || !currentPage.vectorGrid) return;
+
+        const grid = currentPage.vectorGrid;
+        const bounds = currentPage.bounds || { minX: 0, minY: 0, maxX: 4000, maxY: 3000 };
+        const zoom = this.state.zoom;
+        const pan = this.state.pan;
+
+        // Calculate visible area in world coordinates
+        const viewW = this.state.viewW / zoom;
+        const viewH = this.state.viewH / zoom;
+        const worldX = -pan.x / zoom;
+        const worldY = -pan.y / zoom;
+
+        // Expand visible area slightly for smoother panning
+        const padding = 100;
+        const visMinX = worldX - padding;
+        const visMinY = worldY - padding;
+        const visMaxX = worldX + viewW + padding;
+        const visMaxY = worldY + viewH + padding;
+
+        ctx.save();
+
+        // --- RENDER BACKGROUND FILL ---
+        // Use the visible area bounds for the background (slightly larger than viewport)
+        const bgMinX = Math.min(visMinX, bounds.minX);
+        const bgMinY = Math.min(visMinY, bounds.minY);
+        const bgMaxX = Math.max(visMaxX, bounds.maxX);
+        const bgMaxY = Math.max(visMaxY, bounds.maxY);
+
+        if (grid.bgStyle === 'dark') {
+            // Gradient background for dark theme
+            const gradW = bgMaxX - bgMinX;
+            const gradH = bgMaxY - bgMinY;
+            const gradient = ctx.createLinearGradient(bgMinX, bgMinY, bgMaxX, bgMaxY);
+            gradient.addColorStop(0, '#1a1a2e');
+            gradient.addColorStop(0.5, '#16213e');
+            gradient.addColorStop(1, '#0f3460');
+            ctx.fillStyle = gradient;
+        } else if (grid.bgStyle === 'light') {
+            // Gradient background for light theme
+            const gradient = ctx.createLinearGradient(bgMinX, bgMinY, bgMaxX, bgMaxY);
+            gradient.addColorStop(0, '#f8fafc');
+            gradient.addColorStop(0.5, '#f1f5f9');
+            gradient.addColorStop(1, '#e2e8f0');
+            ctx.fillStyle = gradient;
+        } else {
+            // Custom solid color
+            ctx.fillStyle = grid.customBgColor || '#1a1a2e';
+        }
+
+        ctx.fillRect(bgMinX, bgMinY, bgMaxX - bgMinX, bgMaxY - bgMinY);
+
+        // --- RENDER GRID ---
+        const gridSize = grid.gridSize || 100;
+
+        // Calculate grid bounds (only render visible grids)
+        const startX = Math.floor(visMinX / gridSize) * gridSize;
+        const startY = Math.floor(visMinY / gridSize) * gridSize;
+        const endX = Math.ceil(visMaxX / gridSize) * gridSize;
+        const endY = Math.ceil(visMaxY / gridSize) * gridSize;
+
+        // Parse grid color with opacity
+        const gridColorHex = grid.gridColor || '#ffffff';
+        const r = parseInt(gridColorHex.slice(1, 3), 16) || 255;
+        const g = parseInt(gridColorHex.slice(3, 5), 16) || 255;
+        const b = parseInt(gridColorHex.slice(5, 7), 16) || 255;
+        const opacity = grid.gridOpacity || 0.05;
+        const gridColorRgba = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+
+        if (grid.gridStyle === 'subtle' || grid.gridStyle === 'lines') {
+            ctx.strokeStyle = gridColorRgba;
+            // Scale line width based on zoom for consistent appearance
+            ctx.lineWidth = (grid.gridStyle === 'lines' ? 1 : 0.5) / zoom;
+
+            ctx.beginPath();
+
+            // Vertical lines
+            for (let x = startX; x <= endX; x += gridSize) {
+                ctx.moveTo(x, startY);
+                ctx.lineTo(x, endY);
+            }
+            // Horizontal lines
+            for (let y = startY; y <= endY; y += gridSize) {
+                ctx.moveTo(startX, y);
+                ctx.lineTo(endX, y);
+            }
+
+            ctx.stroke();
+        } else if (grid.gridStyle === 'dots') {
+            ctx.fillStyle = gridColorRgba;
+            const dotSpacing = 50;
+            // Scale dot size based on zoom
+            const dotSize = Math.max(1, 2 / zoom);
+
+            const dotStartX = Math.floor(visMinX / dotSpacing) * dotSpacing;
+            const dotStartY = Math.floor(visMinY / dotSpacing) * dotSpacing;
+            const dotEndX = Math.ceil(visMaxX / dotSpacing) * dotSpacing;
+            const dotEndY = Math.ceil(visMaxY / dotSpacing) * dotSpacing;
+
+            for (let x = dotStartX; x < dotEndX; x += dotSpacing) {
+                for (let y = dotStartY; y < dotEndY; y += dotSpacing) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, dotSize, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Draw center crosshair (at origin 0,0)
+        ctx.strokeStyle = grid.bgStyle === 'light' ? 'rgba(99, 102, 241, 0.3)' : 'rgba(139, 92, 246, 0.2)';
+        ctx.lineWidth = 2 / zoom;
+
+        ctx.beginPath();
+        ctx.moveTo(-50, 0);
+        ctx.lineTo(50, 0);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(0, -50);
+        ctx.lineTo(0, 50);
+        ctx.stroke();
+
+        ctx.restore();
+    },
+
+    // Request a debounced preview render
+    requestPreviewRender() {
+        if (this._previewDebounceTimer) {
+            clearTimeout(this._previewDebounceTimer);
+        }
+        this._previewDebounceTimer = setTimeout(() => {
+            this._previewCache = null; // Force rebuild
+            this.render();
+        }, 50); // 50ms debounce for preview updates
     },
 
     // Request a render on next animation frame (throttled to 60fps)
@@ -27,6 +265,37 @@ export const ColorRmRenderer = {
 
         this._strokeCacheThreshold = isLowEnd ? 50 : 100;
         return this._strokeCacheThreshold;
+    },
+
+    // Build or update spatial index for infinite canvas
+    _ensureSpatialIndex(currentImg) {
+        if (!currentImg?.isInfinite || !this.performanceManager) return;
+
+        const history = currentImg.history?.filter(st => !st.deleted) || [];
+
+        // Check if we need to rebuild the index
+        const currentHistoryLength = history.length;
+        if (this._lastIndexedHistoryLength === currentHistoryLength &&
+            this._lastIndexedPageId === currentImg.pageId) {
+            return; // Index is up to date
+        }
+
+        // Build spatial index with current bounds
+        const bounds = currentImg.bounds || {
+            minX: 0, minY: 0,
+            maxX: this.state.viewW,
+            maxY: this.state.viewH
+        };
+
+        this.performanceManager.buildSpatialIndex(history, {
+            x: bounds.minX,
+            y: bounds.minY,
+            w: bounds.maxX - bounds.minX,
+            h: bounds.maxY - bounds.minY
+        });
+
+        this._lastIndexedHistoryLength = currentHistoryLength;
+        this._lastIndexedPageId = currentImg.pageId;
     },
 
     // Build high-resolution cache at current zoom level for idle state
@@ -87,39 +356,67 @@ export const ColorRmRenderer = {
 
         ctx.clearRect(0,0,c.width,c.height);
 
+        // Check if this is an infinite canvas page
+        const currentImg = this.state.images[this.state.idx];
+        const isInfiniteCanvas = currentImg?.isInfinite === true;
+
         try {
             ctx.save();
             ctx.translate(this.state.pan.x, this.state.pan.y);
             ctx.scale(this.state.zoom, this.state.zoom);
 
-            // Preview logic
-            if(this.state.previewOn || (this.tempHex && this.state.pickerMode==='remove')) {
+            // For infinite canvas, render vector background instead of bitmap for crispness
+            if (isInfiniteCanvas && currentImg.vectorGrid) {
+                this._renderVectorBackground(ctx, currentImg);
+            }
+            // Preview logic - with caching for performance
+            else if(this.state.previewOn || (this.tempHex && this.state.pickerMode==='remove')) {
                 let targets = this.state.colors.map(x=>x.lab);
                 if(this.tempHex) {
                     const i = parseInt(this.tempHex.slice(1), 16);
                     targets.push(this.rgbToLab((i>>16)&255, (i>>8)&255, i&255));
                 }
                 if(targets.length > 0) {
-                    const tmpC = document.createElement('canvas');
-                    tmpC.width = this.state.viewW;
-                    tmpC.height = this.state.viewH;
-                    const tmpCtx = tmpC.getContext('2d', {willReadFrequently: true});
-                    tmpCtx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
-                    const imgD = tmpCtx.getImageData(0, 0, this.state.viewW, this.state.viewH);
-                    const d = imgD.data;
-                    const lab = this.cache.lab;
-                    const sq = this.state.strict**2;
-                    for(let i=0, j=0; i<d.length; i+=4, j+=3) {
-                        if(d[i+3]===0) continue;
-                        const l=lab[j], a=lab[j+1], b=lab[j+2];
-                        let keep = false;
-                        for(let t of targets) {
-                            if(((l-t[0])**2 + (a-t[1])**2 + (b-t[2])**2) <= sq) { keep = true; break; }
+                    // Generate cache key based on colors, strict, and tempHex
+                    const cacheKey = JSON.stringify({
+                        colors: targets,
+                        strict: this.state.strict,
+                        tempHex: this.tempHex,
+                        viewW: this.state.viewW,
+                        viewH: this.state.viewH
+                    });
+
+                    // Use cached preview if available and valid
+                    if (this._previewCache && this._previewCacheKey === cacheKey) {
+                        ctx.drawImage(this._previewCache, 0, 0);
+                    } else {
+                        // Build preview canvas
+                        const tmpC = document.createElement('canvas');
+                        tmpC.width = this.state.viewW;
+                        tmpC.height = this.state.viewH;
+                        const tmpCtx = tmpC.getContext('2d', {willReadFrequently: true});
+                        tmpCtx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
+                        const imgD = tmpCtx.getImageData(0, 0, this.state.viewW, this.state.viewH);
+                        const d = imgD.data;
+                        const lab = this.cache.lab;
+                        const sq = this.state.strict**2;
+                        for(let i=0, j=0; i<d.length; i+=4, j+=3) {
+                            if(d[i+3]===0) continue;
+                            const l=lab[j], a=lab[j+1], b=lab[j+2];
+                            let keep = false;
+                            for(let t of targets) {
+                                if(((l-t[0])**2 + (a-t[1])**2 + (b-t[2])**2) <= sq) { keep = true; break; }
+                            }
+                            if(!keep) d[i+3] = 0;
                         }
-                        if(!keep) d[i+3] = 0;
+                        tmpCtx.putImageData(imgD, 0, 0);
+
+                        // Cache the result
+                        this._previewCache = tmpC;
+                        this._previewCacheKey = cacheKey;
+
+                        ctx.drawImage(tmpC, 0, 0);
                     }
-                    tmpCtx.putImageData(imgD, 0, 0);
-                    ctx.drawImage(tmpC, 0, 0);
                 } else {
                     ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
                 }
@@ -127,18 +424,51 @@ export const ColorRmRenderer = {
                 ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
             }
 
-            const currentImg = this.state.images[this.state.idx];
             const activeHistory = currentImg?.history?.filter(st => !st.deleted) || [];
 
             // HYBRID RENDERING: Use cache when idle, render live when interacting
             const isInteracting = this.isDragging || this.state.selection.length > 0;
             const cacheThreshold = this._getStrokeCacheThreshold();
 
-            if (isInteracting || activeHistory.length < cacheThreshold) {
+            // SOTA: Build/update spatial index for infinite canvas
+            if (isInfiniteCanvas) {
+                this._ensureSpatialIndex(currentImg);
+            }
+
+            // SOTA: Use optimized rendering for infinite canvas with many strokes
+            const useSOTARendering = isInfiniteCanvas &&
+                                      this.performanceManager &&
+                                      activeHistory.length > 100;
+
+            if (useSOTARendering) {
+                // SOTA OPTIMIZED RENDERING for infinite canvas
+                const viewport = { width: this.state.viewW, height: this.state.viewH };
+
+                // Query only visible strokes using quadtree
+                const visibleStrokes = this.performanceManager.queryVisible(
+                    viewport, this.state.zoom, this.state.pan
+                );
+
+                // Filter out selected strokes and apply LOD
+                visibleStrokes.forEach((st) => {
+                    const idx = activeHistory.indexOf(st);
+                    if (this.state.selection.includes(idx)) return;
+
+                    // Apply LOD simplification for zoomed-out views
+                    if (st.tool === 'pen' && st.pts) {
+                        const simplifiedPts = this.performanceManager.getSimplifiedPoints(st, this.state.zoom);
+                        this.renderObject(ctx, { ...st, pts: simplifiedPts }, 0, 0);
+                    } else {
+                        this.renderObject(ctx, st, 0, 0);
+                    }
+                });
+            } else if (isInteracting || activeHistory.length < cacheThreshold) {
                 // LIVE RENDERING: Always render strokes directly for crispness
                 // Used when drawing, selecting, or when stroke count is low
                 activeHistory.forEach((st, idx) => {
                     if (this.state.selection.includes(idx)) return;
+                    // Viewport culling for infinite canvas
+                    if (isInfiniteCanvas && st.tool === 'pen' && !this.isStrokeVisible(st)) return;
                     this.renderObject(ctx, st, 0, 0);
                 });
             } else {
@@ -156,6 +486,8 @@ export const ColorRmRenderer = {
                     // Fallback to live rendering
                     activeHistory.forEach((st, idx) => {
                         if (this.state.selection.includes(idx)) return;
+                        // Viewport culling for infinite canvas
+                        if (isInfiniteCanvas && st.tool === 'pen' && !this.isStrokeVisible(st)) return;
                         this.renderObject(ctx, st, 0, 0);
                     });
                 }
@@ -249,6 +581,23 @@ export const ColorRmRenderer = {
             ctx.translate(-cx, -cy);
         }
         ctx.translate(dx, dy);
+
+        // Handle group objects - render all children
+        if(st.tool === 'group') {
+            // Calculate offset from original children positions
+            const originalBounds = this._getGroupBounds ? this._getGroupBounds(st.children) : { minX: st.x, minY: st.y };
+            const groupDx = st.x - originalBounds.minX;
+            const groupDy = st.y - originalBounds.minY;
+
+            st.children.forEach(child => {
+                // Apply group offset to children
+                let childDx = groupDx;
+                let childDy = groupDy;
+                this.renderObject(ctx, child, childDx, childDy);
+            });
+            ctx.restore();
+            return;
+        }
 
         if(st.tool === 'text') {
             ctx.fillStyle = st.color;
@@ -390,6 +739,24 @@ export const ColorRmRenderer = {
                     hist[this.state.selection[0]].tool === 'text';
                 editTextBtn.style.display = hasTextSelected ? 'flex' : 'none';
             }
+
+            // Show/hide group/ungroup buttons based on selection
+            const groupBtn = this.getElement('ctxGroup');
+            const ungroupBtn = this.getElement('ctxUngroup');
+            const groupMenu = document.getElementById('ctxGroupMenu');
+            const ungroupMenu = document.getElementById('ctxUngroupMenu');
+
+            // Can group if 2+ non-group items selected
+            const canGroup = this.state.selection.length >= 2;
+            // Can ungroup if exactly 1 group is selected
+            const hasGroupSelected = this.state.selection.length === 1 &&
+                hist[this.state.selection[0]] &&
+                hist[this.state.selection[0]].tool === 'group';
+
+            if (groupBtn) groupBtn.style.display = canGroup ? 'flex' : 'none';
+            if (ungroupBtn) ungroupBtn.style.display = hasGroupSelected ? 'flex' : 'none';
+            if (groupMenu) groupMenu.style.display = canGroup ? 'block' : 'none';
+            if (ungroupMenu) ungroupMenu.style.display = hasGroupSelected ? 'block' : 'none';
         }
     },
 
@@ -405,6 +772,37 @@ export const ColorRmRenderer = {
             );
         }
         ctx.closePath();
+    },
+
+    // Helper to get combined bounding box for group children
+    _getGroupBounds(items) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        items.forEach(item => {
+            let bounds;
+            if (item.tool === 'pen' || item.tool === 'eraser') {
+                if (!item.pts || item.pts.length === 0) return;
+                let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
+                item.pts.forEach(p => {
+                    pMinX = Math.min(pMinX, p.x);
+                    pMinY = Math.min(pMinY, p.y);
+                    pMaxX = Math.max(pMaxX, p.x);
+                    pMaxY = Math.max(pMaxY, p.y);
+                });
+                bounds = { minX: pMinX, minY: pMinY, maxX: pMaxX, maxY: pMaxY };
+            } else {
+                let x = item.x, y = item.y, w = item.w || 0, h = item.h || 0;
+                if (w < 0) { x += w; w = -w; }
+                if (h < 0) { y += h; h = -h; }
+                bounds = { minX: x, minY: y, maxX: x + w, maxY: y + h };
+            }
+            minX = Math.min(minX, bounds.minX);
+            minY = Math.min(minY, bounds.minY);
+            maxX = Math.max(maxX, bounds.maxX);
+            maxY = Math.max(maxY, bounds.maxY);
+        });
+
+        return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
     },
 
     rgbToLab(r,g,b) {

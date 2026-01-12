@@ -1166,6 +1166,175 @@ export const ColorRmSession = {
         insertPosition: 'end'
     },
 
+    // Infinite canvas options state
+    _infiniteCanvasOptions: {
+        bgStyle: 'dark',       // 'dark', 'light', 'custom'
+        customBgColor: '#1a1a2e',
+        gridStyle: 'subtle',   // 'subtle', 'dots', 'lines', 'none'
+        gridColor: '#ffffff',
+        gridOpacity: 5         // 1-30%
+    },
+
+    /**
+     * Shows the infinite canvas options panel
+     */
+    showInfiniteCanvasOptions() {
+        // Hide other panels
+        const blankPanel = document.getElementById('pageModalBlank');
+        const templatePanel = document.getElementById('pageModalTemplate');
+        const importPanel = document.getElementById('pageModalImport');
+        const infinitePanel = document.getElementById('infiniteCanvasOptions');
+        const createBtn = document.getElementById('createPageBtn');
+
+        if (blankPanel) blankPanel.style.display = 'none';
+        if (templatePanel) templatePanel.style.display = 'none';
+        if (importPanel) importPanel.style.display = 'none';
+        if (infinitePanel) infinitePanel.style.display = 'block';
+        if (createBtn) createBtn.style.display = 'none';
+
+        // Reset tab active states
+        const tabs = document.querySelectorAll('.page-modal-tab');
+        tabs.forEach(t => t.classList.remove('active'));
+
+        // Setup opacity slider listener
+        const opacitySlider = document.getElementById('infiniteGridOpacity');
+        const opacityLabel = document.getElementById('infiniteGridOpacityLabel');
+        if (opacitySlider && opacityLabel) {
+            opacitySlider.oninput = () => {
+                const val = opacitySlider.value;
+                opacityLabel.textContent = val + '%';
+                this._infiniteCanvasOptions.gridOpacity = parseInt(val);
+            };
+        }
+
+        // Initialize iro.js color pickers if not already done
+        this._initInfiniteCanvasColorPickers();
+    },
+
+    /**
+     * Initializes iro.js color pickers for infinite canvas options
+     */
+    _initInfiniteCanvasColorPickers() {
+        if (!window.iro) return;
+
+        // Background color picker
+        const bgWheelEl = document.getElementById('iroBgColorWheel');
+        if (bgWheelEl && !this._iroBgPicker) {
+            this._iroBgPicker = new iro.ColorPicker(bgWheelEl, {
+                width: 150,
+                color: this._infiniteCanvasOptions.customBgColor || '#1a1a2e',
+                layout: [
+                    { component: iro.ui.Wheel },
+                    { component: iro.ui.Slider, options: { sliderType: 'value' } }
+                ]
+            });
+
+            this._iroBgPicker.on('color:change', (color) => {
+                this._infiniteCanvasOptions.customBgColor = color.hexString;
+                const hiddenInput = document.getElementById('infiniteBgColor');
+                if (hiddenInput) hiddenInput.value = color.hexString;
+            });
+        }
+
+        // Grid color picker
+        const gridWheelEl = document.getElementById('iroGridColorWheel');
+        if (gridWheelEl && !this._iroGridPicker) {
+            this._iroGridPicker = new iro.ColorPicker(gridWheelEl, {
+                width: 120,
+                color: this._infiniteCanvasOptions.gridColor || '#ffffff',
+                layout: [
+                    { component: iro.ui.Wheel },
+                    { component: iro.ui.Slider, options: { sliderType: 'value' } }
+                ]
+            });
+
+            this._iroGridPicker.on('color:change', (color) => {
+                this._infiniteCanvasOptions.gridColor = color.hexString;
+                const hiddenInput = document.getElementById('infiniteGridColor');
+                if (hiddenInput) hiddenInput.value = color.hexString;
+                // Update preview
+                const preview = document.getElementById('gridColorPreview');
+                if (preview) preview.style.background = color.hexString;
+            });
+        }
+    },
+
+    /**
+     * Selects the background style for infinite canvas
+     */
+    selectInfiniteBg(style, element) {
+        this._infiniteCanvasOptions.bgStyle = style;
+
+        // Update button states
+        const buttons = document.querySelectorAll('.infinite-bg-btn');
+        buttons.forEach(btn => {
+            btn.style.borderColor = btn === element ? '#8b5cf6' : 'var(--border)';
+        });
+
+        // Show/hide custom color picker
+        const customPicker = document.getElementById('infiniteCustomBgPicker');
+        if (customPicker) {
+            customPicker.style.display = style === 'custom' ? 'block' : 'none';
+            // Initialize iro picker when custom is selected (lazy init)
+            if (style === 'custom') {
+                this._initInfiniteCanvasColorPickers();
+            }
+        }
+
+        // Update custom color from iro picker if available
+        if (style === 'custom' && this._iroBgPicker) {
+            this._infiniteCanvasOptions.customBgColor = this._iroBgPicker.color.hexString;
+        }
+    },
+
+    /**
+     * Selects the grid style for infinite canvas
+     */
+    selectInfiniteGrid(style, element) {
+        this._infiniteCanvasOptions.gridStyle = style;
+
+        // Update button states
+        const buttons = document.querySelectorAll('.infinite-grid-btn');
+        buttons.forEach(btn => {
+            btn.style.borderColor = btn === element ? '#8b5cf6' : 'var(--border)';
+        });
+    },
+
+    /**
+     * Creates an infinite canvas with the selected options
+     */
+    async createInfiniteCanvasWithOptions() {
+        // Close the modal
+        const modal = document.getElementById('addPageModal');
+        if (modal) modal.style.display = 'none';
+
+        // Get options
+        const bgStyle = this._infiniteCanvasOptions.bgStyle;
+        const gridStyle = this._infiniteCanvasOptions.gridStyle;
+        const gridColorInput = document.getElementById('infiniteGridColor');
+        const gridColor = gridColorInput ? gridColorInput.value : '#ffffff';
+        const gridOpacity = this._infiniteCanvasOptions.gridOpacity / 100;
+
+        // Get custom bg color if needed
+        let customBgColor = this._infiniteCanvasOptions.customBgColor;
+        if (bgStyle === 'custom') {
+            const bgColorInput = document.getElementById('infiniteBgColor');
+            customBgColor = bgColorInput ? bgColorInput.value : '#1a1a2e';
+        }
+
+        // Get insert position from modal state
+        const insertAtCurrent = this._pageModalState.insertPosition === 'after';
+
+        // Create the infinite canvas with options
+        await this.addInfiniteCanvasPage({
+            bgStyle,
+            customBgColor,
+            gridStyle,
+            gridColor,
+            gridOpacity
+        }, insertAtCurrent);
+    },
+
     /**
      * Shows the Add Page modal
      */
@@ -1210,11 +1379,13 @@ export const ColorRmSession = {
         const blankPanel = document.getElementById('pageModalBlank');
         const templatePanel = document.getElementById('pageModalTemplate');
         const importPanel = document.getElementById('pageModalImport');
+        const infinitePanel = document.getElementById('infiniteCanvasOptions');
         const createBtn = document.getElementById('createPageBtn');
 
         if (blankPanel) blankPanel.style.display = tab === 'blank' ? 'block' : 'none';
         if (templatePanel) templatePanel.style.display = tab === 'template' ? 'block' : 'none';
         if (importPanel) importPanel.style.display = tab === 'import' ? 'block' : 'none';
+        if (infinitePanel) infinitePanel.style.display = 'none'; // Always hide infinite options when switching tabs
 
         // Hide create button for template and import tabs (they have their own actions)
         if (createBtn) {
@@ -1282,14 +1453,39 @@ export const ColorRmSession = {
      * Selects the insert position for new pages
      * @param {string} position - 'end' or 'after'
      * @param {HTMLElement} element - The clicked button element
+     * @param {string} context - Optional context ('blank', 'template', 'infinite')
      */
-    selectInsertPosition(position, element) {
+    selectInsertPosition(position, element, context = 'blank') {
         this._pageModalState.insertPosition = position;
 
-        // Update button states
-        const buttons = document.querySelectorAll('.insert-pos-btn');
+        // Update button states for all contexts
+        const classMap = {
+            'blank': '.insert-pos-btn',
+            'template': '.insert-pos-btn-template',
+            'infinite': '.insert-pos-btn-infinite'
+        };
+
+        const buttonClass = classMap[context] || '.insert-pos-btn';
+        const buttons = document.querySelectorAll(buttonClass);
         buttons.forEach(btn => btn.classList.remove('active'));
         if (element) element.classList.add('active');
+
+        // Sync position across all tabs (so they all show the same selection)
+        if (context !== 'blank') {
+            document.querySelectorAll('.insert-pos-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.pos === position);
+            });
+        }
+        if (context !== 'template') {
+            document.querySelectorAll('.insert-pos-btn-template').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.pos === position);
+            });
+        }
+        if (context !== 'infinite') {
+            document.querySelectorAll('.insert-pos-btn-infinite').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.pos === position);
+            });
+        }
     },
 
     /**
@@ -1315,6 +1511,12 @@ export const ColorRmSession = {
             height = parseInt(heightInput?.value) || height;
         }
 
+        // Handle infinite canvas
+        if (templateType === 'infinite') {
+            await this.addInfiniteCanvasPage();
+            return;
+        }
+
         // Handle template pages
         if (templateType && templateType !== 'white') {
             await this.addTemplatePage(templateType);
@@ -1326,91 +1528,107 @@ export const ColorRmSession = {
     },
 
     async addBlankPage(width = 2000, height = 1500, insertAtCurrent = false) {
-        // Get the selected color from the color picker
-        const colorPicker = document.getElementById('blankPageColor');
-        const bgColor = colorPicker ? colorPicker.value : '#ffffff';
+        // Block reconciliation during this operation
+        if (this.liveSync) this.liveSync.startLocalPageOperation();
 
-        // Create blank canvas blob using helper
-        const blob = await this._createBlankCanvasBlob(width, height, bgColor);
+        try {
+            // Get the selected color from the color picker
+            const colorPicker = document.getElementById('blankPageColor');
+            const bgColor = colorPicker ? colorPicker.value : '#ffffff';
 
-        // Determine where to insert the page
-        const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
+            // Create blank canvas blob using helper
+            const blob = await this._createBlankCanvasBlob(width, height, bgColor);
 
-        // Create and insert page using helpers (generates UUID pageId)
-        const pageObj = this._createPageObject(newPageIndex, blob);
-        await this._insertPageAtIndex(pageObj, newPageIndex);
+            // Determine where to insert the page
+            const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
 
-        // Update UI
-        this._refreshPageUI();
+            // Create and insert page using helpers (generates UUID pageId)
+            const pageObj = this._createPageObject(newPageIndex, blob);
+            await this._insertPageAtIndex(pageObj, newPageIndex);
 
-        // Handle navigation
-        await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
+            // Update UI
+            this._refreshPageUI();
 
-        // Update session metadata
-        await this._persistSessionMetadata();
+            // Handle navigation
+            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
 
-        // Upload page with UUID and sync structure to server
-        const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
-        await this._syncPageStructureToServer();
-        this._syncPageStructureToLive();
+            // Update session metadata
+            await this._persistSessionMetadata();
 
-        // Show toast based on upload result
-        if (this.config.collaborative && this.state.ownerId) {
-            this.ui.showToast(`Added blank page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
-        } else {
-            this.ui.showToast(`Added blank page ${newPageIndex + 1} (Local)`);
+            // Upload page with UUID and sync structure to server
+            const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
+            await this._syncPageStructureToServer();
+            this._syncPageStructureToLive();
+
+            // Show toast based on upload result
+            if (this.config.collaborative && this.state.ownerId) {
+                this.ui.showToast(`Added blank page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+            } else {
+                this.ui.showToast(`Added blank page ${newPageIndex + 1} (Local)`);
+            }
+
+            // Update canvas dimensions
+            this._setCanvasDimensions(width, height);
+        } finally {
+            // Unblock reconciliation
+            if (this.liveSync) this.liveSync.endLocalPageOperation();
         }
-
-        // Update canvas dimensions
-        this._setCanvasDimensions(width, height);
     },
 
     async addImageAsPage(file, insertAtCurrent = false) {
-        const img = new Image();
-        img.src = URL.createObjectURL(file);
+        // Block reconciliation during this operation
+        if (this.liveSync) this.liveSync.startLocalPageOperation();
 
-        await new Promise(resolve => {
-            img.onload = resolve;
-        });
+        try {
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
 
-        const width = img.width;
-        const height = img.height;
+            await new Promise(resolve => {
+                img.onload = resolve;
+            });
 
-        // Create canvas to ensure consistent format
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
+            const width = img.width;
+            const height = img.height;
 
-        // Convert to blob
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+            // Create canvas to ensure consistent format
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
 
-        // Determine where to insert the page
-        const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
+            // Convert to blob
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
 
-        // Create and insert page using helpers (generates UUID pageId)
-        const pageObj = this._createPageObject(newPageIndex, blob);
-        await this._insertPageAtIndex(pageObj, newPageIndex);
+            // Determine where to insert the page
+            const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
 
-        // Update UI
-        this._refreshPageUI();
+            // Create and insert page using helpers (generates UUID pageId)
+            const pageObj = this._createPageObject(newPageIndex, blob);
+            await this._insertPageAtIndex(pageObj, newPageIndex);
 
-        // Handle navigation
-        await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
+            // Update UI
+            this._refreshPageUI();
 
-        // Update session metadata
-        await this._persistSessionMetadata();
+            // Handle navigation
+            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
 
-        // Upload page with UUID and sync structure to server
-        await this._uploadPageBlob(pageObj.pageId, blob);
-        await this._syncPageStructureToServer();
-        this._syncPageStructureToLive();
+            // Update session metadata
+            await this._persistSessionMetadata();
 
-        // Update canvas dimensions
-        this._setCanvasDimensions(width, height);
+            // Upload page with UUID and sync structure to server
+            await this._uploadPageBlob(pageObj.pageId, blob);
+            await this._syncPageStructureToServer();
+            this._syncPageStructureToLive();
 
-        this.ui.showToast(`Added image as page ${newPageIndex + 1}`);
+            // Update canvas dimensions
+            this._setCanvasDimensions(width, height);
+
+            this.ui.showToast(`Added image as page ${newPageIndex + 1}`);
+        } finally {
+            // Unblock reconciliation
+            if (this.liveSync) this.liveSync.endLocalPageOperation();
+        }
     },
 
     handleImagePageUpload(event, insertAtCurrent = false) {
@@ -1434,46 +1652,55 @@ export const ColorRmSession = {
 
         if (!confirmed) return;
 
-        // Remove from database using existing transaction method
-        const pageToDelete = this.state.images[currentPageIndex];
-        const tx = this.db.transaction('pages', 'readwrite');
-        tx.objectStore('pages').delete(pageToDelete.id);
-        await new Promise(resolve => tx.oncomplete = resolve);
+        // Block reconciliation during this operation
+        if (this.liveSync) this.liveSync.startLocalPageOperation();
 
-        // Remove from state
-        this.state.images.splice(currentPageIndex, 1);
+        try {
+            // Remove from database using existing transaction method
+            const pageToDelete = this.state.images[currentPageIndex];
+            const tx = this.db.transaction('pages', 'readwrite');
+            tx.objectStore('pages').delete(pageToDelete.id);
+            await new Promise(resolve => tx.oncomplete = resolve);
 
-        // Update indices for remaining pages after the deleted page
-        for (let i = currentPageIndex; i < this.state.images.length; i++) {
-            this.state.images[i].pageIndex = i;
-            this.state.images[i].id = `${this.state.sessionId}_${i}`;
-            await this.dbPut('pages', this.state.images[i]);
-        }
+            // Remove from state
+            this.state.images.splice(currentPageIndex, 1);
 
-        // Update UI
-        this._refreshPageUI();
-
-        // Navigate to a valid page (preferably the next one, or previous if at end)
-        if (currentPageIndex >= this.state.images.length) {
-            this.state.idx = Math.max(0, this.state.images.length - 1);
-        }
-
-        if (this.state.images.length > 0) {
-            await this.loadPage(this.state.idx);
-        } else {
-            // If no pages left, clear canvas
-            const canvas = this.getElement('canvas');
-            if (canvas) {
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Update indices for remaining pages after the deleted page
+            for (let i = currentPageIndex; i < this.state.images.length; i++) {
+                this.state.images[i].pageIndex = i;
+                this.state.images[i].id = `${this.state.sessionId}_${i}`;
+                await this.dbPut('pages', this.state.images[i]);
             }
+
+            // Update UI
+            this._refreshPageUI();
+
+            // Navigate to a valid page (preferably the next one, or previous if at end)
+            if (currentPageIndex >= this.state.images.length) {
+                this.state.idx = Math.max(0, this.state.images.length - 1);
+            }
+
+            if (this.state.images.length > 0) {
+                await this.loadPage(this.state.idx);
+            } else {
+                // If no pages left, clear canvas
+                const canvas = this.getElement('canvas');
+                if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+            }
+
+            // Update session metadata and sync
+            await this._persistSessionMetadata();
+            await this._syncPageStructureToServer();
+            this._syncPageStructureToLive();
+
+            this.ui.showToast(`Deleted page ${currentPageIndex + 1}`);
+        } finally {
+            // Unblock reconciliation
+            if (this.liveSync) this.liveSync.endLocalPageOperation();
         }
-
-        // Update session metadata and sync
-        await this._persistSessionMetadata();
-        this._syncPageStructureToLive();
-
-        this.ui.showToast(`Deleted page ${currentPageIndex + 1}`);
     },
 
     showPageSizeModal() {
@@ -1733,96 +1960,521 @@ export const ColorRmSession = {
     },
 
     async addTemplatePage(templateType) {
-        // Get the selected color from the color picker
-        const colorPicker = document.getElementById('blankPageColor');
-        const bgColor = colorPicker ? colorPicker.value : '#ffffff';
+        // Block reconciliation during this operation
+        if (this.liveSync) this.liveSync.startLocalPageOperation();
 
-        // Define dimensions for the page
-        const width = 800;
-        const height = 1000;
+        try {
+            // Get the selected color from the color picker
+            const colorPicker = document.getElementById('blankPageColor');
+            const bgColor = colorPicker ? colorPicker.value : '#ffffff';
 
-        // Create a canvas
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
+            // Define dimensions for the page
+            const width = 800;
+            const height = 1000;
 
-        // Fill with the selected background color
-        ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, width, height);
+            // Create a canvas
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
 
-        // Add template-specific elements
-        if (templateType === 'graph') {
-            // Draw graph paper pattern
-            ctx.strokeStyle = '#e0e0e0';
-            ctx.lineWidth = 0.5;
+            // Fill with the selected background color
+            ctx.fillStyle = bgColor;
+            ctx.fillRect(0, 0, width, height);
 
-            // Vertical lines
-            for (let x = 0; x <= width; x += 20) {
+            // Add template-specific elements
+            if (templateType === 'graph') {
+                // Draw graph paper pattern
+                ctx.strokeStyle = '#e0e0e0';
+                ctx.lineWidth = 0.5;
+
+                // Vertical lines
+                for (let x = 0; x <= width; x += 20) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                    ctx.stroke();
+                }
+
+                // Horizontal lines
+                for (let y = 0; y <= height; y += 20) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(width, y);
+                    ctx.stroke();
+                }
+            } else if (templateType === 'lined') {
+                // Draw lined paper pattern
+                ctx.strokeStyle = '#e0e0e0';
+                ctx.lineWidth = 0.5;
+
+                // Horizontal lines every 30 pixels
+                for (let y = 30; y <= height; y += 30) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(width, y);
+                    ctx.stroke();
+                }
+
+                // Margin line at 60px from left
+                ctx.strokeStyle = '#f0f0f0';
+                ctx.lineWidth = 1;
                 ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, height);
+                ctx.moveTo(60, 0);
+                ctx.lineTo(60, height);
                 ctx.stroke();
             }
+            // For 'white' template, we just have a plain background
 
-            // Horizontal lines
-            for (let y = 0; y <= height; y += 20) {
-                ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(width, y);
-                ctx.stroke();
-            }
-        } else if (templateType === 'lined') {
-            // Draw lined paper pattern
-            ctx.strokeStyle = '#e0e0e0';
-            ctx.lineWidth = 0.5;
+            // Convert to blob
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
 
-            // Horizontal lines every 30 pixels
-            for (let y = 30; y <= height; y += 30) {
-                ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(width, y);
-                ctx.stroke();
-            }
+            // Always append for templates
+            const newPageIndex = this.state.images.length;
 
-            // Margin line at 60px from left
-            ctx.strokeStyle = '#f0f0f0';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(60, 0);
-            ctx.lineTo(60, height);
-            ctx.stroke();
+            // Create and insert page using helpers (generates UUID pageId)
+            const pageObj = this._createPageObject(newPageIndex, blob);
+            await this._insertPageAtIndex(pageObj, newPageIndex);
+
+            // Update UI
+            this._refreshPageUI();
+
+            // Handle navigation (templates always append, so navigateToNew=false)
+            await this._handlePostInsertNavigation(newPageIndex, false);
+
+            // Update session metadata
+            await this._persistSessionMetadata();
+
+            // Upload page with UUID and sync structure to server
+            await this._uploadPageBlob(pageObj.pageId, blob);
+            await this._syncPageStructureToServer();
+            this._syncPageStructureToLive();
+
+            // Update canvas dimensions
+            this._setCanvasDimensions(width, height);
+
+            this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1}`);
+        } finally {
+            // Unblock reconciliation
+            if (this.liveSync) this.liveSync.endLocalPageOperation();
         }
-        // For 'white' template, we just have a plain background
+    },
 
-        // Convert to blob
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+    /**
+     * Adds an infinite canvas page
+     * Infinite canvas has no fixed boundaries - it expands as you draw
+     * Uses viewport culling for performance (only renders visible strokes)
+     * @param {Object} options - Optional configuration for the canvas
+     * @param {boolean} insertAtCurrent - If true, insert after current page instead of at end
+     */
+    async addInfiniteCanvasPage(options = {}, insertAtCurrent = true) {
+        // Block reconciliation during this operation
+        if (this.liveSync) this.liveSync.startLocalPageOperation();
 
-        // Always append for templates
-        const newPageIndex = this.state.images.length;
+        try {
+            // Default options
+            const opts = {
+                bgStyle: options.bgStyle || 'dark',
+                customBgColor: options.customBgColor || '#1a1a2e',
+                gridStyle: options.gridStyle || 'subtle',
+                gridColor: options.gridColor || '#ffffff',
+                gridOpacity: options.gridOpacity || 0.05
+            };
 
-        // Create and insert page using helpers (generates UUID pageId)
-        const pageObj = this._createPageObject(newPageIndex, blob);
-        await this._insertPageAtIndex(pageObj, newPageIndex);
+            // Start with a reasonable viewport size (will expand as needed)
+            const initialWidth = 4000;
+            const initialHeight = 3000;
 
-        // Update UI
-        this._refreshPageUI();
+            // Create initial canvas
+            const canvas = document.createElement('canvas');
+            canvas.width = initialWidth;
+            canvas.height = initialHeight;
+            const ctx = canvas.getContext('2d');
 
-        // Handle navigation (templates always append, so navigateToNew=false)
-        await this._handlePostInsertNavigation(newPageIndex, false);
+            // Apply background based on style
+            if (opts.bgStyle === 'dark') {
+                const gradient = ctx.createLinearGradient(0, 0, initialWidth, initialHeight);
+                gradient.addColorStop(0, '#1a1a2e');
+                gradient.addColorStop(0.5, '#16213e');
+                gradient.addColorStop(1, '#0f3460');
+                ctx.fillStyle = gradient;
+            } else if (opts.bgStyle === 'light') {
+                const gradient = ctx.createLinearGradient(0, 0, initialWidth, initialHeight);
+                gradient.addColorStop(0, '#f8fafc');
+                gradient.addColorStop(0.5, '#f1f5f9');
+                gradient.addColorStop(1, '#e2e8f0');
+                ctx.fillStyle = gradient;
+            } else {
+                ctx.fillStyle = opts.customBgColor;
+            }
+            ctx.fillRect(0, 0, initialWidth, initialHeight);
 
-        // Update session metadata
-        await this._persistSessionMetadata();
+            // Parse grid color with opacity
+            const gridColorHex = opts.gridColor;
+            const r = parseInt(gridColorHex.slice(1, 3), 16);
+            const g = parseInt(gridColorHex.slice(3, 5), 16);
+            const b = parseInt(gridColorHex.slice(5, 7), 16);
+            const gridColorRgba = `rgba(${r}, ${g}, ${b}, ${opts.gridOpacity})`;
 
-        // Upload page with UUID and sync structure to server
-        await this._uploadPageBlob(pageObj.pageId, blob);
-        await this._syncPageStructureToServer();
-        this._syncPageStructureToLive();
+            // Apply grid pattern based on style
+            const gridSize = 100;
 
-        // Update canvas dimensions
-        this._setCanvasDimensions(width, height);
+            if (opts.gridStyle === 'subtle' || opts.gridStyle === 'lines') {
+                ctx.strokeStyle = gridColorRgba;
+                ctx.lineWidth = opts.gridStyle === 'lines' ? 1 : 0.5;
 
-        this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1}`);
+                // Vertical lines
+                for (let x = 0; x <= initialWidth; x += gridSize) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, initialHeight);
+                    ctx.stroke();
+                }
+                // Horizontal lines
+                for (let y = 0; y <= initialHeight; y += gridSize) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(initialWidth, y);
+                    ctx.stroke();
+                }
+            } else if (opts.gridStyle === 'dots') {
+                ctx.fillStyle = gridColorRgba;
+                const dotSize = 2;
+                const dotSpacing = 50;
+
+                for (let x = dotSpacing; x < initialWidth; x += dotSpacing) {
+                    for (let y = dotSpacing; y < initialHeight; y += dotSpacing) {
+                        ctx.beginPath();
+                        ctx.arc(x, y, dotSize, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+            // 'none' = no grid
+
+            // Draw center crosshair
+            const centerX = initialWidth / 2;
+            const centerY = initialHeight / 2;
+            ctx.strokeStyle = opts.bgStyle === 'light' ? 'rgba(99, 102, 241, 0.3)' : 'rgba(139, 92, 246, 0.2)';
+            ctx.lineWidth = 2;
+
+            ctx.beginPath();
+            ctx.moveTo(centerX - 50, centerY);
+            ctx.lineTo(centerX + 50, centerY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - 50);
+            ctx.lineTo(centerX, centerY + 50);
+            ctx.stroke();
+
+            // Convert to blob
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+
+            // Determine where to insert the page (after current page by default)
+            const newPageIndex = insertAtCurrent ? this.state.idx + 1 : this.state.images.length;
+
+            // Create page with infinite canvas metadata
+            const pageId = this._generatePageId('user');
+            const pageObj = {
+                id: `${this.state.sessionId}_${newPageIndex}`,
+                sessionId: this.state.sessionId,
+                pageIndex: newPageIndex,
+                pageId: pageId,
+                blob: blob,
+                history: [],
+                // Infinite canvas metadata
+                isInfinite: true,
+                bounds: {
+                    minX: -initialWidth / 2,
+                    minY: -initialHeight / 2,
+                    maxX: initialWidth / 2,
+                    maxY: initialHeight / 2
+                },
+                origin: { x: initialWidth / 2, y: initialHeight / 2 }, // Center origin
+                // Vector grid data for high-quality re-rendering
+                vectorGrid: {
+                    bgStyle: opts.bgStyle,
+                    customBgColor: opts.customBgColor,
+                    gridStyle: opts.gridStyle,
+                    gridColor: opts.gridColor,
+                    gridOpacity: opts.gridOpacity,
+                    gridSize: 100
+                }
+            };
+
+            await this._insertPageAtIndex(pageObj, newPageIndex);
+
+            // Update UI
+            this._refreshPageUI();
+
+            // Handle navigation (use helper for consistent behavior)
+            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
+
+            // Center the view on the canvas
+            this.state.pan = { x: 0, y: 0 };
+            this.state.zoom = 0.5; // Start zoomed out to show more area
+            this.updateZoomIndicator();
+
+            // Update session metadata
+            await this._persistSessionMetadata();
+
+            // Upload page with UUID and sync structure to server
+            await this._uploadPageBlob(pageObj.pageId, blob);
+            await this._syncPageStructureToServer();
+            this._syncPageStructureToLive();
+
+            // Update canvas dimensions
+            this._setCanvasDimensions(initialWidth, initialHeight);
+
+            this.ui.showToast(`Added infinite canvas page ${newPageIndex + 1} ∞`);
+        } finally {
+            // Unblock reconciliation
+            if (this.liveSync) this.liveSync.endLocalPageOperation();
+        }
+    },
+
+    /**
+     * Expands the infinite canvas when drawing near edges
+     * Called during drawing operations to check if expansion is needed
+     * @param {number} x - Current drawing x coordinate
+     * @param {number} y - Current drawing y coordinate
+     */
+    async expandInfiniteCanvasIfNeeded(x, y) {
+        const currentPage = this.state.images[this.state.idx];
+        if (!currentPage || !currentPage.isInfinite) return;
+
+        const margin = 500; // Expand when within 500px of edge
+        const expandSize = 1000; // Expand by 1000px
+
+        let needsExpand = false;
+        let newBounds = { ...currentPage.bounds };
+        let panAdjustX = 0; // Track pan offset adjustments for negative expansion
+        let panAdjustY = 0;
+
+        // Check each edge - FULL 4-DIRECTION EXPANSION
+        // Left edge (negative X direction)
+        if (x < currentPage.bounds.minX + margin) {
+            const expandAmount = expandSize;
+            newBounds.minX -= expandAmount;
+            panAdjustX = expandAmount; // Shift pan to compensate for negative expansion
+            needsExpand = true;
+        }
+        // Right edge (positive X direction)
+        if (x > currentPage.bounds.maxX - margin) {
+            newBounds.maxX += expandSize;
+            needsExpand = true;
+        }
+        // Top edge (negative Y direction)
+        if (y < currentPage.bounds.minY + margin) {
+            const expandAmount = expandSize;
+            newBounds.minY -= expandAmount;
+            panAdjustY = expandAmount; // Shift pan to compensate for negative expansion
+            needsExpand = true;
+        }
+        // Bottom edge (positive Y direction)
+        if (y > currentPage.bounds.maxY - margin) {
+            newBounds.maxY += expandSize;
+            needsExpand = true;
+        }
+
+        if (needsExpand) {
+            console.log(`[InfiniteCanvas] Expanding bounds to:`, newBounds);
+
+            // Update bounds (this is the content area, NOT the viewport)
+            currentPage.bounds = newBounds;
+
+            // NOTE: We do NOT update state.viewW/viewH here!
+            // Those are the viewport dimensions (actual canvas element size)
+            // The bounds define the content area which can be much larger
+
+            // Adjust pan offset when expanding in negative directions
+            // This keeps existing strokes visually stationary
+            if (panAdjustX !== 0 || panAdjustY !== 0) {
+                this.state.pan.x += panAdjustX * this.state.zoom;
+                this.state.pan.y += panAdjustY * this.state.zoom;
+                console.log(`[InfiniteCanvas] Adjusted pan by (${panAdjustX}, ${panAdjustY})`);
+            }
+
+            // Update the origin to track the world coordinate system
+            if (currentPage.origin) {
+                currentPage.origin.x += panAdjustX;
+                currentPage.origin.y += panAdjustY;
+            }
+
+            // Save the updated page (non-blocking to avoid lag during drawing)
+            this.dbPut('pages', currentPage).catch(e => console.error('Failed to save page:', e));
+
+            // Invalidate cache to trigger re-render with new bounds
+            this.invalidateCache();
+        }
+    },
+
+    /**
+     * Calculates the bounding box that encompasses all strokes in the history
+     * Used for automatic infinite canvas bounds derivation from synced strokes
+     * @param {Array} history - Array of stroke objects
+     * @param {Object} initialBounds - The initial/minimum bounds to start with
+     * @param {number} padding - Extra padding around strokes (default 200px)
+     * @returns {Object} - { minX, minY, maxX, maxY }
+     */
+    calculateBoundsFromHistory(history, initialBounds, padding = 200) {
+        if (!history || history.length === 0) {
+            return initialBounds;
+        }
+
+        let minX = initialBounds.minX;
+        let minY = initialBounds.minY;
+        let maxX = initialBounds.maxX;
+        let maxY = initialBounds.maxY;
+
+        for (const stroke of history) {
+            if (stroke.deleted) continue;
+
+            if (stroke.tool === 'pen' && stroke.pts && stroke.pts.length > 0) {
+                const strokePadding = (stroke.size || 5) / 2 + padding;
+                for (const pt of stroke.pts) {
+                    minX = Math.min(minX, pt.x - strokePadding);
+                    minY = Math.min(minY, pt.y - strokePadding);
+                    maxX = Math.max(maxX, pt.x + strokePadding);
+                    maxY = Math.max(maxY, pt.y + strokePadding);
+                }
+            } else if (stroke.tool === 'shape' && stroke.x !== undefined) {
+                const strokePadding = (stroke.width || 2) / 2 + padding;
+                const x1 = Math.min(stroke.x, stroke.x + (stroke.w || 0));
+                const y1 = Math.min(stroke.y, stroke.y + (stroke.h || 0));
+                const x2 = Math.max(stroke.x, stroke.x + (stroke.w || 0));
+                const y2 = Math.max(stroke.y, stroke.y + (stroke.h || 0));
+                minX = Math.min(minX, x1 - strokePadding);
+                minY = Math.min(minY, y1 - strokePadding);
+                maxX = Math.max(maxX, x2 + strokePadding);
+                maxY = Math.max(maxY, y2 + strokePadding);
+            } else if (stroke.tool === 'text' && stroke.x !== undefined) {
+                const textPadding = padding;
+                // Estimate text bounds (rough approximation)
+                const textWidth = (stroke.text?.length || 1) * (stroke.size || 40) * 0.6;
+                const textHeight = stroke.size || 40;
+                minX = Math.min(minX, stroke.x - textPadding);
+                minY = Math.min(minY, stroke.y - textPadding);
+                maxX = Math.max(maxX, stroke.x + textWidth + textPadding);
+                maxY = Math.max(maxY, stroke.y + textHeight + textPadding);
+            }
+        }
+
+        // Round to nearest 100 for cleaner bounds
+        minX = Math.floor(minX / 100) * 100;
+        minY = Math.floor(minY / 100) * 100;
+        maxX = Math.ceil(maxX / 100) * 100;
+        maxY = Math.ceil(maxY / 100) * 100;
+
+        return { minX, minY, maxX, maxY };
+    },
+
+    /**
+     * Recalculates and updates the infinite canvas bounds based on synced history
+     * Called automatically when history is synced from other users
+     * @param {number} pageIdx - The page index to recalculate bounds for
+     */
+    recalculateInfiniteCanvasBounds(pageIdx) {
+        const page = this.state.images[pageIdx];
+        if (!page || !page.isInfinite) return;
+
+        // Get the initial/minimum bounds (from when page was created)
+        const initialBounds = page.origin ? {
+            minX: -page.origin.x,
+            minY: -page.origin.y,
+            maxX: page.origin.x,
+            maxY: page.origin.y
+        } : {
+            minX: -1000,
+            minY: -1000,
+            maxX: 1000,
+            maxY: 1000
+        };
+
+        // Calculate bounds from all strokes
+        const newBounds = this.calculateBoundsFromHistory(page.history, initialBounds);
+
+        // Only update if bounds actually expanded (never shrink)
+        let needsUpdate = false;
+        const updatedBounds = { ...page.bounds };
+
+        if (newBounds.minX < page.bounds.minX) {
+            updatedBounds.minX = newBounds.minX;
+            needsUpdate = true;
+        }
+        if (newBounds.minY < page.bounds.minY) {
+            updatedBounds.minY = newBounds.minY;
+            needsUpdate = true;
+        }
+        if (newBounds.maxX > page.bounds.maxX) {
+            updatedBounds.maxX = newBounds.maxX;
+            needsUpdate = true;
+        }
+        if (newBounds.maxY > page.bounds.maxY) {
+            updatedBounds.maxY = newBounds.maxY;
+            needsUpdate = true;
+        }
+
+        if (needsUpdate) {
+            console.log(`[InfiniteCanvas] Auto-expanding bounds from history:`, updatedBounds);
+            page.bounds = updatedBounds;
+
+            // Update canvas dimensions if viewing this page
+            if (this.state.idx === pageIdx) {
+                const newWidth = updatedBounds.maxX - updatedBounds.minX;
+                const newHeight = updatedBounds.maxY - updatedBounds.minY;
+                this.state.viewW = newWidth;
+                this.state.viewH = newHeight;
+                this.invalidateCache();
+            }
+
+            // Save to IndexedDB (non-blocking)
+            this.dbPut('pages', page);
+        }
+    },
+
+    /**
+     * Checks if a stroke is within the visible viewport (for performance culling)
+     * @param {Object} stroke - The stroke object with pts array
+     * @returns {boolean} - True if any part of the stroke is visible
+     */
+    isStrokeVisible(stroke) {
+        if (!stroke.pts || stroke.pts.length === 0) return false;
+
+        // Get viewport bounds in canvas coordinates
+        const viewLeft = -this.state.pan.x / this.state.zoom;
+        const viewTop = -this.state.pan.y / this.state.zoom;
+        const viewRight = viewLeft + this.state.viewW / this.state.zoom;
+        const viewBottom = viewTop + this.state.viewH / this.state.zoom;
+
+        // Quick check: if any point is in view, stroke is visible
+        for (const pt of stroke.pts) {
+            if (pt.x >= viewLeft && pt.x <= viewRight &&
+                pt.y >= viewTop && pt.y <= viewBottom) {
+                return true;
+            }
+        }
+
+        // Also check if stroke bounding box intersects viewport
+        // (handles strokes that cross the viewport without points inside)
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const pt of stroke.pts) {
+            minX = Math.min(minX, pt.x);
+            minY = Math.min(minY, pt.y);
+            maxX = Math.max(maxX, pt.x);
+            maxY = Math.max(maxY, pt.y);
+        }
+
+        // Add stroke size to bounds
+        const strokeSize = stroke.size || 5;
+        minX -= strokeSize;
+        minY -= strokeSize;
+        maxX += strokeSize;
+        maxY += strokeSize;
+
+        // Check bounding box intersection
+        return !(maxX < viewLeft || minX > viewRight || maxY < viewTop || minY > viewBottom);
     },
 
     // Show reorder dialog to allow users to reorder pages
@@ -2093,5 +2745,79 @@ export const ColorRmSession = {
             cachedRender: { avg: cachedAvg, fps: cachedFps },
             cacheSpeedup: avg / cachedAvg
         };
+    },
+
+    /**
+     * Runs the SOTA performance benchmark with all optimizations
+     * Tests: Baseline, LOD, Spatial Index, Full SOTA
+     * @param {number} strokeCount - Number of strokes (default: 1000)
+     * @param {number} pointsPerStroke - Points per stroke (default: 100)
+     */
+    async runSOTABenchmark(strokeCount = 1000, pointsPerStroke = 100) {
+        if (!this.performanceManager) {
+            console.error('Performance manager not initialized');
+            return;
+        }
+        return this.performanceManager.runBenchmark(this, strokeCount, pointsPerStroke);
+    },
+
+    /**
+     * Gets current performance statistics
+     * @returns {Object} Performance stats including FPS, frame times, cull percentage
+     */
+    getPerformanceStats() {
+        if (!this.performanceManager) return null;
+        return this.performanceManager.getStats();
+    },
+
+    /**
+     * Toggles performance overlay for real-time monitoring
+     */
+    togglePerformanceOverlay() {
+        const existingOverlay = document.getElementById('perf-overlay');
+        if (existingOverlay) {
+            existingOverlay.remove();
+            if (this._perfOverlayInterval) {
+                clearInterval(this._perfOverlayInterval);
+                this._perfOverlayInterval = null;
+            }
+            return;
+        }
+
+        const overlay = document.createElement('div');
+        overlay.id = 'perf-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.85);
+            color: #0f0;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            z-index: 99999;
+            pointer-events: none;
+            min-width: 180px;
+        `;
+        document.body.appendChild(overlay);
+
+        this._perfOverlayInterval = setInterval(() => {
+            const stats = this.getPerformanceStats();
+            if (stats) {
+                overlay.innerHTML = `
+                    <div style="color:#fff; font-weight:bold; margin-bottom:5px;">⚡ Performance</div>
+                    <div>FPS: <span style="color:${parseFloat(stats.fps) >= 55 ? '#0f0' : parseFloat(stats.fps) >= 30 ? '#ff0' : '#f00'}">${stats.fps}</span></div>
+                    <div>Frame: ${stats.avgFrameTime}ms</div>
+                    <div>Max: ${stats.maxFrameTime}ms</div>
+                    <div style="margin-top:5px; color:#888;">
+                        Strokes: ${stats.avgVisibleStrokes}/${stats.avgTotalStrokes}
+                    </div>
+                    <div style="color:#888;">Culled: ${stats.cullPercentage}%</div>
+                `;
+            } else {
+                overlay.innerHTML = '<div style="color:#888">Collecting data...</div>';
+            }
+        }, 500);
     }
 }; 
