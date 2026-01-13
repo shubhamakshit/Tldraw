@@ -528,15 +528,20 @@ export const ColorRmRenderer = {
             const zb = this.getElement('zoomBtn');
             if (zb) zb.innerText = Math.round(this.state.zoom * 100) + '%';
 
-            if(this.state.guideLines.length > 0) {
+            if(this.state.guideLines && this.state.guideLines.length > 0) {
                 ctx.save();
                 ctx.strokeStyle = '#f472b6';
                 ctx.lineWidth = 1 / this.state.zoom;
                 ctx.setLineDash([4 / this.state.zoom, 4 / this.state.zoom]);
                 ctx.beginPath();
                 this.state.guideLines.forEach(g => {
-                    if(g.type==='v') { ctx.moveTo(g.x, 0); ctx.lineTo(g.x, this.state.viewH); }
-                    else { ctx.moveTo(0, g.y); ctx.lineTo(this.state.viewW, g.y); }
+                    if(g.type === 'vertical' || g.type === 'v') {
+                        ctx.moveTo(g.x, g.y1 || 0);
+                        ctx.lineTo(g.x, g.y2 || this.state.viewH);
+                    } else if(g.type === 'horizontal' || g.type === 'h') {
+                        ctx.moveTo(g.x1 || 0, g.y);
+                        ctx.lineTo(g.x2 || this.state.viewW, g.y);
+                    }
                 });
                 ctx.stroke();
                 ctx.restore();
@@ -724,12 +729,43 @@ export const ColorRmRenderer = {
             const screenMinY = (minY * this.state.zoom + this.state.pan.y) * sy;
             const screenMaxY = (maxY * this.state.zoom + this.state.pan.y) * sy;
 
-            let mx = (screenMinX + screenMaxX)/2;
-            let my = (screenMinY) - 50;
-            if(my < 10) my = (screenMaxY) + 50;
+            const menuWidth = menu.offsetWidth || 200;
+            const menuHeight = menu.offsetHeight || 40;
+            const handleSize = 20; // Size of corner resize handles + margin
+            const margin = 15;
 
-            menu.style.left = (cr.left + mx - menu.offsetWidth/2) + 'px';
-            menu.style.top = (cr.top + my) + 'px';
+            // Calculate center X, but ensure we don't overlap corner handles
+            let mx = (screenMinX + screenMaxX) / 2;
+
+            // Position above selection by default
+            let my = screenMinY - menuHeight - margin;
+
+            // If too close to top, position below selection
+            if (my < 10) {
+                my = screenMaxY + margin;
+            }
+
+            // Ensure menu stays away from corner handles - shift horizontally if needed
+            const selectionWidth = screenMaxX - screenMinX;
+            if (selectionWidth < menuWidth + handleSize * 2) {
+                // Selection is narrow - center the menu but ensure it clears the handles
+                mx = (screenMinX + screenMaxX) / 2;
+            }
+
+            // Clamp to screen bounds
+            const finalX = Math.max(10, Math.min(cr.width - menuWidth - 10, mx - menuWidth / 2));
+            const finalY = Math.max(10, Math.min(cr.height - menuHeight - 10, my));
+
+            menu.style.left = (cr.left + finalX) + 'px';
+            menu.style.top = (cr.top + finalY) + 'px';
+
+            // Close the context dropdown when selection changes
+            const selectionKey = this.state.selection.slice().sort().join(',');
+            if (this._lastSelectionKey !== selectionKey) {
+                this._lastSelectionKey = selectionKey;
+                const ctxDrop = this.getElement('ctxDrop');
+                if (ctxDrop) ctxDrop.classList.remove('show');
+            }
 
             // Show/hide edit text button based on selection
             const editTextBtn = this.getElement('ctxEditText');

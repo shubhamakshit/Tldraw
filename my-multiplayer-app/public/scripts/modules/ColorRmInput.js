@@ -382,6 +382,23 @@ export const ColorRmInput = {
             if(e.key==='Home') { this.loadPage(0); return; }
             if(e.key==='End') { this.loadPage(this.state.images.length - 1); return; }
 
+            // === Copy/Cut/Paste (Multi-page Clipboard) ===
+            if((e.ctrlKey||e.metaKey) && key==='c' && this.state.selection.length > 0) {
+                e.preventDefault();
+                this.copyToClipboard();
+                return;
+            }
+            if((e.ctrlKey||e.metaKey) && key==='x' && this.state.selection.length > 0) {
+                e.preventDefault();
+                this.cutToClipboard();
+                return;
+            }
+            if((e.ctrlKey||e.metaKey) && key==='v') {
+                e.preventDefault();
+                this.pasteFromClipboard();
+                return;
+            }
+
             // === Delete selected ===
             if(e.key==='Delete' || (e.key==='Backspace' && !e.ctrlKey && !e.metaKey)) {
                 if(this.state.selection.length > 0) {
@@ -566,13 +583,32 @@ export const ColorRmInput = {
             let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
             this.state.selection.forEach(idx => {
                 const st = img.history[idx];
-                let bx,by,bw,bh;
-                if(st.tool==='pen') { bx=st.pts[0].x; by=st.pts[0].y; let rx=bx, ry=by; st.pts.forEach(p=>{bx=Math.min(bx,p.x);by=Math.min(by,p.y);rx=Math.max(rx,p.x);ry=Math.max(ry,p.y);}); bw=rx-bx; bh=ry-by; }
-                else { bx=st.x; by=st.y; bw=st.w; bh=st.h; }
-                if(bw<0){bx+=bw; bw=-bw;} if(bh<0){by+=bh; bh=-bh;}
-                minX=Math.min(minX,bx); minY=Math.min(minY,by); maxX=Math.max(maxX,bx+bw); maxY=Math.max(maxY,by+bh);
+                if (!st || st.deleted) return; // Skip undefined or deleted items
+                let bx, by, bw, bh;
+                if (st.tool === 'pen' || st.tool === 'eraser') {
+                    if (!st.pts || st.pts.length === 0) return;
+                    bx = st.pts[0].x; by = st.pts[0].y;
+                    let rx = bx, ry = by;
+                    st.pts.forEach(p => {
+                        bx = Math.min(bx, p.x); by = Math.min(by, p.y);
+                        rx = Math.max(rx, p.x); ry = Math.max(ry, p.y);
+                    });
+                    bw = rx - bx; bh = ry - by;
+                } else if (st.tool === 'group' && st.children) {
+                    const groupBounds = this._getGroupBounds(st.children);
+                    bx = st.x; by = st.y;
+                    bw = st.w; bh = st.h;
+                } else {
+                    bx = st.x; by = st.y;
+                    bw = st.w || 0; bh = st.h || 0;
+                }
+                if (bw < 0) { bx += bw; bw = -bw; }
+                if (bh < 0) { by += bh; bh = -bh; }
+                minX = Math.min(minX, bx); minY = Math.min(minY, by);
+                maxX = Math.max(maxX, bx + bw); maxY = Math.max(maxY, by + bh);
             });
-            return {minX, minY, maxX, maxY, w:maxX-minX, h:maxY-minY, cx:(minX+maxX)/2, cy:(minY+maxY)/2, maxY:maxY};
+            if (minX === Infinity) return null; // No valid items
+            return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
         };
 
         const hitTest = (pt) => {
@@ -692,13 +728,52 @@ export const ColorRmInput = {
                 }
             }
 
-            if(isMovingSelection) { this.dragOffset = {x:pt.x-dragStart.x, y:pt.y-dragStart.y}; this.render(); return; }
+            if(isMovingSelection) {
+                let dx = pt.x - dragStart.x;
+                let dy = pt.y - dragStart.y;
+
+                // Apply grid snapping if enabled
+                if (this.state.snapToGrid) {
+                    const bounds = getSelectionBounds();
+                    if (bounds) {
+                        const snappedMinX = this._snapToGrid(bounds.minX + dx);
+                        const snappedMinY = this._snapToGrid(bounds.minY + dy);
+                        dx = snappedMinX - bounds.minX;
+                        dy = snappedMinY - bounds.minY;
+                    }
+                }
+
+                // Apply object snapping (smart guides) if enabled
+                if (this.state.snapToObjects) {
+                    const bounds = getSelectionBounds();
+                    if (bounds) {
+                        const movingBounds = {
+                            minX: bounds.minX + dx,
+                            minY: bounds.minY + dy,
+                            maxX: bounds.maxX + dx,
+                            maxY: bounds.maxY + dy,
+                            w: bounds.w,
+                            h: bounds.h
+                        };
+                        const snapResult = this._findObjectSnaps(movingBounds, this.state.selection, 8);
+                        dx += snapResult.snapDx || 0;
+                        dy += snapResult.snapDy || 0;
+                    }
+                }
+
+                this.dragOffset = { x: dx, y: dy };
+                this.render();
+                return;
+            }
 
             // Handle resize during drag
             if(isResizing && startBounds && resizeHandle) {
                 const img = this.state.images[this.state.idx];
                 let dx = pt.x - startPt.x;
                 let dy = pt.y - startPt.y;
+
+                // Alt key = scale from center
+                const scaleFromCenter = e.altKey;
 
                 // Calculate aspect ratio constraint if enabled
                 const keepAspect = this.state.keepAspectRatio;
@@ -715,6 +790,7 @@ export const ColorRmInput = {
                 this.state.selection.forEach((idx, i) => {
                     const st = img.history[idx];
                     const orig = initialHistoryState[i];
+                    if (!st || !orig) return;
 
                     // For pen/eraser strokes, calculate bounds from points
                     if (st.tool === 'pen' || st.tool === 'eraser') {
@@ -725,10 +801,22 @@ export const ColorRmInput = {
                         let newMinX = origBounds.minX, newMinY = origBounds.minY;
                         let newMaxX = origBounds.maxX, newMaxY = origBounds.maxY;
 
-                        if (resizeHandle.includes('l')) newMinX += dx;
-                        if (resizeHandle.includes('r')) newMaxX += dx;
-                        if (resizeHandle.includes('t')) newMinY += dy;
-                        if (resizeHandle.includes('b')) newMaxY += dy;
+                        if (scaleFromCenter) {
+                            // Scale from center: apply delta to both sides
+                            if (resizeHandle.includes('l') || resizeHandle.includes('r')) {
+                                newMinX -= dx;
+                                newMaxX += dx;
+                            }
+                            if (resizeHandle.includes('t') || resizeHandle.includes('b')) {
+                                newMinY -= dy;
+                                newMaxY += dy;
+                            }
+                        } else {
+                            if (resizeHandle.includes('l')) newMinX += dx;
+                            if (resizeHandle.includes('r')) newMaxX += dx;
+                            if (resizeHandle.includes('t')) newMinY += dy;
+                            if (resizeHandle.includes('b')) newMaxY += dy;
+                        }
 
                         const newW = newMaxX - newMinX;
                         const newH = newMaxY - newMinY;
@@ -743,23 +831,89 @@ export const ColorRmInput = {
                             x: newMinX + (p.x - origBounds.minX) * scaleX,
                             y: newMinY + (p.y - origBounds.minY) * scaleY
                         }));
+                    } else if (st.tool === 'group' && st.children && orig.children) {
+                        // Handle group resize - scale the group and all its children
+                        let newX = orig.x, newY = orig.y, newW = orig.w, newH = orig.h;
+
+                        if (scaleFromCenter) {
+                            // Scale from center for groups
+                            if (resizeHandle.includes('r') || resizeHandle.includes('l')) {
+                                newW = orig.w + dx * 2;
+                                newX = orig.x - dx;
+                            }
+                            if (resizeHandle.includes('b') || resizeHandle.includes('t')) {
+                                newH = orig.h + dy * 2;
+                                newY = orig.y - dy;
+                            }
+                        } else {
+                            if (resizeHandle.includes('r')) newW = orig.w + dx;
+                            if (resizeHandle.includes('l')) { newX = orig.x + dx; newW = orig.w - dx; }
+                            if (resizeHandle.includes('b')) newH = orig.h + dy;
+                            if (resizeHandle.includes('t')) { newY = orig.y + dy; newH = orig.h - dy; }
+                        }
+
+                        // Calculate scale factors
+                        const scaleX = orig.w !== 0 ? newW / orig.w : 1;
+                        const scaleY = orig.h !== 0 ? newH / orig.h : 1;
+
+                        // Prevent collapse
+                        if (Math.abs(scaleX) < 0.01 || Math.abs(scaleY) < 0.01) return;
+
+                        // Update group bounds
+                        st.x = newX;
+                        st.y = newY;
+                        st.w = newW;
+                        st.h = newH;
+
+                        // Scale all children relative to original group position
+                        st.children = orig.children.map(origChild => {
+                            const child = JSON.parse(JSON.stringify(origChild));
+                            if (child.tool === 'pen' || child.tool === 'eraser') {
+                                if (child.pts) {
+                                    child.pts = child.pts.map(p => ({
+                                        x: newX + (p.x - orig.x) * scaleX,
+                                        y: newY + (p.y - orig.y) * scaleY
+                                    }));
+                                }
+                            } else {
+                                // Scale position and size for shapes/text
+                                child.x = newX + (child.x - orig.x) * scaleX;
+                                child.y = newY + (child.y - orig.y) * scaleY;
+                                if (child.w !== undefined) child.w = child.w * scaleX;
+                                if (child.h !== undefined) child.h = child.h * scaleY;
+                            }
+                            return child;
+                        });
                     } else {
                         // For shapes/text with x, y, w, h
                         let newX = orig.x, newY = orig.y, newW = orig.w, newH = orig.h;
 
-                        if (resizeHandle.includes('r')) {
-                            newW = orig.w + dx;
-                        }
-                        if (resizeHandle.includes('l')) {
-                            newX = orig.x + dx;
-                            newW = orig.w - dx;
-                        }
-                        if (resizeHandle.includes('b')) {
-                            newH = orig.h + dy;
-                        }
-                        if (resizeHandle.includes('t')) {
-                            newY = orig.y + dy;
-                            newH = orig.h - dy;
+                        if (scaleFromCenter) {
+                            // Scale from center: apply delta to both sides
+                            if (resizeHandle.includes('r') || resizeHandle.includes('l')) {
+                                newW = orig.w + dx * 2;
+                                newX = orig.x - dx;
+                            }
+                            if (resizeHandle.includes('b') || resizeHandle.includes('t')) {
+                                newH = orig.h + dy * 2;
+                                newY = orig.y - dy;
+                            }
+                        } else {
+                            // Standard resize
+                            if (resizeHandle.includes('r')) {
+                                newW = orig.w + dx;
+                            }
+                            if (resizeHandle.includes('l')) {
+                                newX = orig.x + dx;
+                                newW = orig.w - dx;
+                            }
+                            if (resizeHandle.includes('b')) {
+                                newH = orig.h + dy;
+                            }
+                            if (resizeHandle.includes('t')) {
+                                newY = orig.y + dy;
+                                newH = orig.h - dy;
+                            }
                         }
 
                         // For aspect ratio constraint
@@ -770,8 +924,16 @@ export const ColorRmInput = {
                                 const scale = Math.max(Math.abs(newW / orig.w), Math.abs(newH / orig.h));
                                 newW = orig.w * scale * Math.sign(newW || 1);
                                 newH = orig.h * scale * Math.sign(newH || 1);
-                                if (resizeHandle.includes('l')) newX = orig.x + orig.w - newW;
-                                if (resizeHandle.includes('t')) newY = orig.y + orig.h - newH;
+                                if (scaleFromCenter) {
+                                    // Keep centered
+                                    const centerX = orig.x + orig.w / 2;
+                                    const centerY = orig.y + orig.h / 2;
+                                    newX = centerX - newW / 2;
+                                    newY = centerY - newH / 2;
+                                } else {
+                                    if (resizeHandle.includes('l')) newX = orig.x + orig.w - newW;
+                                    if (resizeHandle.includes('t')) newY = orig.y + orig.h - newH;
+                                }
                             }
                         }
 
@@ -1111,8 +1273,33 @@ export const ColorRmInput = {
 
             if(isMovingSelection) {
                 isMovingSelection=false;
-                this.state.selection.forEach(idx => { const st=this.state.images[this.state.idx].history[idx]; if(st.tool==='pen') st.pts.forEach(p=>{p.x+=this.dragOffset.x;p.y+=this.dragOffset.y}); else {st.x+=this.dragOffset.x;st.y+=this.dragOffset.y} });
-                this.dragOffset=null; this.saveCurrentImg(); this.render(); return;
+                this.state.selection.forEach(idx => {
+                    const st = this.state.images[this.state.idx].history[idx];
+                    if (st.tool === 'pen' || st.tool === 'eraser') {
+                        st.pts.forEach(p => { p.x += this.dragOffset.x; p.y += this.dragOffset.y; });
+                    } else if (st.tool === 'group' && st.children) {
+                        st.x += this.dragOffset.x;
+                        st.y += this.dragOffset.y;
+                        st.children.forEach(child => {
+                            if (child.tool === 'pen' || child.tool === 'eraser') {
+                                child.pts.forEach(p => { p.x += this.dragOffset.x; p.y += this.dragOffset.y; });
+                            } else {
+                                child.x += this.dragOffset.x;
+                                child.y += this.dragOffset.y;
+                            }
+                        });
+                    } else {
+                        st.x += this.dragOffset.x;
+                        st.y += this.dragOffset.y;
+                    }
+                    st.lastMod = Date.now();
+                });
+                this.dragOffset = null;
+                this._clearSnapGuides();
+                this.invalidateCache();
+                this.saveCurrentImg();
+                this.render();
+                return;
             }
 
             // Finalize resize operation
@@ -1495,6 +1682,7 @@ export const ColorRmInput = {
     /**
      * Checks if an object intersects with a lasso polygon (partial selection)
      * Returns true if any part of the object is inside or crosses the lasso
+     * For hollow shapes (unfilled), only their edges count - not their interior
      * @param {Object} st - The stroke/object to check
      * @param {Array} lassoPath - Array of {x, y} points defining the lasso polygon
      * @returns {boolean} True if object intersects with lasso
@@ -1513,21 +1701,49 @@ export const ColorRmInput = {
                 }
             }
 
-            // Also check if any lasso point is inside the stroke's bounding box
-            // (handles case where lasso is drawn inside a large stroke)
-            const bounds = this._getPenBounds(st.pts);
-            for (const pt of lassoPath) {
-                if (pt.x >= bounds.minX && pt.x <= bounds.maxX &&
-                    pt.y >= bounds.minY && pt.y <= bounds.maxY) {
-                    // Lasso touches the bounding box - do line intersection check
-                    return this._doesLassoIntersectStroke(st.pts, lassoPath);
+            // Also check if lasso path intersects the stroke line segments
+            return this._doesLassoIntersectStroke(st.pts, lassoPath);
+        }
+
+        // For shapes - check if lasso touches the shape's edge or if corners are in lasso
+        if (st.tool === 'shape') {
+            const bounds = this._getItemBounds(st);
+            const isHollow = !st.fill || st.fill === 'transparent' || st.fill === 'none';
+
+            // Check if any corner is inside the lasso
+            const corners = [
+                { x: bounds.minX, y: bounds.minY },
+                { x: bounds.maxX, y: bounds.minY },
+                { x: bounds.maxX, y: bounds.maxY },
+                { x: bounds.minX, y: bounds.maxY }
+            ];
+
+            for (const pt of corners) {
+                if (this.isPointInPolygon(pt.x, pt.y, lassoPath)) {
+                    return true;
+                }
+            }
+
+            // Check if lasso edges intersect with shape edges
+            if (this._doesLassoIntersectRect(bounds, lassoPath)) {
+                return true;
+            }
+
+            // For filled shapes only: check if lasso is entirely inside the shape
+            if (!isHollow) {
+                // Check if any lasso point is inside the shape bounds
+                for (const pt of lassoPath) {
+                    if (pt.x >= bounds.minX && pt.x <= bounds.maxX &&
+                        pt.y >= bounds.minY && pt.y <= bounds.maxY) {
+                        return true;
+                    }
                 }
             }
 
             return false;
         }
 
-        // For shapes, text, and other objects - check bounding box corners and center
+        // For text, images, groups - use bounding box (they're always "filled")
         const bounds = this._getItemBounds(st);
 
         // Check if any corner or center is inside the lasso
@@ -2677,5 +2893,320 @@ export const ColorRmInput = {
         const sidebarAngle = document.getElementById('sidebarRotationAngle');
         if (ctxAngle) ctxAngle.textContent = angleText;
         if (sidebarAngle) sidebarAngle.textContent = angleText;
+    },
+
+    // =============================================
+    // SNAP TO GRID
+    // =============================================
+
+    /**
+     * Toggles snap to grid
+     */
+    setSnapToGrid(enabled) {
+        this.state.snapToGrid = enabled;
+        const toggle = this.getElement('snapGridToggle');
+        if (toggle) toggle.checked = enabled;
+        this.saveSessionState();
+        this.ui.showToast(enabled ? 'Snap to Grid ON' : 'Snap to Grid OFF');
+    },
+
+    /**
+     * Sets grid size for snapping
+     */
+    setGridSize(size) {
+        this.state.gridSize = parseInt(size) || 20;
+        const input = this.getElement('gridSizeInput');
+        if (input) input.value = this.state.gridSize;
+        this.saveSessionState();
+        this.render(); // Re-render to show updated grid
+    },
+
+    /**
+     * Snaps a value to the nearest grid line
+     */
+    _snapToGrid(value) {
+        const gridSize = this.state.gridSize || 20;
+        return Math.round(value / gridSize) * gridSize;
+    },
+
+    /**
+     * Snaps a point to grid if snap is enabled
+     */
+    _snapPointToGrid(pt) {
+        if (!this.state.snapToGrid) return pt;
+        return {
+            x: this._snapToGrid(pt.x),
+            y: this._snapToGrid(pt.y)
+        };
+    },
+
+    // =============================================
+    // SNAP TO OBJECTS (SMART GUIDES)
+    // =============================================
+
+    /**
+     * Toggles snap to objects
+     */
+    setSnapToObjects(enabled) {
+        this.state.snapToObjects = enabled;
+        const toggle = this.getElement('snapObjectsToggle');
+        if (toggle) toggle.checked = enabled;
+        this.saveSessionState();
+        this.ui.showToast(enabled ? 'Smart Guides ON' : 'Smart Guides OFF');
+    },
+
+    /**
+     * Finds snap points from other objects and returns adjusted position + guide lines
+     * @param {Object} movingBounds - Bounds of item being moved {minX, minY, maxX, maxY, w, h}
+     * @param {number[]} excludeIndices - Indices to exclude (the items being moved)
+     * @param {number} threshold - Snap threshold in pixels
+     * @returns {Object} {snappedBounds, guides}
+     */
+    _findObjectSnaps(movingBounds, excludeIndices = [], threshold = 8) {
+        if (!this.state.snapToObjects) {
+            return { snappedBounds: movingBounds, guides: [] };
+        }
+
+        const img = this.state.images[this.state.idx];
+        if (!img || !img.history) return { snappedBounds: movingBounds, guides: [] };
+
+        const guides = [];
+        let snapX = null, snapY = null;
+        let snapDx = 0, snapDy = 0;
+
+        // Get snap points from moving object
+        const movingCenterX = (movingBounds.minX + movingBounds.maxX) / 2;
+        const movingCenterY = (movingBounds.minY + movingBounds.maxY) / 2;
+
+        // Check against all other objects
+        for (let i = 0; i < img.history.length; i++) {
+            if (excludeIndices.includes(i)) continue;
+            const item = img.history[i];
+            if (item.deleted || item.locked) continue;
+
+            const bounds = this._getItemBounds(item);
+
+            // Vertical alignments (X axis)
+            const xChecks = [
+                { moving: movingBounds.minX, target: bounds.minX, type: 'left' },
+                { moving: movingBounds.minX, target: bounds.maxX, type: 'left-to-right' },
+                { moving: movingBounds.maxX, target: bounds.minX, type: 'right-to-left' },
+                { moving: movingBounds.maxX, target: bounds.maxX, type: 'right' },
+                { moving: movingCenterX, target: (bounds.minX + bounds.maxX) / 2, type: 'center-x' }
+            ];
+
+            for (const check of xChecks) {
+                const diff = Math.abs(check.moving - check.target);
+                if (diff < threshold && (snapX === null || diff < Math.abs(snapDx))) {
+                    snapX = check.target;
+                    if (check.type.includes('left')) {
+                        snapDx = check.target - movingBounds.minX;
+                    } else if (check.type.includes('right')) {
+                        snapDx = check.target - movingBounds.maxX;
+                    } else {
+                        snapDx = check.target - movingCenterX;
+                    }
+                    // Add vertical guide line
+                    guides.push({
+                        type: 'vertical',
+                        x: check.target,
+                        y1: Math.min(bounds.minY, movingBounds.minY) - 20,
+                        y2: Math.max(bounds.maxY, movingBounds.maxY) + 20
+                    });
+                }
+            }
+
+            // Horizontal alignments (Y axis)
+            const yChecks = [
+                { moving: movingBounds.minY, target: bounds.minY, type: 'top' },
+                { moving: movingBounds.minY, target: bounds.maxY, type: 'top-to-bottom' },
+                { moving: movingBounds.maxY, target: bounds.minY, type: 'bottom-to-top' },
+                { moving: movingBounds.maxY, target: bounds.maxY, type: 'bottom' },
+                { moving: movingCenterY, target: (bounds.minY + bounds.maxY) / 2, type: 'center-y' }
+            ];
+
+            for (const check of yChecks) {
+                const diff = Math.abs(check.moving - check.target);
+                if (diff < threshold && (snapY === null || diff < Math.abs(snapDy))) {
+                    snapY = check.target;
+                    if (check.type.includes('top')) {
+                        snapDy = check.target - movingBounds.minY;
+                    } else if (check.type.includes('bottom')) {
+                        snapDy = check.target - movingBounds.maxY;
+                    } else {
+                        snapDy = check.target - movingCenterY;
+                    }
+                    // Add horizontal guide line
+                    guides.push({
+                        type: 'horizontal',
+                        y: check.target,
+                        x1: Math.min(bounds.minX, movingBounds.minX) - 20,
+                        x2: Math.max(bounds.maxX, movingBounds.maxX) + 20
+                    });
+                }
+            }
+        }
+
+        // Apply snapping
+        const snappedBounds = {
+            minX: movingBounds.minX + snapDx,
+            minY: movingBounds.minY + snapDy,
+            maxX: movingBounds.maxX + snapDx,
+            maxY: movingBounds.maxY + snapDy,
+            w: movingBounds.w,
+            h: movingBounds.h
+        };
+
+        // Store guides for rendering
+        this.state.guideLines = guides;
+
+        return { snappedBounds, guides, snapDx, snapDy };
+    },
+
+    /**
+     * Clears snap guide lines
+     */
+    _clearSnapGuides() {
+        this.state.guideLines = [];
+    },
+
+    // =============================================
+    // MULTI-PAGE CLIPBOARD
+    // =============================================
+
+    /**
+     * Copy selected items to multi-page clipboard
+     */
+    copyToClipboard() {
+        if (this.state.selection.length === 0) {
+            this.ui.showToast('Nothing selected');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+        const items = this.state.selection.map(i => JSON.parse(JSON.stringify(img.history[i])));
+
+        // Calculate bounds for relative positioning when pasting
+        const bounds = this._getGroupBounds(items);
+
+        this.state.clipboard = {
+            items: items,
+            bounds: bounds,
+            sourcePage: this.state.idx
+        };
+
+        this.ui.showToast(`Copied ${items.length} item(s) to clipboard`);
+    },
+
+    /**
+     * Cut selected items to multi-page clipboard
+     */
+    cutToClipboard() {
+        this.copyToClipboard();
+        if (this.state.clipboard && this.state.clipboard.items.length > 0) {
+            this.deleteSelected();
+            this.ui.showToast(`Cut ${this.state.clipboard.items.length} item(s)`);
+        }
+    },
+
+    /**
+     * Paste items from clipboard (works across pages)
+     * @param {Object} position - Optional {x, y} to paste at specific position
+     */
+    pasteFromClipboard(position = null) {
+        if (!this.state.clipboard || this.state.clipboard.items.length === 0) {
+            this.ui.showToast('Clipboard is empty');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+        const clipboardBounds = this.state.clipboard.bounds;
+
+        // Default paste position: center of viewport or offset from original
+        let pasteX, pasteY;
+        if (position) {
+            pasteX = position.x;
+            pasteY = position.y;
+        } else {
+            // If pasting on same page, offset by 20px
+            // If pasting on different page, try to center in viewport
+            if (this.state.idx === this.state.clipboard.sourcePage) {
+                pasteX = clipboardBounds.minX + 20;
+                pasteY = clipboardBounds.minY + 20;
+            } else {
+                // Center in current viewport
+                const viewCenterX = (this.state.viewW / 2 - this.state.pan.x) / this.state.zoom;
+                const viewCenterY = (this.state.viewH / 2 - this.state.pan.y) / this.state.zoom;
+                pasteX = viewCenterX - clipboardBounds.w / 2;
+                pasteY = viewCenterY - clipboardBounds.h / 2;
+            }
+        }
+
+        // Calculate offset from original bounds
+        const offsetX = pasteX - clipboardBounds.minX;
+        const offsetY = pasteY - clipboardBounds.minY;
+
+        // Create new items with new IDs and apply offset
+        const newIndices = [];
+        this.state.clipboard.items.forEach(item => {
+            const newItem = JSON.parse(JSON.stringify(item));
+            newItem.id = Date.now() + Math.random();
+            newItem.lastMod = Date.now();
+            newItem.deleted = false;
+
+            // Apply position offset
+            if (newItem.tool === 'pen' || newItem.tool === 'eraser') {
+                if (newItem.pts) {
+                    newItem.pts.forEach(p => {
+                        p.x += offsetX;
+                        p.y += offsetY;
+                    });
+                }
+            } else if (newItem.tool === 'group' && newItem.children) {
+                newItem.x += offsetX;
+                newItem.y += offsetY;
+                newItem.children.forEach(child => {
+                    if (child.tool === 'pen' || child.tool === 'eraser') {
+                        if (child.pts) {
+                            child.pts.forEach(p => {
+                                p.x += offsetX;
+                                p.y += offsetY;
+                            });
+                        }
+                    } else {
+                        child.x += offsetX;
+                        child.y += offsetY;
+                    }
+                });
+            } else {
+                newItem.x += offsetX;
+                newItem.y += offsetY;
+            }
+
+            img.history.push(newItem);
+            newIndices.push(img.history.length - 1);
+
+            // Sync with liveblocks
+            if (this.liveSync) {
+                this.liveSync.addStroke(this.state.idx, newItem);
+            }
+        });
+
+        // Select pasted items
+        this.state.selection = newIndices;
+        this.setTool('lasso');
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+
+        this.ui.showToast(`Pasted ${newIndices.length} item(s)`);
+    },
+
+    /**
+     * Check if clipboard has content
+     */
+    hasClipboardContent() {
+        return this.state.clipboard && this.state.clipboard.items && this.state.clipboard.items.length > 0;
     }
 };
