@@ -597,6 +597,12 @@ export const ColorRmInput = {
                     else if(first.tool === 'shape') { slider.value = first.width; label.innerText = "Border Width"; }
                     else if(first.tool === 'text') { slider.value = first.size; label.innerText = "Text Size"; }
                 }
+                // Update rotation display and aspect ratio checkbox
+                this._updateRotationDisplay();
+                const ctxAspect = document.getElementById('ctxAspectRatio');
+                const sidebarAspect = this.getElement('sidebarAspectRatio');
+                if (ctxAspect) ctxAspect.checked = this.state.keepAspectRatio || false;
+                if (sidebarAspect) sidebarAspect.checked = this.state.keepAspectRatio || false;
             }
         };
 
@@ -691,8 +697,20 @@ export const ColorRmInput = {
             // Handle resize during drag
             if(isResizing && startBounds && resizeHandle) {
                 const img = this.state.images[this.state.idx];
-                const dx = pt.x - startPt.x;
-                const dy = pt.y - startPt.y;
+                let dx = pt.x - startPt.x;
+                let dy = pt.y - startPt.y;
+
+                // Calculate aspect ratio constraint if enabled
+                const keepAspect = this.state.keepAspectRatio;
+                if (keepAspect && startBounds.w > 0 && startBounds.h > 0) {
+                    const aspectRatio = startBounds.w / startBounds.h;
+                    // Use the larger movement to determine scale
+                    if (Math.abs(dx) > Math.abs(dy)) {
+                        dy = dx / aspectRatio;
+                    } else {
+                        dx = dy * aspectRatio;
+                    }
+                }
 
                 this.state.selection.forEach((idx, i) => {
                     const st = img.history[idx];
@@ -744,6 +762,19 @@ export const ColorRmInput = {
                             newH = orig.h - dy;
                         }
 
+                        // For aspect ratio constraint
+                        if (keepAspect && orig.w !== 0 && orig.h !== 0) {
+                            const origAspect = Math.abs(orig.w) / Math.abs(orig.h);
+                            if (resizeHandle.length === 2) {
+                                // Corner resize - use uniform scale
+                                const scale = Math.max(Math.abs(newW / orig.w), Math.abs(newH / orig.h));
+                                newW = orig.w * scale * Math.sign(newW || 1);
+                                newH = orig.h * scale * Math.sign(newH || 1);
+                                if (resizeHandle.includes('l')) newX = orig.x + orig.w - newW;
+                                if (resizeHandle.includes('t')) newY = orig.y + orig.h - newH;
+                            }
+                        }
+
                         st.x = newX;
                         st.y = newY;
                         st.w = newW;
@@ -783,6 +814,8 @@ export const ColorRmInput = {
                     }
                 });
 
+                // Update rotation display in UI
+                this._updateRotationDisplay();
                 this.render();
                 return;
             }
@@ -1819,6 +1852,12 @@ export const ColorRmInput = {
     _getItemBounds(item) {
         if (item.tool === 'pen' || item.tool === 'eraser') {
             return this._getPenBounds(item.pts);
+        } else if (item.tool === 'group' && item.children) {
+            // For groups, return the stored group bounds
+            let x = item.x, y = item.y, w = item.w || 0, h = item.h || 0;
+            if (w < 0) { x += w; w = -w; }
+            if (h < 0) { y += h; h = -h; }
+            return { minX: x, minY: y, maxX: x + w, maxY: y + h, w, h };
         } else {
             let x = item.x, y = item.y, w = item.w || 0, h = item.h || 0;
             if (w < 0) { x += w; w = -w; }
@@ -1894,13 +1933,6 @@ export const ColorRmInput = {
         this.saveCurrentImg();
         this.render();
 
-        // Sync with liveblocks
-        if (this.liveSync) {
-            items.forEach(i => {
-                this.liveSync.updateStroke(this.state.idx, i.item);
-            });
-        }
-
         this.ui.showToast(`Aligned ${direction}`);
     },
 
@@ -1949,13 +1981,6 @@ export const ColorRmInput = {
         this.invalidateCache();
         this.saveCurrentImg();
         this.render();
-
-        // Sync with liveblocks
-        if (this.liveSync) {
-            items.forEach(i => {
-                this.liveSync.updateStroke(this.state.idx, i.item);
-            });
-        }
 
         this.ui.showToast(`Distributed ${direction}ly`);
     },
@@ -2034,6 +2059,20 @@ export const ColorRmInput = {
             const dx = x !== null ? x - bounds.minX : 0;
             const dy = y !== null ? y - bounds.minY : 0;
             item.pts.forEach(p => { p.x += dx; p.y += dy; });
+        } else if (item.tool === 'group' && item.children) {
+            // Move group and all children together
+            const dx = x !== null ? x - item.x : 0;
+            const dy = y !== null ? y - item.y : 0;
+            if (x !== null) item.x = x;
+            if (y !== null) item.y = y;
+            item.children.forEach(child => {
+                if (child.tool === 'pen' || child.tool === 'eraser') {
+                    child.pts.forEach(p => { p.x += dx; p.y += dy; });
+                } else {
+                    child.x += dx;
+                    child.y += dy;
+                }
+            });
         } else {
             if (x !== null) item.x = x;
             if (y !== null) item.y = y;
@@ -2047,6 +2086,18 @@ export const ColorRmInput = {
     _moveItemBy(item, dx, dy) {
         if (item.tool === 'pen' || item.tool === 'eraser') {
             item.pts.forEach(p => { p.x += dx; p.y += dy; });
+        } else if (item.tool === 'group' && item.children) {
+            // Move group and all children together
+            item.x += dx;
+            item.y += dy;
+            item.children.forEach(child => {
+                if (child.tool === 'pen' || child.tool === 'eraser') {
+                    child.pts.forEach(p => { p.x += dx; p.y += dy; });
+                } else {
+                    child.x += dx;
+                    child.y += dy;
+                }
+            });
         } else {
             item.x += dx;
             item.y += dy;
@@ -2280,14 +2331,11 @@ export const ColorRmInput = {
         this.setTool('lasso');
         this.render();
 
-        // Sync with liveblocks if available
-        if (this.liveSync && !this.liveSync.isInitializing) {
-            const item = isEditing ? img.history[historyIdx] : img.history[img.history.length - 1];
-            if (isEditing) {
-                this.liveSync.updateStroke(this.state.idx, item);
-            } else {
-                this.liveSync.addStroke(this.state.idx, item);
-            }
+        // Sync with liveblocks if available - saveCurrentImg already handles sync via setHistory
+        // For new text, we also call addStroke for immediate visibility
+        if (this.liveSync && !this.liveSync.isInitializing && !isEditing) {
+            const item = img.history[img.history.length - 1];
+            this.liveSync.addStroke(this.state.idx, item);
         }
     },
 
@@ -2390,11 +2438,9 @@ export const ColorRmInput = {
         this.saveCurrentImg();
         this.render();
 
-        // Sync with liveblocks
+        // Sync with liveblocks - addStroke for the new group object
+        // saveCurrentImg already syncs via setHistory
         if (this.liveSync) {
-            sortedSelection.forEach(i => {
-                this.liveSync.updateStroke(this.state.idx, history[i]);
-            });
             this.liveSync.addStroke(this.state.idx, groupObj);
         }
 
@@ -2462,9 +2508,9 @@ export const ColorRmInput = {
         this.saveCurrentImg();
         this.render();
 
-        // Sync with liveblocks
+        // Sync with liveblocks - addStroke for the new individual items
+        // saveCurrentImg already syncs via setHistory
         if (this.liveSync) {
-            this.liveSync.updateStroke(this.state.idx, groupObj);
             newIndices.forEach(i => {
                 this.liveSync.addStroke(this.state.idx, history[i]);
             });
@@ -2495,5 +2541,141 @@ export const ColorRmInput = {
             w: maxX - minX,
             h: maxY - minY
         };
+    },
+
+    // =============================================
+    // FLIP & TRANSFORM
+    // =============================================
+
+    /**
+     * Flips selected items horizontally or vertically
+     * @param {string} direction - 'horizontal' or 'vertical'
+     */
+    flipSelection(direction) {
+        if (this.state.selection.length === 0) {
+            this.ui.showToast('Select items first');
+            return;
+        }
+
+        const img = this.state.images[this.state.idx];
+
+        // Save state for undo
+        this._pushModificationUndo('flip', this.state.selection);
+
+        // Get combined bounds of selection
+        const items = this.state.selection.map(i => img.history[i]);
+        const bounds = this._getGroupBounds(items);
+        const centerX = (bounds.minX + bounds.maxX) / 2;
+        const centerY = (bounds.minY + bounds.maxY) / 2;
+
+        // Helper function to flip an item
+        const flipItem = (st) => {
+            if (st.tool === 'pen' || st.tool === 'eraser') {
+                // Flip pen points around the center
+                st.pts = st.pts.map(p => ({
+                    x: direction === 'horizontal' ? centerX * 2 - p.x : p.x,
+                    y: direction === 'vertical' ? centerY * 2 - p.y : p.y
+                }));
+            } else if (st.tool === 'group' && st.children) {
+                // Flip group: flip the group position and all children
+                if (direction === 'horizontal') {
+                    const newX = centerX * 2 - st.x - st.w;
+                    // Flip children relative to old group position
+                    st.children.forEach(child => {
+                        if (child.tool === 'pen' || child.tool === 'eraser') {
+                            child.pts = child.pts.map(p => ({
+                                x: st.x + st.w - (p.x - st.x),
+                                y: p.y
+                            }));
+                        } else {
+                            const childNewX = st.x + st.w - (child.x - st.x) - child.w;
+                            child.x = childNewX;
+                            if (child.rotation) child.rotation = -child.rotation;
+                        }
+                    });
+                    st.x = newX;
+                } else {
+                    const newY = centerY * 2 - st.y - st.h;
+                    // Flip children relative to old group position
+                    st.children.forEach(child => {
+                        if (child.tool === 'pen' || child.tool === 'eraser') {
+                            child.pts = child.pts.map(p => ({
+                                x: p.x,
+                                y: st.y + st.h - (p.y - st.y)
+                            }));
+                        } else {
+                            const childNewY = st.y + st.h - (child.y - st.y) - child.h;
+                            child.y = childNewY;
+                            if (child.rotation) child.rotation = -child.rotation;
+                        }
+                    });
+                    st.y = newY;
+                }
+            } else {
+                // Flip shapes/text around the center
+                if (direction === 'horizontal') {
+                    const newX = centerX * 2 - st.x - st.w;
+                    st.x = newX;
+                    // Invert rotation for horizontal flip
+                    if (st.rotation) st.rotation = -st.rotation;
+                } else {
+                    const newY = centerY * 2 - st.y - st.h;
+                    st.y = newY;
+                    // Invert rotation for vertical flip
+                    if (st.rotation) st.rotation = -st.rotation;
+                }
+            }
+            st.lastMod = Date.now();
+        };
+
+        this.state.selection.forEach(idx => {
+            flipItem(img.history[idx]);
+        });
+
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+
+        this.ui.showToast(`Flipped ${direction}`);
+    },
+
+    /**
+     * Sets whether to keep aspect ratio during resize
+     * @param {boolean} enabled - Whether to keep aspect ratio
+     */
+    setKeepAspectRatio(enabled) {
+        this.state.keepAspectRatio = enabled;
+
+        // Sync both UI checkboxes
+        const ctxCheckbox = document.getElementById('ctxAspectRatio');
+        const sidebarCheckbox = document.getElementById('sidebarAspectRatio');
+        if (ctxCheckbox) ctxCheckbox.checked = enabled;
+        if (sidebarCheckbox) sidebarCheckbox.checked = enabled;
+
+        this.saveSessionState();
+    },
+
+    /**
+     * Updates the rotation angle display in the UI
+     */
+    _updateRotationDisplay() {
+        if (this.state.selection.length === 0) return;
+
+        const img = this.state.images[this.state.idx];
+        const firstItem = img.history[this.state.selection[0]];
+
+        // Get rotation in degrees
+        let rotation = 0;
+        if (firstItem && firstItem.rotation) {
+            rotation = Math.round((firstItem.rotation * 180 / Math.PI) % 360);
+            if (rotation < 0) rotation += 360;
+        }
+
+        const angleText = `${rotation}°`;
+
+        const ctxAngle = document.getElementById('ctxRotationAngle');
+        const sidebarAngle = document.getElementById('sidebarRotationAngle');
+        if (ctxAngle) ctxAngle.textContent = angleText;
+        if (sidebarAngle) sidebarAngle.textContent = angleText;
     }
 };
