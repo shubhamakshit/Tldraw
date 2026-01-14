@@ -1,9 +1,22 @@
 
 import { createClient, LiveObject, LiveMap, LiveList } from 'https://cdn.jsdelivr.net/npm/@liveblocks/client@3.12.1/+esm';
 
+// Yjs imports - lazy loaded only when beta mode is used
+let Y = null;
+let WebsocketProvider = null;
+async function loadYjs() {
+    if (!Y) {
+        Y = await import('https://cdn.jsdelivr.net/npm/yjs@13.6.10/+esm');
+        const ywsModule = await import('https://cdn.jsdelivr.net/npm/y-websocket@2.0.4/+esm');
+        WebsocketProvider = ywsModule.WebsocketProvider;
+        console.log('[LiveSync] Yjs modules loaded');
+    }
+}
+
 export class LiveSyncClient {
     constructor(appInstance) {
         this.app = appInstance;
+        this.useBetaSync = appInstance.config.useBetaSync || false; // Beta mode flag
         this.client = null;
         this.room = null;
         this.userId = localStorage.getItem('color_rm_user_id');
@@ -12,6 +25,11 @@ export class LiveSyncClient {
         this.unsubscribes = [];
         this.isInitializing = true;
         this.root = null;
+
+        // Yjs-specific (only used when useBetaSync=true)
+        this.yjsDoc = null;
+        this.yjsProvider = null;
+        this.yjsRoot = null;
 
         // Track recent local page changes to prevent sync conflicts
         this.lastLocalPageChange = 0;
@@ -34,9 +52,15 @@ export class LiveSyncClient {
             localStorage.setItem('color_rm_user_id', this.userId);
         }
 
-        const roomId = `room_${ownerId}`;
         this.ownerId = ownerId;
         this.projectId = projectId;
+
+        // Beta mode: Use Yjs instead of Liveblocks
+        if (this.useBetaSync) {
+            return this._initYjs(ownerId, projectId);
+        }
+
+        const roomId = `room_${ownerId}`;
 
         // Update URL only if this is the main app (hacky check? or let the app handle it)
         // For now, only update hash if this sync client is attached to the main app.
@@ -134,12 +158,227 @@ export class LiveSyncClient {
     }
 
     /**
+     * Initialize Yjs-based sync (beta mode)
+     * Uses Yjs CRDTs over WebSocket for real-time collaboration
+     */
+    async _initYjs(ownerId, projectId) {
+        await loadYjs();
+
+        this.app.ui.setSyncStatus('syncing');
+        console.log(`[Yjs] Beta sync: Connecting for ${ownerId}/${projectId}`);
+
+        // Update URL with beta prefix
+        if (this.app.config.isMain) {
+            window.location.hash = `/beta/color_rm/${ownerId}/${projectId}`;
+        }
+
+        // Create Yjs document
+        this.yjsDoc = new Y.Doc();
+
+        // Connect to WebSocket - use Config for proper URL in Capacitor/bundled mode
+        const roomId = `yjs_${ownerId}_${projectId}`;
+
+        // Use Config.wsUrl for proper WebSocket URL (handles Capacitor bundled mode)
+        const wsUrl = window.Config
+            ? window.Config.wsUrl(`/yjs/${roomId}`)
+            : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/yjs/${roomId}`;
+
+        console.log(`[Yjs] Connecting to: ${wsUrl}`);
+
+        try {
+            // Create WebSocket connection directly (simpler than y-websocket provider)
+            this._yjsSocket = new WebSocket(wsUrl);
+            this._yjsConnected = false;
+
+            this._yjsSocket.onopen = () => {
+                console.log('[Yjs] WebSocket connected');
+                this._yjsConnected = true;
+                this.app.ui.setSyncStatus('saved');
+                if (this.app.renderDebug) this.app.renderDebug();
+
+                // Send initial state
+                this._sendYjsUpdate();
+            };
+
+            this._yjsSocket.onmessage = (event) => {
+                try {
+                    if (typeof event.data === 'string') {
+                        const msg = JSON.parse(event.data);
+                        this._handleYjsMessage(msg);
+                    }
+                } catch (err) {
+                    console.error('[Yjs] Message parse error:', err);
+                }
+            };
+
+            this._yjsSocket.onclose = () => {
+                console.log('[Yjs] WebSocket disconnected');
+                this._yjsConnected = false;
+                this.app.ui.setSyncStatus('offline');
+                // Auto-reconnect after 3 seconds
+                if (!this._yjsClosedIntentionally) {
+                    setTimeout(() => {
+                        if (!this._yjsConnected && !this._yjsClosedIntentionally) {
+                            console.log('[Yjs] Attempting reconnection...');
+                            this._initYjs(this.ownerId, this.projectId);
+                        }
+                    }, 3000);
+                }
+            };
+
+            this._yjsSocket.onerror = (err) => {
+                console.error('[Yjs] WebSocket error:', err);
+                this._yjsConnected = false;
+            };
+
+            // Set up leave function for cleanup
+            this.leave = () => {
+                this._yjsClosedIntentionally = true;
+                if (this._yjsSocket) {
+                    this._yjsSocket.close();
+                    this._yjsSocket = null;
+                }
+                this._yjsConnected = false;
+                this.stopPeriodicPageSync();
+                console.log('[Yjs] Connection closed');
+            };
+
+            // Setup Yjs document structure (mirrors Liveblocks structure)
+            this.yjsRoot = {
+                metadata: this.yjsDoc.getMap('metadata'),
+                pagesHistory: this.yjsDoc.getMap('pagesHistory'),
+                pagesModifications: this.yjsDoc.getMap('pagesModifications'),
+                pagesMetadata: this.yjsDoc.getMap('pagesMetadata'),
+                bookmarks: this.yjsDoc.getArray('bookmarks'),
+                colors: this.yjsDoc.getArray('colors')
+            };
+
+            // Create fake awareness for presence
+            this._yjsAwareness = new Map();
+            this._yjsClientId = Math.random().toString(36).slice(2);
+
+            this.isInitializing = false;
+            console.log('[Yjs] Beta sync initialized');
+
+            // Sync current state
+            setTimeout(() => {
+                this.syncHistory();
+            }, 500);
+
+        } catch (err) {
+            console.error('[Yjs] Failed to initialize:', err);
+            this.app.ui.showToast('Beta sync connection failed');
+            this.isInitializing = false;
+        }
+    }
+
+    /**
+     * Send current state as Yjs update
+     */
+    _sendYjsUpdate() {
+        if (!this._yjsSocket || !this._yjsConnected) return;
+
+        const img = this.app.state.images[this.app.state.idx];
+        if (!img) return;
+
+        const msg = {
+            type: 'state-update',
+            pageIdx: this.app.state.idx,
+            history: (img.history || []).filter(s => !s.deleted),
+            metadata: {
+                name: this.app.state.projectName,
+                idx: this.app.state.idx,
+                pageCount: this.app.state.images.length
+            }
+        };
+
+        this._yjsSocket.send(JSON.stringify(msg));
+    }
+
+    /**
+     * Handle incoming Yjs message
+     */
+    _handleYjsMessage(msg) {
+        if (this.isInitializing) return;
+
+        if (msg.type === 'state-update') {
+            // Apply remote state
+            const localImg = this.app.state.images[msg.pageIdx];
+            if (localImg && msg.history) {
+                // For beta sync, we always accept remote state as the source of truth
+                // This handles both additions and deletions
+                const localNonDeleted = (localImg.history || []).filter(s => !s.deleted);
+                const remoteLen = msg.history.length;
+                const localLen = localNonDeleted.length;
+
+                // Check if content actually differs (by comparing visible strokes)
+                const needsUpdate = remoteLen !== localLen ||
+                    JSON.stringify(msg.history) !== JSON.stringify(localNonDeleted);
+
+                if (needsUpdate) {
+                    // Replace local history with remote (non-deleted strokes only)
+                    localImg.history = msg.history;
+                    console.log(`[Yjs] Applied remote state for page ${msg.pageIdx}: ${remoteLen} strokes (was ${localLen})`);
+
+                    // Only re-render if this is the current page
+                    if (msg.pageIdx === this.app.state.idx) {
+                        this.app.invalidateCache();
+                        this.app.render();
+                    }
+                }
+            }
+        } else if (msg.type === 'page-structure') {
+            // Handle page structure change from another client
+            const remotePageCount = msg.pageCount || 0;
+            const localPageCount = this.app.state.images.length;
+            const remotePageIds = msg.pageIds || [];
+            const localPageIds = this.app.state.images.map(img => img?.pageId).filter(Boolean);
+
+            console.log(`[Yjs] Received page structure: ${remotePageCount} pages (local: ${localPageCount})`);
+
+            // Check if structure actually differs (count or order)
+            const countDiffers = remotePageCount !== localPageCount;
+            const orderDiffers = JSON.stringify(remotePageIds) !== JSON.stringify(localPageIds);
+
+            if (countDiffers || orderDiffers) {
+                // Page structure changed - run reconciliation via R2 (source of truth)
+                console.log(`[Yjs] Page structure mismatch (count: ${countDiffers}, order: ${orderDiffers}), triggering reconciliation...`);
+                // Debounce to avoid rapid re-fetches
+                if (this._yjsReconcileTimer) clearTimeout(this._yjsReconcileTimer);
+                this._yjsReconcileTimer = setTimeout(() => {
+                    this.reconcilePageStructure();
+                }, 500);
+            }
+        } else if (msg.type === 'presence') {
+            // Update presence map
+            this._yjsAwareness.set(msg.clientId, {
+                userName: msg.userName,
+                cursor: msg.cursor,
+                pageIdx: msg.pageIdx,
+                tool: msg.tool,
+                isDrawing: msg.isDrawing,
+                color: msg.color,
+                size: msg.size
+            });
+            this.renderCursors();
+            this.renderUsers();
+        }
+    }
+
+    /**
      * Immediate page sync - called right after initialization
      * Simply runs reconciliation - R2 is the source of truth
      */
     async _immediatePageSync() {
         console.log(`[_immediatePageSync] Running reconciliation...`);
+        // Page reconciliation works for both modes (fetches from R2)
         await this.reconcilePageStructure();
+
+        // For beta mode, also sync current history
+        if (this.useBetaSync) {
+            console.log('[Yjs] Immediate history sync');
+            this.syncHistory();
+        }
     }
 
     /**
@@ -334,6 +573,24 @@ export class LiveSyncClient {
     }
 
     updateCursor(pt, tool, isDrawing, color, size) {
+        // Beta mode: Use Yjs awareness
+        if (this.useBetaSync) {
+            if (!this._yjsSocket || !this._yjsConnected) return;
+            // Send presence via WebSocket
+            this._yjsSocket.send(JSON.stringify({
+                type: 'presence',
+                clientId: this._yjsClientId,
+                cursor: pt,
+                pageIdx: this.app.state.idx,
+                userName: window.Registry?.getUsername() || this.userId,
+                tool: tool,
+                isDrawing: isDrawing,
+                color: color,
+                size: size
+            }));
+            return;
+        }
+
         if (!this.room) return;
         this.room.updatePresence({
             cursor: pt,
@@ -348,6 +605,11 @@ export class LiveSyncClient {
     }
 
     renderCursors() {
+        // Beta mode: Use Yjs awareness
+        if (this.useBetaSync) {
+            return this._renderCursorsYjs();
+        }
+
         const container = this.app.getElement('cursorLayer');
         if (!container) return;
 
@@ -486,7 +748,142 @@ export class LiveSyncClient {
         trailCanvas.style.display = hasActiveTrails ? 'block' : 'none';
     }
 
+    /**
+     * Yjs version of renderCursors - uses awareness API
+     */
+    _renderCursorsYjs() {
+        const container = this.app.getElement('cursorLayer');
+        if (!container) return;
+
+        // Clear old cursors
+        const oldCursors = container.querySelectorAll('.remote-cursor');
+        oldCursors.forEach(el => el.remove());
+
+        if (!this.app.state.showCursors) return;
+        if (!this._yjsAwareness || this._yjsAwareness.size === 0) return;
+
+        const viewport = this.app.getElement('viewport');
+        const canvas = this.app.getElement('canvas');
+        if (!canvas || !viewport) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const viewRect = viewport.getBoundingClientRect();
+
+        // Align cursorLayer to match canvas
+        container.style.position = 'absolute';
+        container.style.width = rect.width + 'px';
+        container.style.height = rect.height + 'px';
+        container.style.left = (rect.left - viewRect.left) + 'px';
+        container.style.top = (rect.top - viewRect.top) + 'px';
+        container.style.inset = 'auto';
+
+        // Setup Trail Canvas for Yjs
+        let trailCanvas = container.querySelector('#remote-trails-canvas');
+        if (!trailCanvas) {
+            trailCanvas = document.createElement('canvas');
+            trailCanvas.id = 'remote-trails-canvas';
+            trailCanvas.style.position = 'absolute';
+            trailCanvas.style.inset = '0';
+            trailCanvas.style.pointerEvents = 'none';
+            container.appendChild(trailCanvas);
+        }
+
+        // Match trailCanvas resolution to main canvas
+        if (trailCanvas.width !== this.app.state.viewW || trailCanvas.height !== this.app.state.viewH) {
+            trailCanvas.width = this.app.state.viewW;
+            trailCanvas.height = this.app.state.viewH;
+        }
+        trailCanvas.style.width = '100%';
+        trailCanvas.style.height = '100%';
+        trailCanvas.style.backgroundColor = 'transparent';
+
+        const ctx = trailCanvas.getContext('2d');
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
+
+        let hasActiveTrails = false;
+
+        this._yjsAwareness.forEach((state, clientId) => {
+            if (clientId === this._yjsClientId) return; // Skip self
+            if (!state || !state.cursor || state.pageIdx !== this.app.state.idx) {
+                if (this.remoteTrails[clientId]) delete this.remoteTrails[clientId];
+                return;
+            }
+
+            // Draw live trail
+            if (state.isDrawing && state.tool === 'pen') {
+                hasActiveTrails = true;
+                let trail = this.remoteTrails[clientId] || [];
+                const lastPt = trail[trail.length - 1];
+                if (!lastPt || lastPt.x !== state.cursor.x || lastPt.y !== state.cursor.y) {
+                    trail.push(state.cursor);
+                }
+                this.remoteTrails[clientId] = trail;
+
+                if (trail.length > 1) {
+                    ctx.save();
+                    ctx.translate(this.app.state.pan.x, this.app.state.pan.y);
+                    ctx.scale(this.app.state.zoom, this.app.state.zoom);
+
+                    ctx.beginPath();
+                    ctx.moveTo(trail[0].x, trail[0].y);
+                    for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
+
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.lineWidth = (state.size || 3);
+
+                    // Parse color for opacity
+                    const hex = state.color || '#000000';
+                    let r=0, g=0, b=0;
+                    if(hex.length === 4) {
+                        r = parseInt(hex[1]+hex[1], 16);
+                        g = parseInt(hex[2]+hex[2], 16);
+                        b = parseInt(hex[3]+hex[3], 16);
+                    } else if (hex.length === 7) {
+                        r = parseInt(hex.slice(1,3), 16);
+                        g = parseInt(hex.slice(3,5), 16);
+                        b = parseInt(hex.slice(5,7), 16);
+                    }
+                    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            } else {
+                if (this.remoteTrails[clientId]) delete this.remoteTrails[clientId];
+            }
+
+            // Draw cursor
+            const div = document.createElement('div');
+            div.className = 'remote-cursor';
+
+            const scaleX = rect.width / this.app.state.viewW;
+            const scaleY = rect.height / this.app.state.viewH;
+
+            const x = (state.cursor.x * this.app.state.zoom + this.app.state.pan.x) * scaleX;
+            const y = (state.cursor.y * this.app.state.zoom + this.app.state.pan.y) * scaleY;
+
+            div.style.left = `${x}px`;
+            div.style.top = `${y}px`;
+            div.style.borderColor = 'var(--accent)';
+
+            div.innerHTML = `
+                <div class="cursor-pointer"></div>
+                <div class="cursor-label">${state.userName || 'User'}</div>
+            `;
+            container.appendChild(div);
+        });
+
+        // Hide trail canvas if no active trails
+        trailCanvas.style.display = hasActiveTrails ? 'block' : 'none';
+    }
+
     renderUsers() {
+        // Beta mode: Use Yjs awareness
+        if (this.useBetaSync) {
+            return this._renderUsersYjs();
+        }
+
         const el = this.app.getElement('userList');
         if (!el) return;
 
@@ -510,6 +907,38 @@ export class LiveSyncClient {
                 </div>
             `;
         });
+
+        el.innerHTML = html;
+    }
+
+    /**
+     * Yjs version of renderUsers - uses awareness map
+     */
+    _renderUsersYjs() {
+        const el = this.app.getElement('userList');
+        if (!el) return;
+
+        const myName = window.Registry?.getUsername() || this.userId;
+        let html = `
+            <div class="user-item self">
+                <div class="user-dot" style="background:var(--primary)"></div>
+                <span>You (${myName})</span>
+            </div>
+        `;
+
+        if (this._yjsAwareness) {
+            this._yjsAwareness.forEach((state, clientId) => {
+                if (clientId === this._yjsClientId) return; // Skip self
+                if (!state) return;
+                const userName = state.userName || 'User';
+                html += `
+                    <div class="user-item">
+                        <div class="user-dot" style="background:var(--accent)"></div>
+                        <span>${userName}</span>
+                    </div>
+                `;
+            });
+        }
 
         el.innerHTML = html;
     }
@@ -1258,6 +1687,11 @@ export class LiveSyncClient {
     }
 
     syncHistory() {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            return this._syncHistoryYjs();
+        }
+
         const project = this.getProject();
         if (!project || this.isInitializing) return;
 
@@ -1358,6 +1792,16 @@ export class LiveSyncClient {
         }
     }
 
+    /**
+     * Yjs version of syncHistory - syncs current page history via WebSocket
+     */
+    _syncHistoryYjs() {
+        if (this.isInitializing) return;
+
+        // Use the simpler WebSocket-based sync
+        this._sendYjsUpdate();
+    }
+
     // Fetches base history for multiple pages and re-syncs
     async _fetchMissingBaseHistories(pageIndices) {
         console.log(`[LiveSync] Fetching base history for ${pageIndices.length} pages...`);
@@ -1428,11 +1872,30 @@ export class LiveSyncClient {
 
     // --- Local -> Remote Updates ---
     updateMetadata(updates) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return;
+            this.yjsDoc.transact(() => {
+                for (const [key, value] of Object.entries(updates)) {
+                    this.yjsRoot.metadata.set(key, value);
+                }
+            });
+            return;
+        }
+
         const project = this.getProject();
         if (project) project.get("metadata").update(updates);
     }
 
     addStroke(pageIdx, stroke) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            // For beta sync, just send the updated state via WebSocket
+            // The stroke is already added to local history by the app
+            this._sendYjsUpdate();
+            return;
+        }
+
         const project = this.getProject();
         if (!project) return;
         const pagesHistory = project.get("pagesHistory");
@@ -1444,6 +1907,13 @@ export class LiveSyncClient {
     }
 
     setHistory(pageIdx, history) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            // For beta sync, send updated state via WebSocket
+            this._sendYjsUpdate();
+            return;
+        }
+
         const project = this.getProject();
         if (!project) return;
         const pagesHistory = project.get("pagesHistory");
@@ -1457,6 +1927,11 @@ export class LiveSyncClient {
      * - modifications: changes to base items (moves, deletes, etc.)
      */
     syncPageDeltas(pageIdx, deltas, modifications) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            return this._syncPageDeltasYjs(pageIdx, deltas, modifications);
+        }
+
         const project = this.getProject();
         if (!project) return;
 
@@ -1484,9 +1959,39 @@ export class LiveSyncClient {
     }
 
     /**
+     * Yjs version of syncPageDeltas
+     */
+    _syncPageDeltasYjs(pageIdx, deltas, modifications) {
+        if (!this.yjsRoot) return;
+
+        const key = pageIdx.toString();
+
+        this.yjsDoc.transact(() => {
+            // Store deltas
+            this.yjsRoot.pagesHistory.set(key, deltas || []);
+
+            // Store modifications
+            if (Object.keys(modifications).length > 0) {
+                this.yjsRoot.pagesModifications.set(key, modifications);
+            } else if (this.yjsRoot.pagesModifications.has(key)) {
+                this.yjsRoot.pagesModifications.delete(key);
+            }
+        });
+
+        console.log(`[Yjs] Synced page ${pageIdx}: ${deltas.length} deltas, ${Object.keys(modifications).length} modifications`);
+    }
+
+    /**
      * Get modifications for a page (for applying to base history)
      */
     getPageModifications(pageIdx) {
+        // Beta mode: Get from Yjs root
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return {};
+            const key = pageIdx.toString();
+            return this.yjsRoot.pagesModifications?.get(key) || {};
+        }
+
         const project = this.getProject();
         if (!project) return {};
 
@@ -1499,6 +2004,15 @@ export class LiveSyncClient {
 
     // Update page metadata (e.g., hasBaseHistory flag for SVG imports)
     updatePageMetadata(pageIdx, metadata) {
+        // Beta mode: Store in Yjs root
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return;
+            const key = pageIdx.toString();
+            const existing = this.yjsRoot.pagesMetadata?.get(key) || {};
+            this.yjsRoot.pagesMetadata?.set(key, { ...existing, ...metadata });
+            return;
+        }
+
         const project = this.getProject();
         if (!project) return;
 
@@ -1521,6 +2035,13 @@ export class LiveSyncClient {
 
     // Get page metadata (for checking if page has base history)
     getPageMetadata(pageIdx) {
+        // Beta mode: Get from Yjs root
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return null;
+            const key = pageIdx.toString();
+            return this.yjsRoot.pagesMetadata?.get(key) || null;
+        }
+
         const project = this.getProject();
         if (!project) return null;
 
@@ -1565,17 +2086,52 @@ export class LiveSyncClient {
     }
 
     updateBookmarks(bookmarks) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return;
+            this.yjsDoc.transact(() => {
+                this.yjsRoot.bookmarks.delete(0, this.yjsRoot.bookmarks.length);
+                (bookmarks || []).forEach(b => this.yjsRoot.bookmarks.push([b]));
+            });
+            return;
+        }
         const project = this.getProject();
         if (project) project.set("bookmarks", new LiveList(bookmarks || []));
     }
 
     updateColors(colors) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return;
+            this.yjsDoc.transact(() => {
+                this.yjsRoot.colors.delete(0, this.yjsRoot.colors.length);
+                (colors || []).forEach(c => this.yjsRoot.colors.push([c]));
+            });
+            return;
+        }
         const project = this.getProject();
         if (project) project.set("colors", new LiveList(colors || []));
     }
 
     // Add new page to remote storage
     addPage(pageIndex, pageData) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return;
+            const key = pageIndex.toString();
+            this.yjsDoc.transact(() => {
+                this.yjsRoot.pagesHistory.set(key, []);
+                // Update metadata
+                this.yjsRoot.metadata.set('pageCount', Math.max(
+                    this.yjsRoot.metadata.get('pageCount') || 0,
+                    pageIndex + 1
+                ));
+            });
+            // Broadcast update
+            this._sendYjsUpdate();
+            return;
+        }
+
         const project = this.getProject();
         if (!project) return;
 
@@ -1594,6 +2150,20 @@ export class LiveSyncClient {
 
     // Reorder pages in remote storage
     reorderPages(fromIndex, toIndex) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return;
+            const fromKey = fromIndex.toString();
+            const toKey = toIndex.toString();
+            this.yjsDoc.transact(() => {
+                const fromHistory = this.yjsRoot.pagesHistory.get(fromKey) || [];
+                const toHistory = this.yjsRoot.pagesHistory.get(toKey) || [];
+                this.yjsRoot.pagesHistory.set(fromKey, toHistory);
+                this.yjsRoot.pagesHistory.set(toKey, fromHistory);
+            });
+            return;
+        }
+
         const project = this.getProject();
         if (!project) return;
 
@@ -1624,6 +2194,13 @@ export class LiveSyncClient {
 
     // Update page count in metadata
     updatePageCount(count) {
+        // Beta mode: Use Yjs
+        if (this.useBetaSync) {
+            if (!this.yjsRoot) return;
+            this.yjsRoot.metadata.set('pageCount', count);
+            return;
+        }
+
         const project = this.getProject();
         if (project) {
             project.get("metadata").update({ pageCount: count });
@@ -1632,6 +2209,12 @@ export class LiveSyncClient {
 
     // Notify other users about page structure changes using presence (debounced)
     notifyPageStructureChange() {
+        // Beta mode: Use Yjs - broadcast page structure change
+        if (this.useBetaSync) {
+            this._sendYjsPageStructure();
+            return;
+        }
+
         // Debounce notifications to prevent flooding during rapid page changes
         if (this._notifyDebounceTimer) {
             clearTimeout(this._notifyDebounceTimer);
@@ -1642,8 +2225,52 @@ export class LiveSyncClient {
         }, 100); // 100ms debounce for outgoing notifications
     }
 
+    /**
+     * Send page structure update via Yjs WebSocket
+     */
+    _sendYjsPageStructure() {
+        if (!this._yjsSocket || !this._yjsConnected) return;
+
+        const msg = {
+            type: 'page-structure',
+            pageCount: this.app.state.images.length,
+            pageIds: this.app.state.images.map(img => img?.pageId).filter(Boolean),
+            currentIdx: this.app.state.idx
+        };
+
+        this._yjsSocket.send(JSON.stringify(msg));
+        console.log(`[Yjs] Sent page structure: ${msg.pageCount} pages`);
+    }
+
+    /**
+     * Send presence update via Yjs WebSocket
+     */
+    _sendYjsPresence() {
+        if (!this._yjsSocket || !this._yjsConnected) return;
+
+        const msg = {
+            type: 'presence',
+            clientId: this._yjsClientId,
+            userName: this.userName || 'Anonymous',
+            pageIdx: this.app.state.idx,
+            cursor: this._lastCursor || null,
+            tool: this.app.state.tool,
+            isDrawing: this.app.state.isDrawing || false,
+            color: this.app.state.color,
+            size: this.app.state.size
+        };
+
+        this._yjsSocket.send(JSON.stringify(msg));
+    }
+
     // Internal: Actually send the page structure change notification
     _doNotifyPageStructureChange() {
+        // Beta mode: Already handled via _sendYjsPageStructure in notifyPageStructureChange
+        if (this.useBetaSync) {
+            this._sendYjsPageStructure();
+            return;
+        }
+
         // Update presence with a timestamp to notify other users of changes
         if (this.room) {
             // Set flag to ignore our own page structure change notification
@@ -1667,6 +2294,12 @@ export class LiveSyncClient {
         }
 
         this._pageNavDebounceTimer = setTimeout(() => {
+            // Beta mode: Update presence via Yjs
+            if (this.useBetaSync) {
+                this._sendYjsPresence();
+                return;
+            }
+
             // Mark the time of local change to prevent echo-back
             this.lastLocalPageChange = Date.now();
 

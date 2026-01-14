@@ -115,9 +115,27 @@ export class ColorRmApp {
             pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         }
 
-        // 4. Initialize Liveblocks Room & Project Mapping (only for collaborative mode)
+        // 4. Parse URL early to detect beta mode BEFORE creating LiveSyncClient
         let ownerId, projectId;
 
+        if (this.config.isMain) {
+            // Parse URL for Main App
+            const hashPath = window.location.hash.replace(/^#\/?/, '');
+            const parts = hashPath.split('/').filter(Boolean);
+
+            // Detect beta mode from URL: /#/beta/color_rm/{ownerId}/{projectId}
+            if (parts[0] === 'beta') {
+                this.config.useBetaSync = true;
+                parts.shift(); // Remove 'beta' prefix
+                console.log('[ColorRM] Beta mode enabled - using Yjs sync');
+            }
+
+            ownerId = parts[1];
+            projectId = parts[2];
+        }
+
+        // 5. Initialize LiveSync (only for collaborative mode)
+        // Now useBetaSync is already set if beta URL was detected
         if (this.config.collaborative && LiveSyncClient) {
             this.liveSync = new LiveSyncClient(this);
 
@@ -135,12 +153,6 @@ export class ColorRmApp {
         }
 
         if (this.config.isMain) {
-            // Parse URL for Main App
-            const hashPath = window.location.hash.replace(/^#\/?/, '');
-            const parts = hashPath.split('/').filter(Boolean);
-            ownerId = parts[1];
-            projectId = parts[2];
-
             // If owner or project is missing from URL, try to load last project OR show dashboard
             // SKIP THIS IF IMPORTING PDF - we will create a new project anyway
             if ((!ownerId || !projectId) && !importPdfUri) {
@@ -149,7 +161,9 @@ export class ColorRmApp {
                     const latest = lastSess.sort((a,b) => b.lastMod - a.lastMod)[0];
                     ownerId = latest.ownerId || (this.liveSync ? this.liveSync.userId : 'local');
                     projectId = latest.id;
-                    window.location.replace(`#/color_rm/${ownerId}/${projectId}`);
+                    // Preserve beta prefix if in beta mode
+                    const prefix = this.config.useBetaSync ? '#/beta/color_rm' : '#/color_rm';
+                    window.location.replace(`${prefix}/${ownerId}/${projectId}`);
                 } else {
                     this.ui.showDashboard();
                     return;

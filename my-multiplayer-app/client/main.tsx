@@ -30,6 +30,16 @@ function GlobalIntentHandler() {
     return null
 }
 
+// Redirect component for ColorRM routes
+function ColorRmRedirect() {
+    // Redirect to color_rm.html with the current hash
+    React.useEffect(() => {
+        const hash = window.location.hash
+        window.location.href = `/color_rm.html${hash}`
+    }, [])
+    return <div>Redirecting to ColorRM...</div>
+}
+
 const router = createHashRouter([
     {
         path: '/',
@@ -38,6 +48,15 @@ const router = createHashRouter([
     {
         path: '/:roomId',
         element: <><GlobalIntentHandler /><Room /></>, // Show Room with handler
+    },
+    // Redirect color_rm and beta routes to color_rm.html
+    {
+        path: '/color_rm/*',
+        element: <ColorRmRedirect />,
+    },
+    {
+        path: '/beta/color_rm/*',
+        element: <ColorRmRedirect />,
     },
 ])
 

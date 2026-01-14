@@ -3,7 +3,8 @@ interface Env {
 	// Durable Object bindings
 	TLDRAW_DURABLE_OBJECT: DurableObjectNamespace
 	COLORM_DURABLE_OBJECT: DurableObjectNamespace
-	
+	YJS_DURABLE_OBJECT: DurableObjectNamespace
+
 	// R2 bucket binding
 	TLDRAW_BUCKET: R2Bucket
 

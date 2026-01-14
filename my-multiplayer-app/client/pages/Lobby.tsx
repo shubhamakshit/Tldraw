@@ -30,6 +30,9 @@ export function Lobby() {
     const [colorRmProjects, setColorRmProjects] = useState<ColorRmProject[]>([])
     const [isCreating, setIsCreating] = useState(false)
     const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
+    const [useBetaSync, setUseBetaSync] = useState(() => {
+        return localStorage.getItem('colorRm_useBetaSync') === 'true'
+    })
 
     useEffect(() => {
         const stored = localStorage.getItem('tldraw_saved_rooms')
@@ -210,9 +213,9 @@ export function Lobby() {
                     </div>
 
                     {/* Tool 2: ColorRM Pro */}
-                    <div style={{ 
+                    <div style={{
                         padding: '40px', border: '1px solid #fff', borderRadius: '12px',
-                        display: 'flex', flexDirection: 'column', gap: '24px', 
+                        display: 'flex', flexDirection: 'column', gap: '24px',
                         background: 'linear-gradient(135deg, #000 0%, #111 100%)', boxShadow: '0 0 30px rgba(255,255,255,0.05)'
                     }}>
                         <div>
@@ -222,8 +225,36 @@ export function Lobby() {
                                 Professional PDF/Image sync with SOTA color removal. Collaborative precision.
                             </p>
                         </div>
-                        <a href="/color_rm.html" style={{ 
-                            padding: '14px', background: '#0070f3', color: '#fff', 
+                        {/* Beta Sync Toggle */}
+                        <div style={{
+                            display: 'flex', alignItems: 'center', gap: '12px',
+                            padding: '12px', background: useBetaSync ? 'rgba(139, 92, 246, 0.15)' : 'rgba(255,255,255,0.05)',
+                            borderRadius: '8px', border: useBetaSync ? '1px solid rgba(139, 92, 246, 0.4)' : '1px solid #333',
+                            cursor: 'pointer', transition: '0.2s'
+                        }}
+                        onClick={() => {
+                            const newValue = !useBetaSync
+                            setUseBetaSync(newValue)
+                            localStorage.setItem('colorRm_useBetaSync', String(newValue))
+                        }}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={useBetaSync}
+                                onChange={() => {}}
+                                style={{ width: '16px', height: '16px', accentColor: '#8b5cf6', cursor: 'pointer' }}
+                            />
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontWeight: 600, fontSize: '0.85rem', color: useBetaSync ? '#a78bfa' : '#888' }}>
+                                    Beta Sync {useBetaSync && <span style={{ fontSize: '0.65rem', background: '#8b5cf6', color: '#fff', padding: '2px 6px', borderRadius: '4px', marginLeft: '6px' }}>ON</span>}
+                                </div>
+                                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '2px' }}>
+                                    Self-hosted sync (no Liveblocks fees)
+                                </div>
+                            </div>
+                        </div>
+                        <a href={useBetaSync ? "/color_rm.html#/beta/color_rm" : "/color_rm.html"} style={{
+                            padding: '14px', background: '#0070f3', color: '#fff',
                             textDecoration: 'none', borderRadius: '6px', fontWeight: 600,
                             fontSize: '1rem', cursor: 'pointer', transition: '0.2s',
                             textAlign: 'center', marginTop: 'auto'
@@ -231,7 +262,7 @@ export function Lobby() {
                         onMouseOver={e => e.currentTarget.style.background = '#0062d1'}
                         onMouseOut={e => e.currentTarget.style.background = '#0070f3'}
                         >
-                            Open ColorRM
+                            Open ColorRM {useBetaSync && '(Beta)'}
                         </a>
                     </div>
                 </div>
@@ -288,7 +319,10 @@ export function Lobby() {
                             {colorRmProjects.map((project, i) => (
                                 <a
                                     key={project.id}
-                                    href={`/color_rm.html#/color_rm/${project.ownerId || user?.username}/${project.id}`}
+                                    href={useBetaSync
+                                        ? `/color_rm.html#/beta/color_rm/${project.ownerId || user?.username}/${project.id}`
+                                        : `/color_rm.html#/color_rm/${project.ownerId || user?.username}/${project.id}`
+                                    }
                                     style={{ textDecoration: 'none' }}
                                 >
                                     <div
