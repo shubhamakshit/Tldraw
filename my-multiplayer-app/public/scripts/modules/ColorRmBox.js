@@ -1,25 +1,26 @@
 export const ColorRmBox = {
     // --- The Clipboard Box Feature ---
-    // Now uses Blobs instead of base64 for ~10x memory savings
+    // Stores vector data for full quality export (no rasterization)
+    // Falls back to raster for background images only
     addToBox(x, y, w, h, srcOrBlob=null, pageIdx=null) {
-        const createItem = (blob) => {
-            if(!this.state.clipboardBox) this.state.clipboardBox = [];
+        if(!this.state.clipboardBox) this.state.clipboardBox = [];
+
+        const currentPageIdx = (pageIdx !== null) ? pageIdx : this.state.idx;
+        const currentPage = this.state.images[currentPageIdx];
+
+        // If a Blob was passed directly (legacy raster support)
+        if (srcOrBlob instanceof Blob) {
             this.state.clipboardBox.push({
                 id: Date.now() + Math.random(),
-                blob: blob,  // Store as Blob, not base64
-                blobUrl: null,  // Lazy-create URL when rendering
+                type: 'raster',
+                blob: srcOrBlob,
+                blobUrl: null,
                 w: w, h: h,
-                pageIdx: (pageIdx !== null) ? pageIdx : this.state.idx
+                pageIdx: currentPageIdx
             });
-
-            this.ui.showToast("Added to Box!");
+            this.ui.showToast("Added to Box (raster)");
             this.saveSessionState();
             if(this.state.activeSideTab === 'box') this.renderBox();
-        };
-
-        // If a Blob was passed directly
-        if (srcOrBlob instanceof Blob) {
-            createItem(srcOrBlob);
             return;
         }
 
@@ -27,50 +28,220 @@ export const ColorRmBox = {
         if (srcOrBlob && typeof srcOrBlob === 'string' && srcOrBlob.startsWith('data:')) {
             fetch(srcOrBlob)
                 .then(res => res.blob())
-                .then(blob => createItem(blob));
+                .then(blob => {
+                    this.state.clipboardBox.push({
+                        id: Date.now() + Math.random(),
+                        type: 'raster',
+                        blob: blob,
+                        blobUrl: null,
+                        w: w, h: h,
+                        pageIdx: currentPageIdx
+                    });
+                    this.ui.showToast("Added to Box (raster)");
+                    this.saveSessionState();
+                    if(this.state.activeSideTab === 'box') this.renderBox();
+                });
             return;
         }
 
-        // Capture from canvas - transform coordinates based on zoom/pan
-        const cvs = this.getElement('canvas');
-        const ctx = cvs.getContext('2d');
+        // Capture vector data from the region
+        const capturedItems = [];
+        const bounds = { x, y, w, h, maxX: x + w, maxY: y + h };
 
-        // Transform from canvas/world coordinates to pixel coordinates
-        const zoom = this.state.zoom || 1;
-        const panX = this.state.pan?.x || 0;
-        const panY = this.state.pan?.y || 0;
+        if (currentPage && currentPage.history) {
+            currentPage.history.forEach(item => {
+                if (item.deleted) return;
 
-        // Convert world coordinates to pixel coordinates
-        const pixelX = Math.round((x + panX / zoom) * zoom);
-        const pixelY = Math.round((y + panY / zoom) * zoom);
-        const pixelW = Math.round(w * zoom);
-        const pixelH = Math.round(h * zoom);
-
-        // Clamp to canvas bounds
-        const clampedX = Math.max(0, Math.min(pixelX, cvs.width - 1));
-        const clampedY = Math.max(0, Math.min(pixelY, cvs.height - 1));
-        const clampedW = Math.min(pixelW, cvs.width - clampedX);
-        const clampedH = Math.min(pixelH, cvs.height - clampedY);
-
-        if (clampedW <= 0 || clampedH <= 0) {
-            this.ui.showToast("Invalid capture region");
-            return;
+                // Check if item intersects with capture region
+                if (this._itemIntersectsRegion(item, bounds)) {
+                    // Deep clone the item and translate to local coordinates
+                    const clonedItem = JSON.parse(JSON.stringify(item));
+                    this._translateItemToLocal(clonedItem, x, y);
+                    capturedItems.push(clonedItem);
+                }
+            });
         }
 
-        const id = ctx.getImageData(clampedX, clampedY, clampedW, clampedH);
-        const tmp = document.createElement('canvas');
-        tmp.width = clampedW; tmp.height = clampedH;
-        tmp.getContext('2d').putImageData(id, 0, 0);
+        // Also capture background if page has one
+        let backgroundBlob = null;
+        if (currentPage && currentPage.blob && !currentPage.isInfinite) {
+            // For pages with background, we'll capture just the region
+            // This is done asynchronously
+            this._captureBackgroundRegion(currentPage.blob, x, y, w, h).then(blob => {
+                this.state.clipboardBox.push({
+                    id: Date.now() + Math.random(),
+                    type: 'vector',
+                    history: capturedItems,
+                    backgroundBlob: blob,
+                    blobUrl: null,
+                    x: 0, y: 0,
+                    w: w, h: h,
+                    originalBounds: { x, y, w, h },
+                    pageIdx: currentPageIdx,
+                    isInfinite: currentPage.isInfinite || false,
+                    vectorGrid: currentPage.vectorGrid || null
+                });
+                this.ui.showToast(`Added ${capturedItems.length} items to Box (vector)`);
+                this.saveSessionState();
+                if(this.state.activeSideTab === 'box') this.renderBox();
+            });
+        } else {
+            // Infinite canvas or no background - just store vectors
+            this.state.clipboardBox.push({
+                id: Date.now() + Math.random(),
+                type: 'vector',
+                history: capturedItems,
+                backgroundBlob: null,
+                blobUrl: null,
+                x: 0, y: 0,
+                w: w, h: h,
+                originalBounds: { x, y, w, h },
+                pageIdx: currentPageIdx,
+                isInfinite: currentPage?.isInfinite || false,
+                vectorGrid: currentPage?.vectorGrid || null
+            });
+            this.ui.showToast(`Added ${capturedItems.length} items to Box (vector)`);
+            this.saveSessionState();
+            if(this.state.activeSideTab === 'box') this.renderBox();
+        }
+    },
 
-        // Use toBlob instead of toDataURL
-        tmp.toBlob(blob => {
-            createItem(blob);
-        }, 'image/jpeg', 0.85);
+    /**
+     * Check if an item intersects with a region
+     */
+    _itemIntersectsRegion(item, bounds) {
+        let itemBounds;
+
+        if (item.tool === 'pen' || item.tool === 'eraser') {
+            if (!item.pts || item.pts.length === 0) return false;
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const p of item.pts) {
+                minX = Math.min(minX, p.x);
+                minY = Math.min(minY, p.y);
+                maxX = Math.max(maxX, p.x);
+                maxY = Math.max(maxY, p.y);
+            }
+            const pad = (item.size || 3) / 2;
+            itemBounds = { x: minX - pad, y: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+        } else if (item.tool === 'group' && item.children) {
+            // For groups, check if any child intersects
+            return item.children.some(child => this._itemIntersectsRegion(child, bounds));
+        } else {
+            // Shapes, text, images
+            itemBounds = {
+                x: item.x || 0,
+                y: item.y || 0,
+                maxX: (item.x || 0) + (item.w || 0),
+                maxY: (item.y || 0) + (item.h || 0)
+            };
+        }
+
+        // Check intersection
+        return !(itemBounds.maxX < bounds.x || itemBounds.x > bounds.maxX ||
+                 itemBounds.maxY < bounds.y || itemBounds.y > bounds.maxY);
+    },
+
+    /**
+     * Translate item coordinates to local (relative to capture origin)
+     */
+    _translateItemToLocal(item, originX, originY) {
+        if (item.tool === 'pen' || item.tool === 'eraser') {
+            if (item.pts) {
+                item.pts.forEach(p => {
+                    p.x -= originX;
+                    p.y -= originY;
+                });
+            }
+        } else if (item.tool === 'group' && item.children) {
+            item.x = (item.x || 0) - originX;
+            item.y = (item.y || 0) - originY;
+            item.children.forEach(child => this._translateItemToLocal(child, 0, 0));
+        } else {
+            item.x = (item.x || 0) - originX;
+            item.y = (item.y || 0) - originY;
+        }
+    },
+
+    /**
+     * Capture a region of a background image as a blob
+     */
+    async _captureBackgroundRegion(blob, x, y, w, h) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => {
+                const cvs = document.createElement('canvas');
+                cvs.width = w;
+                cvs.height = h;
+                const ctx = cvs.getContext('2d');
+
+                // Draw the cropped region
+                ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+
+                cvs.toBlob(resolve, 'image/jpeg', 0.92);
+                URL.revokeObjectURL(img.src);
+            };
+            img.src = URL.createObjectURL(blob);
+        });
     },
 
     captureFullPage() {
-        const cvs = this.getElement('canvas');
-        this.addToBox(0, 0, cvs.width, cvs.height);
+        const currentPage = this.state.images[this.state.idx];
+        if (!currentPage) return;
+
+        // For full page, capture all content
+        if (currentPage.isInfinite) {
+            // Calculate content bounds for infinite canvas
+            const bounds = this._calculatePageContentBounds(currentPage);
+            if (bounds) {
+                const padding = 50;
+                this.addToBox(
+                    bounds.minX - padding,
+                    bounds.minY - padding,
+                    bounds.maxX - bounds.minX + padding * 2,
+                    bounds.maxY - bounds.minY + padding * 2
+                );
+            } else {
+                this.ui.showToast("No content to capture");
+            }
+        } else {
+            // Regular page - use view dimensions
+            this.addToBox(0, 0, this.state.viewW, this.state.viewH);
+        }
+    },
+
+    /**
+     * Calculate content bounds for a page
+     */
+    _calculatePageContentBounds(page) {
+        if (!page.history || page.history.length === 0) return null;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let hasContent = false;
+
+        for (const item of page.history) {
+            if (item.deleted) continue;
+
+            if (item.tool === 'pen' || item.tool === 'eraser') {
+                if (item.pts) {
+                    for (const p of item.pts) {
+                        minX = Math.min(minX, p.x);
+                        minY = Math.min(minY, p.y);
+                        maxX = Math.max(maxX, p.x);
+                        maxY = Math.max(maxY, p.y);
+                        hasContent = true;
+                    }
+                }
+            } else {
+                minX = Math.min(minX, item.x || 0);
+                minY = Math.min(minY, item.y || 0);
+                maxX = Math.max(maxX, (item.x || 0) + (item.w || 0));
+                maxY = Math.max(maxY, (item.y || 0) + (item.h || 0));
+                hasContent = true;
+            }
+        }
+
+        if (!hasContent) return null;
+        return { minX, minY, maxX, maxY };
     },
 
     async addRangeToBox() {
@@ -95,53 +266,40 @@ export const ColorRmBox = {
             return;
         }
 
-        this.ui.toggleLoader(true, "Capturing Pages...");
-        const cvs = document.createElement('canvas');
-        const ctx = cvs.getContext('2d');
+        this.ui.toggleLoader(true, "Adding Pages to Box (Vector)...");
 
         for(let i=0; i<indices.length; i++) {
             const idx = indices[i];
             this.ui.updateProgress((i/indices.length)*100, `Processing Page ${idx+1}`);
             const item = this.state.images[idx];
+            if (!item) continue;
 
-            // Render Page to Canvas
-            const img = new Image();
-            img.src = URL.createObjectURL(item.blob);
-            await new Promise(r => img.onload = r);
+            // Store full page as vector data
+            if(!this.state.clipboardBox) this.state.clipboardBox = [];
 
-            cvs.width = img.width; cvs.height = img.height;
-            ctx.drawImage(img, 0, 0);
+            this.state.clipboardBox.push({
+                id: Date.now() + Math.random(),
+                type: 'vector',
+                history: item.history ? JSON.parse(JSON.stringify(item.history.filter(h => !h.deleted))) : [],
+                backgroundBlob: item.blob || null,
+                blobUrl: null,
+                x: 0, y: 0,
+                w: this.state.viewW,
+                h: this.state.viewH,
+                originalBounds: { x: 0, y: 0, w: this.state.viewW, h: this.state.viewH },
+                pageIdx: idx,
+                isInfinite: item.isInfinite || false,
+                vectorGrid: item.vectorGrid || null
+            });
 
-            // Apply Edits (History) to Canvas
-            if(item.history && item.history.length > 0) {
-                item.history.forEach(st => {
-                    ctx.save();
-                    if(st.rotation && st.tool!=='pen') {
-                        const cx = st.x + st.w/2; const cy = st.y + st.h/2;
-                        ctx.translate(cx, cy); ctx.rotate(st.rotation); ctx.translate(-cx, -cy);
-                    }
-                    if(st.tool === 'text') { ctx.fillStyle = st.color; ctx.font = `${st.size}px sans-serif`; ctx.textBaseline = 'top'; ctx.fillText(st.text, st.x, st.y); }
-                    else if(st.tool === 'shape') {
-                        ctx.strokeStyle = st.border; ctx.lineWidth = st.width; if(st.fill!=='transparent') { ctx.fillStyle=st.fill; }
-                        ctx.beginPath(); const {x,y,w,h} = st;
-                        if(st.shapeType==='rectangle') ctx.rect(x,y,w,h); else if(st.shapeType==='circle') ctx.ellipse(x+w/2, y+h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI); else if(st.shapeType==='line') { ctx.moveTo(x,y); ctx.lineTo(x+w,y+h); }
-                        if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) ctx.fill(); ctx.stroke();
-                    } else {
-                        ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=st.size; ctx.strokeStyle = st.tool==='eraser' ? '#000' : st.color; if(st.tool==='eraser') ctx.globalCompositeOperation='destination-out';
-                        ctx.beginPath(); if(st.pts.length) ctx.moveTo(st.pts[0].x, st.pts[0].y); for(let j=1; j<st.pts.length; j++) ctx.lineTo(st.pts[j].x, st.pts[j].y); ctx.stroke();
-                    }
-                    ctx.restore();
-                });
-            }
-
-            // Use toBlob instead of toDataURL for memory efficiency
-            const blob = await new Promise(r => cvs.toBlob(r, 'image/jpeg', 0.85));
-            this.addToBox(0, 0, cvs.width, cvs.height, blob, idx);
             await new Promise(r => setTimeout(r, 0));
         }
 
         this.ui.toggleLoader(false);
         this.getElement('boxRangeInput').value = '';
+        this.ui.showToast(`Added ${indices.length} pages to Box (vector)`);
+        this.saveSessionState();
+        if(this.state.activeSideTab === 'box') this.renderBox();
     },
 
     renderBox() {
@@ -166,18 +324,40 @@ export const ColorRmBox = {
         this.state.clipboardBox.forEach((item, idx) => {
             const div = document.createElement('div');
             div.className = 'box-item';
-            const im = new Image();
 
-            // Support both new Blob format and legacy base64 src format
-            if (item.blob) {
-                const url = URL.createObjectURL(item.blob);
-                this.boxBlobUrls.push(url);
-                im.src = url;
-            } else if (item.src) {
-                im.src = item.src;  // Legacy base64 support
+            // Handle vector items - render a thumbnail
+            if (item.type === 'vector') {
+                this._renderVectorThumbnail(item).then(url => {
+                    if (url) {
+                        this.boxBlobUrls.push(url);
+                        const im = div.querySelector('img');
+                        if (im) im.src = url;
+                    }
+                });
+                const im = new Image();
+                im.style.background = '#1a1a2e';
+                im.alt = `Vector (${item.history?.length || 0} items)`;
+                div.appendChild(im);
+
+                // Add vector badge
+                const badge = document.createElement('span');
+                badge.className = 'box-badge';
+                badge.textContent = 'V';
+                badge.title = `Vector: ${item.history?.length || 0} items`;
+                badge.style.cssText = 'position:absolute;top:2px;left:2px;background:#10b981;color:white;font-size:10px;padding:2px 4px;border-radius:3px;';
+                div.appendChild(badge);
+            } else {
+                // Raster items (legacy)
+                const im = new Image();
+                if (item.blob) {
+                    const url = URL.createObjectURL(item.blob);
+                    this.boxBlobUrls.push(url);
+                    im.src = url;
+                } else if (item.src) {
+                    im.src = item.src;  // Legacy base64 support
+                }
+                div.appendChild(im);
             }
-
-            div.appendChild(im);
 
             const btn = document.createElement('button');
             btn.className = 'box-del';
@@ -194,6 +374,135 @@ export const ColorRmBox = {
             div.appendChild(btn);
             el.appendChild(div);
         });
+    },
+
+    /**
+     * Render a vector item to a thumbnail for display
+     */
+    async _renderVectorThumbnail(item) {
+        const thumbSize = 150;
+        const cvs = document.createElement('canvas');
+        cvs.width = thumbSize;
+        cvs.height = thumbSize;
+        const ctx = cvs.getContext('2d');
+
+        // Calculate scale to fit
+        const scale = Math.min(thumbSize / item.w, thumbSize / item.h);
+        const offsetX = (thumbSize - item.w * scale) / 2;
+        const offsetY = (thumbSize - item.h * scale) / 2;
+
+        // Draw background
+        if (item.backgroundBlob) {
+            try {
+                const img = new Image();
+                const url = URL.createObjectURL(item.backgroundBlob);
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = url;
+                });
+                ctx.drawImage(img, offsetX, offsetY, item.w * scale, item.h * scale);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                ctx.fillStyle = '#1a1a2e';
+                ctx.fillRect(0, 0, thumbSize, thumbSize);
+            }
+        } else if (item.isInfinite) {
+            ctx.fillStyle = item.vectorGrid?.bgStyle === 'light' ? '#f8fafc' : '#1a1a2e';
+            ctx.fillRect(0, 0, thumbSize, thumbSize);
+        } else {
+            ctx.fillStyle = '#333';
+            ctx.fillRect(0, 0, thumbSize, thumbSize);
+        }
+
+        // Draw history items
+        ctx.save();
+        ctx.translate(offsetX, offsetY);
+        ctx.scale(scale, scale);
+
+        if (item.history) {
+            for (const st of item.history) {
+                if (st.deleted) continue;
+                this._renderItemToContext(ctx, st);
+            }
+        }
+        ctx.restore();
+
+        return new Promise(resolve => {
+            cvs.toBlob(blob => {
+                if (blob) {
+                    resolve(URL.createObjectURL(blob));
+                } else {
+                    resolve(null);
+                }
+            }, 'image/png');
+        });
+    },
+
+    /**
+     * Render a single history item to canvas context
+     */
+    _renderItemToContext(ctx, st) {
+        ctx.save();
+
+        if (st.rotation && st.tool !== 'pen' && st.tool !== 'eraser') {
+            const cx = st.x + st.w / 2;
+            const cy = st.y + st.h / 2;
+            ctx.translate(cx, cy);
+            ctx.rotate(st.rotation);
+            ctx.translate(-cx, -cy);
+        }
+
+        if (st.tool === 'pen' || st.tool === 'eraser') {
+            if (st.pts && st.pts.length > 0) {
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = st.size || 3;
+                ctx.strokeStyle = st.tool === 'eraser' ? '#000' : (st.color || '#000');
+                if (st.tool === 'eraser') ctx.globalCompositeOperation = 'destination-out';
+
+                ctx.beginPath();
+                ctx.moveTo(st.pts[0].x, st.pts[0].y);
+                for (let i = 1; i < st.pts.length; i++) {
+                    ctx.lineTo(st.pts[i].x, st.pts[i].y);
+                }
+                ctx.stroke();
+            }
+        } else if (st.tool === 'text') {
+            ctx.fillStyle = st.color || '#000';
+            ctx.font = `${st.size || 16}px sans-serif`;
+            ctx.textBaseline = 'top';
+            ctx.fillText(st.text || '', st.x || 0, st.y || 0);
+        } else if (st.tool === 'shape') {
+            ctx.strokeStyle = st.border || '#000';
+            ctx.lineWidth = st.width || 2;
+            if (st.fill && st.fill !== 'transparent') {
+                ctx.fillStyle = st.fill;
+            }
+
+            const { x, y, w, h, shapeType } = st;
+            ctx.beginPath();
+
+            if (shapeType === 'rectangle') {
+                ctx.rect(x, y, w, h);
+            } else if (shapeType === 'circle') {
+                ctx.ellipse(x + w / 2, y + h / 2, Math.abs(w / 2), Math.abs(h / 2), 0, 0, 2 * Math.PI);
+            } else if (shapeType === 'line') {
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + w, y + h);
+            }
+
+            if (st.fill && st.fill !== 'transparent' && !['line', 'arrow'].includes(shapeType)) {
+                ctx.fill();
+            }
+            ctx.stroke();
+        } else if (st.tool === 'group' && st.children) {
+            for (const child of st.children) {
+                this._renderItemToContext(ctx, child);
+            }
+        }
+
+        ctx.restore();
     },
 
     async clearBox() {

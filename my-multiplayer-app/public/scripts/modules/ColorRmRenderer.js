@@ -436,14 +436,14 @@ export const ColorRmRenderer = {
             const useViewportCulling = false; // Disabled due to bugs
 
             // SOTA: Build/update spatial index for infinite canvas
-            if (isInfiniteCanvas) {
-                this._ensureSpatialIndex(currentImg);
-            }
+            // DISABLED: Causes rendering issues
+            // if (isInfiniteCanvas) {
+            //     this._ensureSpatialIndex(currentImg);
+            // }
 
             // SOTA: Use optimized rendering for infinite canvas with many strokes
-            const useSOTARendering = isInfiniteCanvas &&
-                                      this.performanceManager &&
-                                      activeHistory.length > 100;
+            // DISABLED: Causes objects to disappear and rendering bugs
+            const useSOTARendering = false;
 
             if (useSOTARendering) {
                 // SOTA OPTIMIZED RENDERING for infinite canvas

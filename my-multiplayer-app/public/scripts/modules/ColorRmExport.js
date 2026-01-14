@@ -576,9 +576,24 @@ export const ColorRmExport = {
                 const printableW = pageW - (marginX * 2);
                 const printableH = pageH - headerMargin - footerMargin;
 
-                // Get source dimensions
-                const sourceW = this.state.viewW || 800;
-                const sourceH = this.state.viewH || 600;
+                // Get source dimensions - for infinite canvas, calculate content bounds
+                let sourceW = this.state.viewW || 800;
+                let sourceH = this.state.viewH || 600;
+                let contentOffsetX = 0;
+                let contentOffsetY = 0;
+
+                if (item.isInfinite && item.history && item.history.length > 0) {
+                    // Calculate bounding box of all content for infinite canvas
+                    const bounds = this._calculateContentBounds(item.history);
+                    if (bounds) {
+                        // Add padding around content
+                        const padding = 50;
+                        contentOffsetX = bounds.minX - padding;
+                        contentOffsetY = bounds.minY - padding;
+                        sourceW = bounds.maxX - bounds.minX + (padding * 2);
+                        sourceH = bounds.maxY - bounds.minY + (padding * 2);
+                    }
+                }
 
                 // Calculate scale to fit page
                 const scale = Math.min(printableW / sourceW, printableH / sourceH);
@@ -604,7 +619,8 @@ export const ColorRmExport = {
                 const history = item.history || [];
                 for (const stroke of history) {
                     if (stroke.deleted) continue;
-                    this._renderStrokeToPDF(pdfDoc, stroke, offsetX, offsetY, scale);
+                    // Pass content offset for infinite canvas to translate strokes correctly
+                    this._renderStrokeToPDF(pdfDoc, stroke, offsetX, offsetY, scale, contentOffsetX, contentOffsetY);
                 }
 
                 // Draw Header
@@ -673,8 +689,10 @@ export const ColorRmExport = {
      * @param {number} offsetX - X offset in mm
      * @param {number} offsetY - Y offset in mm
      * @param {number} scale - Scale factor (pixels to mm)
+     * @param {number} contentOffsetX - Content offset X for infinite canvas (default 0)
+     * @param {number} contentOffsetY - Content offset Y for infinite canvas (default 0)
      */
-    _renderStrokeToPDF(pdfDoc, stroke, offsetX, offsetY, scale) {
+    _renderStrokeToPDF(pdfDoc, stroke, offsetX, offsetY, scale, contentOffsetX = 0, contentOffsetY = 0) {
         const hexToRgb = (hex) => {
             const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
             return r ? [parseInt(r[1], 16), parseInt(r[2], 16), parseInt(r[3], 16)] : [0, 0, 0];
@@ -690,11 +708,11 @@ export const ColorRmExport = {
             pdfDoc.setLineCap('round');
             pdfDoc.setLineJoin('round');
 
-            // Build path using jsPDF lines
+            // Build path using jsPDF lines - apply content offset for infinite canvas
             if (stroke.pts.length >= 2) {
                 const pts = stroke.pts.map(p => [
-                    offsetX + p.x * scale,
-                    offsetY + p.y * scale
+                    offsetX + (p.x - contentOffsetX) * scale,
+                    offsetY + (p.y - contentOffsetY) * scale
                 ]);
 
                 // Draw as connected line segments
@@ -703,13 +721,13 @@ export const ColorRmExport = {
                 }
             }
         } else if (stroke.tool === 'shape') {
-            this._renderShapeToPDF(pdfDoc, stroke, offsetX, offsetY, scale);
+            this._renderShapeToPDF(pdfDoc, stroke, offsetX, offsetY, scale, contentOffsetX, contentOffsetY);
         } else if (stroke.tool === 'text') {
-            this._renderTextToPDF(pdfDoc, stroke, offsetX, offsetY, scale);
+            this._renderTextToPDF(pdfDoc, stroke, offsetX, offsetY, scale, contentOffsetX, contentOffsetY);
         } else if (stroke.tool === 'group' && stroke.children) {
             // Render group children
             for (const child of stroke.children) {
-                this._renderStrokeToPDF(pdfDoc, child, offsetX, offsetY, scale);
+                this._renderStrokeToPDF(pdfDoc, child, offsetX, offsetY, scale, contentOffsetX, contentOffsetY);
             }
         }
         // Eraser strokes are skipped (they don't render in PDF)
@@ -718,7 +736,7 @@ export const ColorRmExport = {
     /**
      * Render a shape to PDF using vector commands
      */
-    _renderShapeToPDF(pdfDoc, stroke, offsetX, offsetY, scale) {
+    _renderShapeToPDF(pdfDoc, stroke, offsetX, offsetY, scale, contentOffsetX = 0, contentOffsetY = 0) {
         const hexToRgb = (hex) => {
             const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
             return r ? [parseInt(r[1], 16), parseInt(r[2], 16), parseInt(r[3], 16)] : [0, 0, 0];
@@ -726,9 +744,9 @@ export const ColorRmExport = {
 
         const { x, y, w, h, border, fill, width, shapeType, rotation } = stroke;
 
-        // Convert coordinates to PDF space
-        const pdfX = offsetX + x * scale;
-        const pdfY = offsetY + y * scale;
+        // Convert coordinates to PDF space - apply content offset for infinite canvas
+        const pdfX = offsetX + (x - contentOffsetX) * scale;
+        const pdfY = offsetY + (y - contentOffsetY) * scale;
         const pdfW = w * scale;
         const pdfH = h * scale;
         const lineWidth = (width || 2) * scale;
@@ -872,7 +890,7 @@ export const ColorRmExport = {
     /**
      * Render text to PDF
      */
-    _renderTextToPDF(pdfDoc, stroke, offsetX, offsetY, scale) {
+    _renderTextToPDF(pdfDoc, stroke, offsetX, offsetY, scale, contentOffsetX = 0, contentOffsetY = 0) {
         const hexToRgb = (hex) => {
             const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
             return r ? [parseInt(r[1], 16), parseInt(r[2], 16), parseInt(r[3], 16)] : [0, 0, 0];
@@ -881,8 +899,9 @@ export const ColorRmExport = {
         const { x, y, text, color, size } = stroke;
         if (!text) return;
 
-        const pdfX = offsetX + x * scale;
-        const pdfY = offsetY + (y + size) * scale; // Adjust for baseline
+        // Apply content offset for infinite canvas
+        const pdfX = offsetX + (x - contentOffsetX) * scale;
+        const pdfY = offsetY + (y + size - contentOffsetY) * scale; // Adjust for baseline
         const fontSize = size * scale * 0.75; // Approximate pt to mm conversion
 
         const textColor = hexToRgb(color || '#000000');
@@ -890,6 +909,57 @@ export const ColorRmExport = {
         pdfDoc.setFontSize(fontSize);
 
         pdfDoc.text(text, pdfX, pdfY);
+    },
+
+    /**
+     * Calculate the bounding box of all content in history
+     * Used for infinite canvas to determine export area
+     */
+    _calculateContentBounds(history) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let hasContent = false;
+
+        for (const item of history) {
+            if (item.deleted) continue;
+
+            if (item.tool === 'pen' || item.tool === 'eraser') {
+                if (item.pts && item.pts.length > 0) {
+                    for (const p of item.pts) {
+                        minX = Math.min(minX, p.x - (item.size || 3));
+                        minY = Math.min(minY, p.y - (item.size || 3));
+                        maxX = Math.max(maxX, p.x + (item.size || 3));
+                        maxY = Math.max(maxY, p.y + (item.size || 3));
+                        hasContent = true;
+                    }
+                }
+            } else if (item.tool === 'shape' || item.tool === 'text' || item.tool === 'image') {
+                const x = item.x || 0;
+                const y = item.y || 0;
+                const w = item.w || 100;
+                const h = item.h || 100;
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x + w);
+                maxY = Math.max(maxY, y + h);
+                hasContent = true;
+            } else if (item.tool === 'group' && item.children) {
+                const childBounds = this._calculateContentBounds(item.children);
+                if (childBounds) {
+                    // Apply group offset
+                    const gx = item.x || 0;
+                    const gy = item.y || 0;
+                    minX = Math.min(minX, childBounds.minX + gx);
+                    minY = Math.min(minY, childBounds.minY + gy);
+                    maxX = Math.max(maxX, childBounds.maxX + gx);
+                    maxY = Math.max(maxY, childBounds.maxY + gy);
+                    hasContent = true;
+                }
+            }
+        }
+
+        if (!hasContent) return null;
+
+        return { minX, minY, maxX, maxY };
     },
 
     /**
