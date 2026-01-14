@@ -17,16 +17,27 @@ export const ColorRmUI = {
                 else if(mode==='shapeFill') { this.state.shapeFill=c.hexString; this.render(); }
                 else if(mode==='selectionStroke' || mode==='selectionFill') {
                     const img = this.state.images[this.state.idx];
+
+                    // Helper to apply color recursively (for groups)
+                    const applyColorToItem = (st, isStroke) => {
+                        if (st.tool === 'group' && st.children) {
+                            // Recursively apply to all children
+                            st.children.forEach(child => applyColorToItem(child, isStroke));
+                        } else if (isStroke) {
+                            if (st.tool === 'pen' || st.tool === 'highlighter') st.color = c.hexString;
+                            if (st.tool === 'shape') st.border = c.hexString;
+                            if (st.tool === 'text') st.color = c.hexString;
+                        } else {
+                            if (st.tool === 'shape') st.fill = c.hexString;
+                        }
+                    };
+
                     this.state.selection.forEach(idx => {
                         const st = img.history[idx];
-                        if(mode==='selectionStroke') {
-                            if(st.tool==='pen') st.color = c.hexString;
-                            if(st.tool==='shape') st.border = c.hexString;
-                            if(st.tool==='text') st.color = c.hexString;
-                        } else {
-                            if(st.tool==='shape') st.fill = c.hexString;
-                        }
+                        applyColorToItem(st, mode === 'selectionStroke');
                     });
+                    this.invalidateCache();
+                    this.saveCurrentImg();
                     this.render();
                 }
             });

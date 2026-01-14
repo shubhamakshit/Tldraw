@@ -264,8 +264,12 @@ export const ColorRmInput = {
         const img = this.state.images[this.state.idx];
         this.state.selection.forEach(i => img.history[i].locked = true);
         this.state.selection = [];
+        // Hide context toolbar when locking
+        const tb = this.getElement('contextToolbar');
+        if (tb) tb.style.display = 'none';
         this.saveCurrentImg();
         this.render();
+        this.ui.showToast('Locked');
     },
 
     unlockSelected() {
@@ -290,6 +294,11 @@ export const ColorRmInput = {
             // Lock all
             this.state.selection.forEach(i => img.history[i].locked = true);
             this.state.selection = [];
+            // Hide context toolbar when locking
+            const tb = this.getElement('contextToolbar');
+            if (tb) tb.style.display = 'none';
+            const ctxDrop = this.getElement('ctxDrop');
+            if (ctxDrop) ctxDrop.classList.remove('show');
             this.ui.showToast('Locked');
         }
         this.saveCurrentImg();

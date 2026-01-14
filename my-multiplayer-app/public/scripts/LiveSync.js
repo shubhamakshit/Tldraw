@@ -793,7 +793,7 @@ export class LiveSyncClient {
      * @param {number} retryDelay - Delay between retries in ms
      * @returns {boolean} - Whether the fetch was successful
      */
-    async _fetchPageByIdWithRetry(pageId, targetIndex, maxRetries = 3, retryDelay = 1000) {
+    async _fetchPageByIdWithRetry(pageId, targetIndex, maxRetries = 3, retryDelay = 1000, metadata = null) {
         // Check if page with this pageId already exists
         const existingPage = this.app.state.images.find(img => img && img.pageId === pageId);
         if (existingPage) {
@@ -816,13 +816,16 @@ export class LiveSyncClient {
 
                     // Validate blob
                     if (!blob || blob.size === 0) {
-                        console.warn(`[_fetchPageByIdWithRetry] Page ${pageId} returned empty blob, retry...`);
+                        console.warn(`[_fetchPageByIdWithRetry] Page ${pageId} returned empty blob (size: ${blob?.size || 0}), retry...`);
                         if (attempt < maxRetries) {
                             await new Promise(r => setTimeout(r, retryDelay));
                             continue;
                         }
+                        console.error(`[_fetchPageByIdWithRetry] Page ${pageId} is empty after ${maxRetries} attempts`);
                         return false;
                     }
+
+                    console.log(`[_fetchPageByIdWithRetry] Page ${pageId} blob size: ${blob.size} bytes`);
 
                     const pageObj = {
                         id: `${this.app.state.sessionId}_${targetIndex}`,
@@ -832,6 +835,22 @@ export class LiveSyncClient {
                         blob: blob,
                         history: []
                     };
+
+                    // Apply metadata (template type, infinite canvas, etc.)
+                    if (metadata) {
+                        if (metadata.templateType) {
+                            pageObj.templateType = metadata.templateType;
+                            pageObj.templateConfig = metadata.templateConfig;
+                            console.log(`[_fetchPageByIdWithRetry] Applied template metadata: ${metadata.templateType}`);
+                        }
+                        if (metadata.isInfinite) {
+                            pageObj.isInfinite = true;
+                            pageObj.vectorGrid = metadata.vectorGrid;
+                            pageObj.bounds = metadata.bounds;
+                            pageObj.origin = metadata.origin;
+                            console.log(`[_fetchPageByIdWithRetry] Applied infinite canvas metadata`);
+                        }
+                    }
 
                     // Double-check if page still doesn't exist (race condition protection)
                     const existsNow = this.app.state.images.find(img => img && img.pageId === pageId);
@@ -1005,6 +1024,7 @@ export class LiveSyncClient {
             const structure = await structureResponse.json();
             const remotePageIds = structure.pageIds || [];
             const pdfPageCount = structure.pdfPageCount || 0;
+            const pageMetadata = structure.pageMetadata || {}; // Template/infinite canvas metadata
 
             console.log(`[reconcilePageStructure] Remote structure: ${remotePageIds.length} pages (${pdfPageCount} from PDF)`);
 
@@ -1036,9 +1056,26 @@ export class LiveSyncClient {
                 // For user pages: fetch from R2
                 if (missingUserPages.length > 0) {
                     console.log(`[reconcilePageStructure] Fetching ${missingUserPages.length} user pages from R2...`);
+                    let fetchedCount = 0;
+                    let failedCount = 0;
                     for (const pageId of missingUserPages) {
                         const targetIndex = this.app.state.images.length;
-                        await this._fetchPageByIdWithRetry(pageId, targetIndex);
+                        // Pass page metadata (for templates, infinite canvas, etc.)
+                        const meta = pageMetadata[pageId] || null;
+                        const success = await this._fetchPageByIdWithRetry(pageId, targetIndex, 3, 1000, meta);
+                        if (success) {
+                            fetchedCount++;
+                        } else {
+                            failedCount++;
+                            console.warn(`[reconcilePageStructure] Failed to fetch page ${pageId}`);
+                        }
+                    }
+                    // Show toast to user about synced pages
+                    if (fetchedCount > 0) {
+                        this.app.ui.showToast(`Synced ${fetchedCount} new page${fetchedCount > 1 ? 's' : ''} from collaborator`);
+                    }
+                    if (failedCount > 0) {
+                        this.app.ui.showToast(`⚠ ${failedCount} page${failedCount > 1 ? 's' : ''} failed to sync`, 'warning');
                     }
                 }
             }

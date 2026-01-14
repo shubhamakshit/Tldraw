@@ -880,6 +880,79 @@ export const ColorRmRenderer = {
             if (ungroupBtn) ungroupBtn.style.display = hasGroupSelected ? 'flex' : 'none';
             if (groupMenu) groupMenu.style.display = canGroup ? 'block' : 'none';
             if (ungroupMenu) ungroupMenu.style.display = hasGroupSelected ? 'block' : 'none';
+
+            // Show Lock/Unlock based on selection state
+            const lockRow = document.getElementById('ctxLockRow');
+            const unlockRow = document.getElementById('ctxUnlockRow');
+            const hasLockedItems = this.state.selection.some(idx => hist[idx] && hist[idx].locked);
+            const hasUnlockedItems = this.state.selection.some(idx => hist[idx] && !hist[idx].locked);
+
+            if (lockRow) lockRow.style.display = hasUnlockedItems ? 'flex' : 'none';
+            if (unlockRow) unlockRow.style.display = hasLockedItems ? 'flex' : 'none';
+
+            // Analyze selection to show/hide fill button and update color indicators
+            const fillBtn = document.getElementById('ctxFillBtn');
+            const strokeBtn = document.getElementById('ctxStrokeBtn');
+            const colorDivider = document.getElementById('ctxColorDivider');
+            const strokeIndicator = document.getElementById('ctxStrokeIndicator');
+            const fillIndicator = document.getElementById('ctxFillIndicator');
+
+            let hasStrokeItems = false;  // pen, eraser, highlighter
+            let hasShapeItems = false;   // shapes, text, images
+            let strokeColor = null;
+            let fillColor = null;
+
+            // Helper to analyze item recursively (for groups)
+            const analyzeItem = (item) => {
+                if (!item || item.deleted) return;
+
+                if (item.tool === 'group' && item.children) {
+                    item.children.forEach(child => analyzeItem(child));
+                } else if (item.tool === 'pen' || item.tool === 'eraser' || item.tool === 'highlighter') {
+                    hasStrokeItems = true;
+                    if (!strokeColor && item.color) strokeColor = item.color;
+                } else if (item.tool === 'shape') {
+                    hasShapeItems = true;
+                    if (!strokeColor && item.border) strokeColor = item.border;
+                    if (!fillColor && item.fill && item.fill !== 'transparent') fillColor = item.fill;
+                } else if (item.tool === 'text') {
+                    hasShapeItems = true;
+                    if (!strokeColor && item.color) strokeColor = item.color;
+                } else {
+                    hasShapeItems = true;
+                }
+            };
+
+            for (const idx of this.state.selection) {
+                analyzeItem(hist[idx]);
+            }
+
+            // Hide fill button if only stroke items are selected
+            const showFill = hasShapeItems;
+            if (fillBtn) fillBtn.style.display = showFill ? 'flex' : 'none';
+            if (colorDivider) colorDivider.style.display = (hasStrokeItems || hasShapeItems) ? 'block' : 'none';
+
+            // Update color indicators
+            if (strokeIndicator) {
+                strokeIndicator.style.background = strokeColor || '#fff';
+            }
+            if (fillIndicator) {
+                if (fillColor) {
+                    fillIndicator.style.background = fillColor;
+                    fillIndicator.style.borderStyle = 'solid';
+                } else {
+                    fillIndicator.style.background = 'transparent';
+                    fillIndicator.style.borderStyle = 'dashed';
+                }
+            }
+
+            // Sync settings checkboxes with current state
+            const ctxAspectRatio = document.getElementById('ctxAspectRatio');
+            const ctxSnapToGrid = document.getElementById('ctxSnapToGrid');
+            const ctxHoldToShape = document.getElementById('ctxHoldToShape');
+            if (ctxAspectRatio) ctxAspectRatio.checked = this.state.keepAspectRatio || false;
+            if (ctxSnapToGrid) ctxSnapToGrid.checked = this.state.snapToGrid || false;
+            if (ctxHoldToShape) ctxHoldToShape.checked = this.state.holdToShape || false;
         }
     },
 

@@ -625,6 +625,14 @@ export const ColorRmSession = {
         if (!this.config.collaborative || !this.state.ownerId) return true;
 
         try {
+            // Validate blob before upload
+            if (!blob || blob.size === 0) {
+                console.error('[_uploadPageBlob] Invalid blob - empty or null');
+                return false;
+            }
+
+            console.log(`[_uploadPageBlob] Uploading page ${pageId}, size: ${blob.size} bytes`);
+
             // Use new UUID-based endpoint
             const url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${pageId}`)
                      || `/api/color_rm/page/${this.state.sessionId}/${pageId}`;
@@ -639,12 +647,14 @@ export const ColorRmSession = {
             });
 
             if (!res.ok) {
-                console.error('Page upload failed:', await res.text());
+                const errText = await res.text();
+                console.error(`[_uploadPageBlob] Upload failed for ${pageId}:`, errText);
                 return false;
             }
+            console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId}`);
             return true;
         } catch (err) {
-            console.error('Error uploading page:', err);
+            console.error(`[_uploadPageBlob] Error uploading page ${pageId}:`, err);
             return false;
         }
     },
@@ -686,10 +696,31 @@ export const ColorRmSession = {
             const url = window.Config?.apiUrl(`/api/color_rm/page_structure/${this.state.sessionId}`)
                      || `/api/color_rm/page_structure/${this.state.sessionId}`;
 
+            // Include page metadata for special page types (templates, infinite canvas)
+            const pageMetadata = {};
+            for (const page of this.state.images) {
+                if (page && page.pageId) {
+                    const meta = {};
+                    if (page.templateType) {
+                        meta.templateType = page.templateType;
+                        meta.templateConfig = page.templateConfig;
+                    }
+                    if (page.isInfinite) {
+                        meta.isInfinite = true;
+                        meta.vectorGrid = page.vectorGrid;
+                        meta.bounds = page.bounds;
+                        meta.origin = page.origin;
+                    }
+                    if (Object.keys(meta).length > 0) {
+                        pageMetadata[page.pageId] = meta;
+                    }
+                }
+            }
+
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pageIds, pdfPageCount })
+                body: JSON.stringify({ pageIds, pdfPageCount, pageMetadata })
             });
 
             if (!res.ok) {
@@ -2154,14 +2185,14 @@ export const ColorRmSession = {
             // Update UI
             this._refreshPageUI();
 
-            // Handle navigation
-            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
-
             // Update session metadata
             await this._persistSessionMetadata();
 
-            // Upload page with UUID and sync structure to server
+            // CRITICAL: Upload page BEFORE syncing structure to other users
+            // This ensures the blob is available when other users try to fetch it
             const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
+
+            // Now sync structure to server and LiveSync
             await this._syncPageStructureToServer();
             this._syncPageStructureToLive();
 
@@ -2174,6 +2205,9 @@ export const ColorRmSession = {
 
             // Update canvas dimensions
             this._setCanvasDimensions(width, height);
+
+            // Navigate AFTER everything is synced
+            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
         } finally {
             // Unblock reconciliation
             if (this.liveSync) this.liveSync.endLocalPageOperation();
@@ -2215,21 +2249,23 @@ export const ColorRmSession = {
             // Update UI
             this._refreshPageUI();
 
-            // Handle navigation
-            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
-
             // Update session metadata
             await this._persistSessionMetadata();
 
-            // Upload page with UUID and sync structure to server
-            await this._uploadPageBlob(pageObj.pageId, blob);
+            // CRITICAL: Upload page BEFORE syncing structure
+            const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
+
+            // Now sync structure to server and LiveSync
             await this._syncPageStructureToServer();
             this._syncPageStructureToLive();
 
             // Update canvas dimensions
             this._setCanvasDimensions(width, height);
 
-            this.ui.showToast(`Added image as page ${newPageIndex + 1}`);
+            this.ui.showToast(`Added image as page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+
+            // Navigate AFTER everything is synced
+            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
         } finally {
             // Unblock reconciliation
             if (this.liveSync) this.liveSync.endLocalPageOperation();
@@ -2637,28 +2673,48 @@ export const ColorRmSession = {
             // Always append for templates
             const newPageIndex = this.state.images.length;
 
-            // Create and insert page using helpers (generates UUID pageId)
-            const pageObj = this._createPageObject(newPageIndex, blob);
+            // Create page object with template metadata for vector rendering
+            const pageId = this._generatePageId('user');
+            const pageObj = {
+                id: `${this.state.sessionId}_${newPageIndex}`,
+                sessionId: this.state.sessionId,
+                pageIndex: newPageIndex,
+                pageId: pageId,
+                blob: blob,
+                history: [],
+                // Template metadata for vector re-rendering
+                templateType: templateType,
+                templateConfig: {
+                    bgColor: bgColor,
+                    width: width,
+                    height: height,
+                    gridColor: '#e0e0e0',
+                    gridSize: templateType === 'graph' ? 20 : 30,
+                    marginLine: templateType === 'lined' ? 60 : null
+                }
+            };
             await this._insertPageAtIndex(pageObj, newPageIndex);
 
             // Update UI
             this._refreshPageUI();
 
-            // Handle navigation (templates always append, so navigateToNew=false)
-            await this._handlePostInsertNavigation(newPageIndex, false);
-
             // Update session metadata
             await this._persistSessionMetadata();
 
-            // Upload page with UUID and sync structure to server
-            await this._uploadPageBlob(pageObj.pageId, blob);
+            // CRITICAL: Upload page BEFORE syncing structure
+            const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
+
+            // Now sync structure to server and LiveSync
             await this._syncPageStructureToServer();
             this._syncPageStructureToLive();
 
             // Update canvas dimensions
             this._setCanvasDimensions(width, height);
 
-            this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1}`);
+            this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+
+            // Navigate AFTER everything is synced
+            await this._handlePostInsertNavigation(newPageIndex, false);
         } finally {
             // Unblock reconciliation
             if (this.liveSync) this.liveSync.endLocalPageOperation();
@@ -2813,26 +2869,28 @@ export const ColorRmSession = {
             // Update UI
             this._refreshPageUI();
 
-            // Handle navigation (use helper for consistent behavior)
-            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
-
-            // Center the view on the canvas
-            this.state.pan = { x: 0, y: 0 };
-            this.state.zoom = 0.5; // Start zoomed out to show more area
-            this.updateZoomIndicator();
-
             // Update session metadata
             await this._persistSessionMetadata();
 
-            // Upload page with UUID and sync structure to server
-            await this._uploadPageBlob(pageObj.pageId, blob);
+            // CRITICAL: Upload page BEFORE syncing structure
+            const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
+
+            // Now sync structure to server and LiveSync
             await this._syncPageStructureToServer();
             this._syncPageStructureToLive();
 
             // Update canvas dimensions
             this._setCanvasDimensions(initialWidth, initialHeight);
 
-            this.ui.showToast(`Added infinite canvas page ${newPageIndex + 1} ∞`);
+            this.ui.showToast(`Added infinite canvas page ${newPageIndex + 1} ∞ ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+
+            // Navigate AFTER everything is synced
+            await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
+
+            // Center the view on the canvas
+            this.state.pan = { x: 0, y: 0 };
+            this.state.zoom = 0.5; // Start zoomed out to show more area
+            this.updateZoomIndicator();
         } finally {
             // Unblock reconciliation
             if (this.liveSync) this.liveSync.endLocalPageOperation();
