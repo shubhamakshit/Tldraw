@@ -127,7 +127,9 @@ export const ColorRmInput = {
         if(img.history.length > 0) {
             if(!img.redo) img.redo = [];
             img.redo.push(img.history.pop());
-            this.saveCurrentImg(); this.render();
+            this.invalidateCache();
+            this.saveCurrentImg();
+            this.render();
         }
     },
 
@@ -164,7 +166,9 @@ export const ColorRmInput = {
         // Fallback to standard redo
         if(img.redo && img.redo.length > 0) {
             img.history.push(img.redo.pop());
-            this.saveCurrentImg(); this.render();
+            this.invalidateCache();
+            this.saveCurrentImg();
+            this.render();
         }
     },
 
@@ -1172,9 +1176,35 @@ export const ColorRmInput = {
                         } else if (st.tool === 'shape') {
                             // Check if we should erase shapes
                             if (options.shapes) {
-                                if (pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
-                                    pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR) {
-                                    hit = true;
+                                const isHollow = !st.fill || st.fill === 'transparent' || st.fill === 'none';
+                                const strokeWidth = st.lineWidth || 2;
+
+                                // Check if eraser is within bounding box (expanded by eraser radius)
+                                const inBounds = pt.x >= st.x - eraserR && pt.x <= st.x + st.w + eraserR &&
+                                                 pt.y >= st.y - eraserR && pt.y <= st.y + st.h + eraserR;
+
+                                if (inBounds) {
+                                    if (isHollow) {
+                                        // For hollow shapes, only erase if touching the stroke edge
+                                        // Check if point is near the edges (within stroke width + eraser radius)
+                                        const edgeThreshold = strokeWidth + eraserR;
+                                        const nearLeftEdge = Math.abs(pt.x - st.x) <= edgeThreshold;
+                                        const nearRightEdge = Math.abs(pt.x - (st.x + st.w)) <= edgeThreshold;
+                                        const nearTopEdge = Math.abs(pt.y - st.y) <= edgeThreshold;
+                                        const nearBottomEdge = Math.abs(pt.y - (st.y + st.h)) <= edgeThreshold;
+
+                                        // Point is near an edge if it's close to any boundary AND within the shape's other dimension
+                                        const withinVerticalBounds = pt.y >= st.y - edgeThreshold && pt.y <= st.y + st.h + edgeThreshold;
+                                        const withinHorizontalBounds = pt.x >= st.x - edgeThreshold && pt.x <= st.x + st.w + edgeThreshold;
+
+                                        hit = (nearLeftEdge && withinVerticalBounds) ||
+                                              (nearRightEdge && withinVerticalBounds) ||
+                                              (nearTopEdge && withinHorizontalBounds) ||
+                                              (nearBottomEdge && withinHorizontalBounds);
+                                    } else {
+                                        // For filled shapes, erase if anywhere in bounding box
+                                        hit = true;
+                                    }
                                 }
                             }
                         } else if (st.tool === 'image') {

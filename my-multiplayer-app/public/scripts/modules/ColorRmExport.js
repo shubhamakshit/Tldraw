@@ -178,27 +178,97 @@ export const ColorRmExport = {
 
             // Draw history - filter out deleted items
             if (item.history) {
-                item.history.forEach(st => {
-                    // Skip deleted items
+                // Helper function to render item to canvas (handles groups recursively)
+                const renderItemToCanvas = (st, ctx) => {
                     if (st.deleted) return;
 
-                    cx.save();
-                    if(st.rotation && st.tool!=='pen') { const centerx = st.x + st.w/2; const centery = st.y + st.h/2; cx.translate(centerx, centery); cx.rotate(st.rotation); cx.translate(-centerx, -centery); }
-                    if(st.tool === 'text') { cx.fillStyle = st.color; cx.font = `${st.size}px sans-serif`; cx.textBaseline = 'top'; cx.fillText(st.text, st.x, st.y); }
-                    else if(st.tool === 'shape') {
-                        cx.strokeStyle = st.border; cx.lineWidth = st.width; if(st.fill!=='transparent') { cx.fillStyle=st.fill; }
-                        cx.beginPath(); const {x,y,w,h} = st;
-                        if(st.shapeType==='rectangle') cx.rect(x,y,w,h); else if(st.shapeType==='circle') cx.ellipse(x+w/2, y+h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI); else if(st.shapeType==='line') { cx.moveTo(x,y); cx.lineTo(x+w,y+h); } else if(st.shapeType==='arrow') { const head=15; const ang=Math.atan2(h,w); cx.moveTo(x,y); cx.lineTo(x+w,y+h); cx.lineTo(x+w - head*Math.cos(ang-0.5), y+h - head*Math.sin(ang-0.5)); cx.moveTo(x+w,y+h); cx.lineTo(x+w - head*Math.cos(ang+0.5), y+h - head*Math.sin(ang+0.5)); }
-                        if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) cx.fill(); cx.stroke();
-                    } else if(st.tool === 'image') {
-                        // Handle image items
-                        // Skip for now - images are rendered from blob
-                    } else if(st.pts && st.pts.length > 0) {
-                        cx.lineCap='round'; cx.lineJoin='round'; cx.lineWidth=st.size; cx.strokeStyle = st.tool==='eraser' ? '#000' : st.color; if(st.tool==='eraser') cx.globalCompositeOperation='destination-out';
-                        cx.beginPath(); cx.moveTo(st.pts[0].x, st.pts[0].y); for(let j=1; j<st.pts.length; j++) cx.lineTo(st.pts[j].x, st.pts[j].y); cx.stroke();
+                    ctx.save();
+                    if(st.rotation && st.tool!=='pen' && st.tool!=='highlighter') {
+                        const centerx = st.x + st.w/2;
+                        const centery = st.y + st.h/2;
+                        ctx.translate(centerx, centery);
+                        ctx.rotate(st.rotation);
+                        ctx.translate(-centerx, -centery);
                     }
-                    cx.restore();
-                });
+
+                    if(st.tool === 'group' && st.children) {
+                        // Render group children
+                        st.children.forEach(child => renderItemToCanvas(child, ctx));
+                    } else if(st.tool === 'text') {
+                        ctx.fillStyle = st.color;
+                        ctx.font = `${st.size}px sans-serif`;
+                        ctx.textBaseline = 'top';
+                        ctx.fillText(st.text, st.x, st.y);
+                    } else if(st.tool === 'shape') {
+                        ctx.strokeStyle = st.border;
+                        ctx.lineWidth = st.width;
+                        if(st.fill!=='transparent') { ctx.fillStyle=st.fill; }
+
+                        // Handle dashed/dotted borders
+                        if (st.borderType === 'dashed') {
+                            ctx.setLineDash([st.width * 4, st.width * 2]);
+                        } else if (st.borderType === 'dotted') {
+                            ctx.setLineDash([st.width, st.width * 2]);
+                        } else {
+                            ctx.setLineDash([]);
+                        }
+
+                        ctx.beginPath();
+                        const {x,y,w,h} = st;
+                        if(st.shapeType==='rectangle') ctx.rect(x,y,w,h);
+                        else if(st.shapeType==='circle') ctx.ellipse(x+w/2, y+h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI);
+                        else if(st.shapeType==='line') { ctx.moveTo(x,y); ctx.lineTo(x+w,y+h); }
+                        else if(st.shapeType==='arrow') {
+                            const head=15;
+                            const ang=Math.atan2(h,w);
+                            ctx.moveTo(x,y);
+                            ctx.lineTo(x+w,y+h);
+                            ctx.lineTo(x+w - head*Math.cos(ang-0.5), y+h - head*Math.sin(ang-0.5));
+                            ctx.moveTo(x+w,y+h);
+                            ctx.lineTo(x+w - head*Math.cos(ang+0.5), y+h - head*Math.sin(ang+0.5));
+                        } else if(st.shapeType==='triangle') {
+                            ctx.moveTo(x + w/2, y);
+                            ctx.lineTo(x + w, y + h);
+                            ctx.lineTo(x, y + h);
+                            ctx.closePath();
+                        } else if(st.shapeType==='diamond') {
+                            ctx.moveTo(x + w/2, y);
+                            ctx.lineTo(x + w, y + h/2);
+                            ctx.lineTo(x + w/2, y + h);
+                            ctx.lineTo(x, y + h/2);
+                            ctx.closePath();
+                        }
+                        if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) ctx.fill();
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                    } else if(st.tool === 'image') {
+                        // Image items - need async handling, skip in sync loop
+                    } else if(st.tool === 'highlighter' && st.pts && st.pts.length > 0) {
+                        ctx.lineCap='round';
+                        ctx.lineJoin='round';
+                        ctx.lineWidth=st.size;
+                        ctx.strokeStyle = st.color;
+                        ctx.globalAlpha = st.opacity !== undefined ? st.opacity : 0.4;
+                        ctx.beginPath();
+                        ctx.moveTo(st.pts[0].x, st.pts[0].y);
+                        for(let j=1; j<st.pts.length; j++) ctx.lineTo(st.pts[j].x, st.pts[j].y);
+                        ctx.stroke();
+                        ctx.globalAlpha = 1;
+                    } else if(st.pts && st.pts.length > 0) {
+                        ctx.lineCap='round';
+                        ctx.lineJoin='round';
+                        ctx.lineWidth=st.size;
+                        ctx.strokeStyle = st.tool==='eraser' ? '#000' : st.color;
+                        if(st.tool==='eraser') ctx.globalCompositeOperation='destination-out';
+                        ctx.beginPath();
+                        ctx.moveTo(st.pts[0].x, st.pts[0].y);
+                        for(let j=1; j<st.pts.length; j++) ctx.lineTo(st.pts[j].x, st.pts[j].y);
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+                };
+
+                item.history.forEach(st => renderItemToCanvas(st, cx));
             }
 
             const u = cvs.toDataURL(imageFormat, imageQuality);
@@ -716,6 +786,30 @@ export const ColorRmExport = {
                 ]);
 
                 // Draw as connected line segments
+                for (let i = 0; i < pts.length - 1; i++) {
+                    pdfDoc.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+                }
+            }
+        } else if (stroke.tool === 'highlighter' && stroke.pts && stroke.pts.length > 0) {
+            // Render highlighter stroke - jsPDF doesn't support transparency,
+            // so we approximate by blending the color with white
+            const color = hexToRgb(stroke.color || '#FFFF00');
+            const lineWidth = (stroke.size || 20) * scale;
+            const opacity = stroke.opacity !== undefined ? stroke.opacity : 0.4;
+            // Blend with white to approximate transparency
+            const blendedColor = color.map(c => Math.round(c * opacity + 255 * (1 - opacity)));
+
+            pdfDoc.setDrawColor(blendedColor[0], blendedColor[1], blendedColor[2]);
+            pdfDoc.setLineWidth(lineWidth);
+            pdfDoc.setLineCap('round');
+            pdfDoc.setLineJoin('round');
+
+            if (stroke.pts.length >= 2) {
+                const pts = stroke.pts.map(p => [
+                    offsetX + (p.x - contentOffsetX) * scale,
+                    offsetY + (p.y - contentOffsetY) * scale
+                ]);
+
                 for (let i = 0; i < pts.length - 1; i++) {
                     pdfDoc.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
                 }

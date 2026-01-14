@@ -112,7 +112,7 @@ export const ColorRmBox = {
     _itemIntersectsRegion(item, bounds) {
         let itemBounds;
 
-        if (item.tool === 'pen' || item.tool === 'eraser') {
+        if (item.tool === 'pen' || item.tool === 'eraser' || item.tool === 'highlighter') {
             if (!item.pts || item.pts.length === 0) return false;
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             for (const p of item.pts) {
@@ -124,8 +124,43 @@ export const ColorRmBox = {
             const pad = (item.size || 3) / 2;
             itemBounds = { x: minX - pad, y: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
         } else if (item.tool === 'group' && item.children) {
-            // For groups, check if any child intersects
-            return item.children.some(child => this._itemIntersectsRegion(child, bounds));
+            // For groups, use the group's own bounds (x, y, w, h)
+            // The group should have valid bounds set when created
+            if (item.x !== undefined && item.w !== undefined) {
+                itemBounds = {
+                    x: item.x,
+                    y: item.y,
+                    maxX: item.x + item.w,
+                    maxY: item.y + item.h
+                };
+            } else {
+                // Fallback: calculate bounds from children (with their absolute coordinates)
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                const calculateChildBounds = (children) => {
+                    for (const child of children) {
+                        if (child.tool === 'pen' || child.tool === 'eraser' || child.tool === 'highlighter') {
+                            if (child.pts) {
+                                for (const p of child.pts) {
+                                    minX = Math.min(minX, p.x);
+                                    minY = Math.min(minY, p.y);
+                                    maxX = Math.max(maxX, p.x);
+                                    maxY = Math.max(maxY, p.y);
+                                }
+                            }
+                        } else if (child.tool === 'group' && child.children) {
+                            calculateChildBounds(child.children);
+                        } else {
+                            minX = Math.min(minX, child.x || 0);
+                            minY = Math.min(minY, child.y || 0);
+                            maxX = Math.max(maxX, (child.x || 0) + (child.w || 0));
+                            maxY = Math.max(maxY, (child.y || 0) + (child.h || 0));
+                        }
+                    }
+                };
+                calculateChildBounds(item.children);
+                if (minX === Infinity) return false;
+                itemBounds = { x: minX, y: minY, maxX: maxX, maxY: maxY };
+            }
         } else {
             // Shapes, text, images
             itemBounds = {
@@ -145,7 +180,7 @@ export const ColorRmBox = {
      * Translate item coordinates to local (relative to capture origin)
      */
     _translateItemToLocal(item, originX, originY) {
-        if (item.tool === 'pen' || item.tool === 'eraser') {
+        if (item.tool === 'pen' || item.tool === 'eraser' || item.tool === 'highlighter') {
             if (item.pts) {
                 item.pts.forEach(p => {
                     p.x -= originX;
@@ -153,9 +188,11 @@ export const ColorRmBox = {
                 });
             }
         } else if (item.tool === 'group' && item.children) {
+            // Translate group position
             item.x = (item.x || 0) - originX;
             item.y = (item.y || 0) - originY;
-            item.children.forEach(child => this._translateItemToLocal(child, 0, 0));
+            // Also translate all children by the same offset (they have absolute coords)
+            item.children.forEach(child => this._translateItemToLocal(child, originX, originY));
         } else {
             item.x = (item.x || 0) - originX;
             item.y = (item.y || 0) - originY;
@@ -420,6 +457,11 @@ export const ColorRmBox = {
         ctx.translate(offsetX, offsetY);
         ctx.scale(scale, scale);
 
+        // Clip to item bounds to prevent overflow from partially captured items
+        ctx.beginPath();
+        ctx.rect(0, 0, item.w, item.h);
+        ctx.clip();
+
         if (item.history) {
             for (const st of item.history) {
                 if (st.deleted) continue;
@@ -445,7 +487,7 @@ export const ColorRmBox = {
     _renderItemToContext(ctx, st) {
         ctx.save();
 
-        if (st.rotation && st.tool !== 'pen' && st.tool !== 'eraser') {
+        if (st.rotation && st.tool !== 'pen' && st.tool !== 'eraser' && st.tool !== 'highlighter') {
             const cx = st.x + st.w / 2;
             const cy = st.y + st.h / 2;
             ctx.translate(cx, cy);
@@ -468,6 +510,22 @@ export const ColorRmBox = {
                 }
                 ctx.stroke();
             }
+        } else if (st.tool === 'highlighter') {
+            if (st.pts && st.pts.length > 0) {
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = st.size || 20;
+                ctx.strokeStyle = st.color || '#FFFF00';
+                ctx.globalAlpha = st.opacity !== undefined ? st.opacity : 0.4;
+
+                ctx.beginPath();
+                ctx.moveTo(st.pts[0].x, st.pts[0].y);
+                for (let i = 1; i < st.pts.length; i++) {
+                    ctx.lineTo(st.pts[i].x, st.pts[i].y);
+                }
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
         } else if (st.tool === 'text') {
             ctx.fillStyle = st.color || '#000';
             ctx.font = `${st.size || 16}px sans-serif`;
@@ -480,6 +538,15 @@ export const ColorRmBox = {
                 ctx.fillStyle = st.fill;
             }
 
+            // Handle dashed/dotted borders
+            if (st.borderType === 'dashed') {
+                ctx.setLineDash([(st.width || 2) * 4, (st.width || 2) * 2]);
+            } else if (st.borderType === 'dotted') {
+                ctx.setLineDash([st.width || 2, (st.width || 2) * 2]);
+            } else {
+                ctx.setLineDash([]);
+            }
+
             const { x, y, w, h, shapeType } = st;
             ctx.beginPath();
 
@@ -490,12 +557,32 @@ export const ColorRmBox = {
             } else if (shapeType === 'line') {
                 ctx.moveTo(x, y);
                 ctx.lineTo(x + w, y + h);
+            } else if (shapeType === 'arrow') {
+                const head = 15;
+                const ang = Math.atan2(h, w);
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + w, y + h);
+                ctx.lineTo(x + w - head * Math.cos(ang - 0.5), y + h - head * Math.sin(ang - 0.5));
+                ctx.moveTo(x + w, y + h);
+                ctx.lineTo(x + w - head * Math.cos(ang + 0.5), y + h - head * Math.sin(ang + 0.5));
+            } else if (shapeType === 'triangle') {
+                ctx.moveTo(x + w / 2, y);
+                ctx.lineTo(x + w, y + h);
+                ctx.lineTo(x, y + h);
+                ctx.closePath();
+            } else if (shapeType === 'diamond') {
+                ctx.moveTo(x + w / 2, y);
+                ctx.lineTo(x + w, y + h / 2);
+                ctx.lineTo(x + w / 2, y + h);
+                ctx.lineTo(x, y + h / 2);
+                ctx.closePath();
             }
 
             if (st.fill && st.fill !== 'transparent' && !['line', 'arrow'].includes(shapeType)) {
                 ctx.fill();
             }
             ctx.stroke();
+            ctx.setLineDash([]);
         } else if (st.tool === 'group' && st.children) {
             for (const child of st.children) {
                 this._renderItemToContext(ctx, child);
@@ -513,6 +600,11 @@ export const ColorRmBox = {
 
         ctx.save();
         ctx.translate(destX, destY);
+
+        // Clip to destination bounds to prevent overflow from partially captured items
+        ctx.beginPath();
+        ctx.rect(0, 0, destW, destH);
+        ctx.clip();
 
         // Draw background first
         if (item.backgroundBlob) {
@@ -749,6 +841,28 @@ export const ColorRmBox = {
                      const lineWidth = (stroke.size || 3) * scale;
 
                      pdfDoc.setDrawColor(color[0], color[1], color[2]);
+                     pdfDoc.setLineWidth(lineWidth);
+                     pdfDoc.setLineCap('round');
+                     pdfDoc.setLineJoin('round');
+
+                     if (stroke.pts.length >= 2) {
+                         const pts = stroke.pts.map(p => [
+                             offsetX + p.x * scale,
+                             offsetY + p.y * scale
+                         ]);
+                         for (let i = 0; i < pts.length - 1; i++) {
+                             pdfDoc.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+                         }
+                     }
+                 } else if (stroke.tool === 'highlighter' && stroke.pts && stroke.pts.length > 0) {
+                     // Highlighter - jsPDF doesn't support transparency well, so we use a lighter color
+                     const color = hexToRgb(stroke.color || '#FFFF00');
+                     const lineWidth = (stroke.size || 20) * scale;
+                     // Approximate transparency by blending with white
+                     const opacity = stroke.opacity !== undefined ? stroke.opacity : 0.4;
+                     const blendedColor = color.map(c => Math.round(c * opacity + 255 * (1 - opacity)));
+
+                     pdfDoc.setDrawColor(blendedColor[0], blendedColor[1], blendedColor[2]);
                      pdfDoc.setLineWidth(lineWidth);
                      pdfDoc.setLineCap('round');
                      pdfDoc.setLineJoin('round');

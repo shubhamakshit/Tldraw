@@ -337,13 +337,12 @@ export const ColorRmSession = {
     },
 
     // =============================================
-    // PDF IMPORT (Experimental)
+    // PDF IMPORT (Direct Rasterization)
     // =============================================
 
     /**
-     * Import PDF file - opens file picker and initiates server-side conversion
-     * This is an experimental feature that converts PDF pages to SVG using pdf2svg
-     * The PDF conversion server runs locally on HuggingFace Spaces (port 7861)
+     * Import PDF file - opens file picker and rasterizes pages directly using pdf.js
+     * Each page becomes a new page in the project with the PDF page as background
      */
     async importPdf() {
         const input = document.createElement('input');
@@ -354,37 +353,90 @@ export const ColorRmSession = {
             const file = e.target.files?.[0];
             if (!file) return;
 
-            this.ui.toggleLoader(true, 'Uploading PDF...');
+            this.ui.toggleLoader(true, 'Loading PDF...');
 
             try {
-                // Get the base URL for the PDF convert server
-                // On HF Spaces, it runs on port 7861 on the same host
-                const currentHost = window.location.hostname;
-                const pdfServerBase = currentHost.includes('hf.space') || currentHost.includes('huggingface')
-                    ? `${window.location.protocol}//${currentHost}:7861`
-                    : 'http://localhost:7861';
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                const totalPages = pdf.numPages;
 
-                // Upload PDF to local PDF convert server
-                const formData = new FormData();
-                formData.append('file', file);
-
-                const response = await fetch(`${pdfServerBase}/convert/pdf`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    throw new Error('Upload failed');
+                // Show import options dialog
+                const options = await this._showPdfImportOptions(file.name, totalPages);
+                if (options.cancelled) {
+                    this.ui.toggleLoader(false);
+                    return;
                 }
 
-                const result = await response.json();
+                const { startPage, endPage, scale } = options;
+                const pagesToImport = endPage - startPage + 1;
 
-                // Show conversion status dialog (using local server)
-                this._showPdfConversionDialog(result.jobId, file.name, pdfServerBase);
+                this.ui.toggleLoader(true, `Importing ${pagesToImport} pages...`);
+
+                for (let pageNum = startPage; pageNum <= endPage; pageNum++) {
+                    this.ui.updateProgress(
+                        ((pageNum - startPage) / pagesToImport) * 100,
+                        `Importing page ${pageNum - startPage + 1} of ${pagesToImport}...`
+                    );
+
+                    const page = await pdf.getPage(pageNum);
+                    const viewport = page.getViewport({ scale: scale });
+
+                    // Create canvas and render PDF page
+                    const canvas = document.createElement('canvas');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    const ctx = canvas.getContext('2d');
+
+                    await page.render({
+                        canvasContext: ctx,
+                        viewport: viewport
+                    }).promise;
+
+                    // Convert to blob
+                    const blob = await new Promise(resolve =>
+                        canvas.toBlob(resolve, 'image/jpeg', 0.92)
+                    );
+
+                    // Create new page
+                    const newPageIndex = this.state.images.length;
+                    const pageId = this._generatePageId('user', newPageIndex);
+                    const pageObj = {
+                        id: `${this.state.sessionId}_${newPageIndex}`,
+                        sessionId: this.state.sessionId,
+                        pageIndex: newPageIndex,
+                        pageId: pageId,
+                        blob: blob,
+                        history: [],
+                        width: viewport.width,
+                        height: viewport.height
+                    };
+
+                    // Save to IndexedDB
+                    await this.dbPut('pages', pageObj);
+                    this.state.images.push(pageObj);
+
+                    // Upload to R2
+                    await this._uploadPageBlob(pageId, blob);
+
+                    // Allow UI to update
+                    await new Promise(r => setTimeout(r, 0));
+                }
+
+                // Sync page structure
+                await this._syncPageStructureToServer();
+                this._syncPageStructureToLive();
+
+                // Load the first imported page
+                const firstImportedIndex = this.state.images.length - pagesToImport;
+                this.loadPage(firstImportedIndex);
+
+                if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
+
+                this.ui.showToast(`Imported ${pagesToImport} pages from PDF`);
 
             } catch (e) {
-                console.error('PDF upload error:', e);
-                this.ui.showToast(`PDF upload failed: ${e.message}`);
+                console.error('PDF import error:', e);
+                this.ui.showToast(`PDF import failed: ${e.message}`);
             } finally {
                 this.ui.toggleLoader(false);
             }
@@ -394,219 +446,81 @@ export const ColorRmSession = {
     },
 
     /**
-     * Shows PDF conversion status dialog with polling
-     * @param {string} jobId - The conversion job ID
+     * Shows PDF import options dialog
      * @param {string} fileName - Original file name
-     * @param {string} serverBase - Base URL for PDF convert server
+     * @param {number} totalPages - Total pages in PDF
+     * @returns {Promise<{cancelled: boolean, startPage: number, endPage: number, scale: number}>}
      */
-    _showPdfConversionDialog(jobId, fileName, serverBase) {
-        const modal = document.createElement('div');
-        modal.className = 'overlay';
-        modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:300; display:flex; align-items:center; justify-content:center;';
+    _showPdfImportOptions(fileName, totalPages) {
+        return new Promise((resolve) => {
+            const modal = document.createElement('div');
+            modal.className = 'overlay';
+            modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:300; display:flex; align-items:center; justify-content:center;';
 
-        modal.innerHTML = `
-            <div class="card" style="max-width:450px; width:90%; background:var(--bg-panel); border:1px solid var(--border); padding:20px;">
-                <h3 style="margin:0 0 15px; color:white; font-size:1.1rem;">
-                    <i class="bi bi-file-pdf" style="color:#ff6b6b;"></i> PDF Import (pdf2svg)
-                </h3>
-                <p style="color:#aaa; margin:0 0 15px; font-size:0.9rem;">${fileName}</p>
+            modal.innerHTML = `
+                <div class="card" style="max-width:400px; width:90%; background:var(--bg-panel); border:1px solid var(--border); padding:20px; border-radius:12px;">
+                    <h3 style="margin:0 0 15px; color:white; font-size:1.1rem;">
+                        <i class="bi bi-file-pdf" style="color:#ff6b6b;"></i> Import PDF
+                    </h3>
+                    <p style="color:#aaa; margin:0 0 15px; font-size:0.9rem;">${fileName}</p>
+                    <p style="color:#888; margin:0 0 15px; font-size:0.85rem;">${totalPages} page${totalPages > 1 ? 's' : ''} detected</p>
 
-                <div id="pdfStatus" style="padding:15px; background:var(--bg-dark); border-radius:8px; margin-bottom:15px;">
-                    <div style="display:flex; align-items:center; gap:10px; color:#888;">
-                        <div class="spinner" style="width:20px; height:20px; border:2px solid #333; border-top-color:#4dabf7; border-radius:50%; animation:spin 1s linear infinite;"></div>
-                        <span>Converting with pdf2svg...</span>
+                    <div style="margin-bottom:15px;">
+                        <label style="display:block; color:#888; font-size:0.8rem; margin-bottom:5px;">Page Range</label>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <input type="number" id="pdfStartPage" value="1" min="1" max="${totalPages}"
+                                   style="flex:1; padding:8px; background:#111; border:1px solid #333; border-radius:6px; color:white;">
+                            <span style="color:#666;">to</span>
+                            <input type="number" id="pdfEndPage" value="${totalPages}" min="1" max="${totalPages}"
+                                   style="flex:1; padding:8px; background:#111; border:1px solid #333; border-radius:6px; color:white;">
+                        </div>
                     </div>
-                    <div id="pdfProgress" style="margin-top:10px; font-size:0.85rem; color:#666;"></div>
+
+                    <div style="margin-bottom:20px;">
+                        <label style="display:block; color:#888; font-size:0.8rem; margin-bottom:5px;">Quality</label>
+                        <select id="pdfScale" style="width:100%; padding:8px; background:#111; border:1px solid #333; border-radius:6px; color:white;">
+                            <option value="1">Standard (1x)</option>
+                            <option value="1.5" selected>High (1.5x)</option>
+                            <option value="2">Very High (2x)</option>
+                            <option value="3">Maximum (3x)</option>
+                        </select>
+                    </div>
+
+                    <div style="display:flex; gap:10px;">
+                        <button id="pdfImportBtn" class="btn btn-primary" style="flex:1;">Import</button>
+                        <button id="pdfCancelBtn" class="btn" style="flex:1; border-color:#444;">Cancel</button>
+                    </div>
                 </div>
+            `;
 
-                <div id="pdfPages" style="max-height:200px; overflow-y:auto; display:none;">
-                    <!-- Page list will be populated here -->
-                </div>
+            document.body.appendChild(modal);
 
-                <div style="display:flex; gap:10px; margin-top:15px;">
-                    <button id="pdfImportAll" class="btn btn-primary" style="flex:1; display:none;">Import All Pages</button>
-                    <button id="pdfClose" class="btn btn-secondary" style="flex:1;">Cancel</button>
-                </div>
+            modal.querySelector('#pdfImportBtn').onclick = () => {
+                const startPage = parseInt(modal.querySelector('#pdfStartPage').value) || 1;
+                const endPage = parseInt(modal.querySelector('#pdfEndPage').value) || totalPages;
+                const scale = parseFloat(modal.querySelector('#pdfScale').value) || 1.5;
 
-                <p style="font-size:0.75rem; color:#666; margin:15px 0 0; text-align:center;">
-                    Using pdf2svg for high-quality vector conversion
-                </p>
-            </div>
-            <style>
-                @keyframes spin { to { transform: rotate(360deg); } }
-            </style>
-        `;
-
-        document.body.appendChild(modal);
-
-        let pollInterval = null;
-        let jobData = null;
-
-        const pollStatus = async () => {
-            try {
-                const response = await fetch(`${serverBase}/convert/status/${jobId}`);
-                if (!response.ok) throw new Error('Status check failed');
-
-                jobData = await response.json();
-                const statusEl = modal.querySelector('#pdfStatus');
-                const progressEl = modal.querySelector('#pdfProgress');
-                const pagesEl = modal.querySelector('#pdfPages');
-                const importAllBtn = modal.querySelector('#pdfImportAll');
-
-                if (jobData.status === 'processing') {
-                    progressEl.textContent = `Converting page ${jobData.processedPages} of ${jobData.pageCount || '?'}...`;
-                } else if (jobData.status === 'completed') {
-                    clearInterval(pollInterval);
-
-                    statusEl.innerHTML = `
-                        <div style="color:#51cf66; display:flex; align-items:center; gap:10px;">
-                            <i class="bi bi-check-circle-fill"></i>
-                            <span>Conversion complete! ${jobData.pageCount} pages ready.</span>
-                        </div>
-                    `;
-
-                    if (jobData.pages && jobData.pages.length > 0) {
-                        pagesEl.style.display = 'block';
-                        pagesEl.innerHTML = jobData.pages.map(p => `
-                            <div class="pdf-page-item" data-page="${p.page}" style="padding:10px; border:1px solid var(--border); margin-bottom:5px; border-radius:4px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-                                <span>Page ${p.page}</span>
-                                <button class="btn btn-sm pdf-import-page" data-page="${p.page}" data-url="${serverBase}${p.url}">Import</button>
-                            </div>
-                        `).join('');
-
-                        importAllBtn.style.display = 'block';
-
-                        // Add click handlers for individual page imports
-                        pagesEl.querySelectorAll('.pdf-import-page').forEach(btn => {
-                            btn.onclick = (e) => {
-                                e.stopPropagation();
-                                this._importPdfPageFromUrl(btn.dataset.url, parseInt(btn.dataset.page));
-                            };
-                        });
-                    }
-                } else if (jobData.status === 'failed') {
-                    clearInterval(pollInterval);
-                    statusEl.innerHTML = `
-                        <div style="color:#ff6b6b; display:flex; align-items:center; gap:10px;">
-                            <i class="bi bi-exclamation-triangle-fill"></i>
-                            <span>Conversion failed: ${jobData.error || 'Unknown error'}</span>
-                        </div>
-                    `;
-                } else if (jobData.status === 'pending') {
-                    progressEl.textContent = 'Starting conversion...';
-                }
-
-            } catch (e) {
-                console.error('Status poll error:', e);
-            }
-        };
-
-        // Start polling
-        pollInterval = setInterval(pollStatus, 1000);
-        pollStatus(); // Initial check
-
-        // Import all pages button
-        modal.querySelector('#pdfImportAll').onclick = async () => {
-            if (jobData?.pages) {
-                modal.querySelector('#pdfImportAll').disabled = true;
-                modal.querySelector('#pdfImportAll').textContent = 'Importing...';
-                for (const p of jobData.pages) {
-                    await this._importPdfPageFromUrl(`${serverBase}${p.url}`, p.page);
-                }
                 document.body.removeChild(modal);
-            }
-        };
+                resolve({
+                    cancelled: false,
+                    startPage: Math.max(1, Math.min(startPage, totalPages)),
+                    endPage: Math.max(1, Math.min(endPage, totalPages)),
+                    scale: scale
+                });
+            };
 
-        // Close button
-        modal.querySelector('#pdfClose').onclick = () => {
-            clearInterval(pollInterval);
-            document.body.removeChild(modal);
-        };
-
-        // Close on backdrop click
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                clearInterval(pollInterval);
+            modal.querySelector('#pdfCancelBtn').onclick = () => {
                 document.body.removeChild(modal);
-            }
-        };
-    },
+                resolve({ cancelled: true });
+            };
 
-    /**
-     * Import a PDF page from a URL (from local pdf2svg server)
-     * @param {string} svgUrl - URL to fetch SVG content
-     * @param {number} pageNum - Page number for display
-     */
-    async _importPdfPageFromUrl(svgUrl, pageNum) {
-        this.ui.toggleLoader(true, `Importing page ${pageNum}...`);
-
-        try {
-            const response = await fetch(svgUrl);
-            if (!response.ok) throw new Error('Failed to download page');
-
-            const svgContent = await response.text();
-
-            // Create a File-like object for the SVG importer
-            const svgBlob = new Blob([svgContent], { type: 'image/svg+xml' });
-            const svgFile = new File([svgBlob], `pdf_page_${pageNum}.svg`, { type: 'image/svg+xml' });
-
-            // Show import options
-            const options = await this._showSvgImportOptions(`PDF Page ${pageNum}`);
-            if (options.cancelled) {
-                this.ui.toggleLoader(false);
-                return;
-            }
-
-            // Import using existing SVG import logic
-            const newPageIndex = this.state.images.length;
-            const { pageObj, toSync } = await this.importSvgAsPage(svgFile, newPageIndex, options);
-
-            await this.dbPut('pages', pageObj);
-            this.state.images.push(pageObj);
-
-            // Upload base history to R2 for SVG items
-            if (toSync.length > 0 && this.state.sessionId && pageObj.pageId) {
-                try {
-                    const historyUrl = window.Config?.apiUrl(`/api/color_rm/history/${this.state.sessionId}/${pageObj.pageId}`)
-                        || `/api/color_rm/history/${this.state.sessionId}/${pageObj.pageId}`;
-                    await fetch(historyUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(toSync)
-                    });
-                    pageObj.hasBaseHistory = true;
-                    pageObj._baseHistory = [...toSync];
-                    await this.dbPut('pages', pageObj);
-                } catch (e) {
-                    console.error('[PDF Import] Failed to upload history:', e);
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    document.body.removeChild(modal);
+                    resolve({ cancelled: true });
                 }
-            }
-
-            // Upload page blob and sync structure
-            const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, pageObj.blob);
-            await this._syncPageStructureToServer();
-            this._syncPageStructureToLive();
-
-            if (this.liveSync && !this.liveSync.isInitializing) {
-                this.liveSync.setHistory(newPageIndex, []);
-                this.liveSync.updatePageMetadata(newPageIndex, { hasBaseHistory: true, baseHistoryCount: toSync.length });
-            }
-
-            // Navigate to the new page
-            this.state.idx = newPageIndex;
-            await this.loadImage();
-
-            if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
-
-            const syncStatus = uploadSuccess ? '✓' : '⚠';
-            this.ui.showToast(`Imported PDF page ${pageNum} ${syncStatus}`);
-
-        } catch (e) {
-            console.error('PDF page import error:', e);
-            this.ui.showToast(`Import failed: ${e.message}`);
-        } finally {
-            this.ui.toggleLoader(false);
-        }
+            };
+        });
     },
 
     // =============================================
@@ -842,21 +756,15 @@ export const ColorRmSession = {
     /**
      * Handles navigation after inserting a page
      * @param {number} newPageIndex - The index of the newly inserted page
-     * @param {boolean} navigateToNew - Whether to navigate to the new page
+     * @param {boolean} wasInserted - Whether page was inserted (vs appended) - affects index adjustment
      */
-    async _handlePostInsertNavigation(newPageIndex, navigateToNew) {
-        if (navigateToNew) {
-            await this.loadPage(newPageIndex);
-        } else {
-            // If appending, stay on current page but update the total
-            if (this.state.idx >= newPageIndex) {
-                // If we inserted before or at the current page, update current index
-                this.state.idx++;
-            }
-            // Update page input to reflect current page
-            const pageInput = this.getElement('pageInput');
-            if (pageInput) pageInput.value = this.state.idx + 1;
+    async _handlePostInsertNavigation(newPageIndex, wasInserted) {
+        // If page was inserted before current page, adjust current index first
+        if (wasInserted && this.state.idx >= newPageIndex) {
+            this.state.idx++;
         }
+        // Always navigate to the newly created page
+        await this.loadPage(newPageIndex);
     },
 
     /**
