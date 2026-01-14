@@ -430,6 +430,11 @@ export const ColorRmRenderer = {
             const isInteracting = this.isDragging || this.state.selection.length > 0;
             const cacheThreshold = this._getStrokeCacheThreshold();
 
+            // Enable viewport culling when there are many objects (performance optimization)
+            // DISABLED: Causes rendering bugs - objects disappearing when partially out of view
+            // This applies to ALL canvas types, not just infinite canvas
+            const useViewportCulling = false; // Disabled due to bugs
+
             // SOTA: Build/update spatial index for infinite canvas
             if (isInfiniteCanvas) {
                 this._ensureSpatialIndex(currentImg);
@@ -467,8 +472,8 @@ export const ColorRmRenderer = {
                 // Used when drawing, selecting, or when stroke count is low
                 activeHistory.forEach((st, idx) => {
                     if (this.state.selection.includes(idx)) return;
-                    // Viewport culling for infinite canvas
-                    if (isInfiniteCanvas && st.tool === 'pen' && !this.isStrokeVisible(st)) return;
+                    // Viewport culling for performance (all canvas types when many objects)
+                    if (useViewportCulling && !this.isObjectVisible(st)) return;
                     this.renderObject(ctx, st, 0, 0);
                 });
             } else {
@@ -483,11 +488,11 @@ export const ColorRmRenderer = {
                     ctx.translate(this.state.pan.x, this.state.pan.y);
                     ctx.scale(this.state.zoom, this.state.zoom);
                 } else {
-                    // Fallback to live rendering
+                    // Fallback to live rendering with viewport culling
                     activeHistory.forEach((st, idx) => {
                         if (this.state.selection.includes(idx)) return;
-                        // Viewport culling for infinite canvas
-                        if (isInfiniteCanvas && st.tool === 'pen' && !this.isStrokeVisible(st)) return;
+                        // Viewport culling for performance (all canvas types when many objects)
+                        if (useViewportCulling && !this.isObjectVisible(st)) return;
                         this.renderObject(ctx, st, 0, 0);
                     });
                 }
@@ -578,7 +583,13 @@ export const ColorRmRenderer = {
     renderObject(ctx, st, dx, dy) {
         if (!st) return; // Safety check
         ctx.save();
-        if(st.rotation && st.tool!=='pen') {
+
+        // Apply global opacity if set
+        if (st.opacity !== undefined && st.opacity < 1) {
+            ctx.globalAlpha = st.opacity;
+        }
+
+        if(st.rotation && st.tool!=='pen' && st.tool!=='highlighter') {
             const cx = st.x + st.w/2 + dx;
             const cy = st.y + st.h/2 + dy;
             ctx.translate(cx, cy);
@@ -604,14 +615,63 @@ export const ColorRmRenderer = {
             return;
         }
 
+        // Handle image objects (v2 feature)
+        if(st.tool === 'image') {
+            this._renderImage(ctx, st);
+            ctx.restore();
+            return;
+        }
+
         if(st.tool === 'text') {
-            ctx.fillStyle = st.color;
-            ctx.font = `${st.size}px sans-serif`;
-            ctx.textBaseline = 'top';
-            ctx.fillText(st.text, st.x, st.y);
+            // Check for svgData (v2 feature) for precise rendering
+            if (st.svgData && st.svgData.innerContent) {
+                this._renderSvgText(ctx, st);
+            } else {
+                // Fallback to simple canvas text
+                ctx.fillStyle = st.color || '#000000';
+                ctx.font = `${st.size || 16}px ${st.fontFamily || 'sans-serif'}`;
+                ctx.textBaseline = 'top';
+                ctx.fillText(st.text, st.x, st.y);
+            }
         } else if(st.tool === 'shape') {
-            ctx.strokeStyle = st.border; ctx.lineWidth = st.width;
-            if(st.fill!=='transparent') { ctx.fillStyle=st.fill; }
+            // Handle border/stroke with separate opacity
+            const borderColor = st.border || '#000000';
+            if (st.borderOpacity !== undefined && st.borderOpacity < 1 && borderColor.startsWith('#')) {
+                const r = parseInt(borderColor.slice(1, 3), 16);
+                const g = parseInt(borderColor.slice(3, 5), 16);
+                const b = parseInt(borderColor.slice(5, 7), 16);
+                ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${st.borderOpacity})`;
+            } else {
+                ctx.strokeStyle = borderColor;
+            }
+            ctx.lineWidth = st.width;
+
+            // Handle border/stroke dash pattern
+            if (st.borderType === 'dashed') {
+                ctx.setLineDash([st.width * 4, st.width * 2]);
+            } else if (st.borderType === 'dotted') {
+                ctx.setLineDash([st.width, st.width * 2]);
+            } else {
+                ctx.setLineDash([]);
+            }
+
+            // Handle fill with separate opacity
+            if(st.fill!=='transparent') {
+                if (st.fillOpacity !== undefined && st.fillOpacity < 1) {
+                    // Apply fill opacity by modifying the fill color
+                    const fillColor = st.fill;
+                    if (fillColor.startsWith('#')) {
+                        const r = parseInt(fillColor.slice(1, 3), 16);
+                        const g = parseInt(fillColor.slice(3, 5), 16);
+                        const b = parseInt(fillColor.slice(5, 7), 16);
+                        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${st.fillOpacity})`;
+                    } else {
+                        ctx.fillStyle = fillColor;
+                    }
+                } else {
+                    ctx.fillStyle = st.fill;
+                }
+            }
             ctx.beginPath();
             const {x,y,w,h} = st;
             const cx = x + w/2, cy = y + h/2;
@@ -664,6 +724,14 @@ export const ColorRmRenderer = {
             else if(st.shapeType==='octagon') {
                 this._drawPolygon(ctx, cx, cy, Math.min(rx, ry), 8);
             }
+            else if(st.shapeType==='polygon' && st.pts && st.pts.length >= 3) {
+                // Custom polygon with normalized points
+                ctx.moveTo(x + st.pts[0].x * w, y + st.pts[0].y * h);
+                for(let i = 1; i < st.pts.length; i++) {
+                    ctx.lineTo(x + st.pts[i].x * w, y + st.pts[i].y * h);
+                }
+                ctx.closePath();
+            }
 
             if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) ctx.fill();
             ctx.stroke();
@@ -671,10 +739,29 @@ export const ColorRmRenderer = {
                 ctx.beginPath(); ctx.strokeStyle = '#f472b6'; ctx.setLineDash([2,2]); ctx.lineWidth=1;
                 ctx.moveTo(x,y); ctx.lineTo(x+w, y+h); ctx.stroke();
             }
-        } else {
-            // Safety check for points
+        } else if(st.tool === 'highlighter') {
+            // Highlighter: semi-transparent wide stroke
             if (st.pts && st.pts.length > 0) {
-                ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=st.size;
+                ctx.lineCap = st.lineCap || 'round';
+                ctx.lineJoin = st.lineJoin || 'round';
+                ctx.lineWidth = st.size || 20;
+                ctx.strokeStyle = st.color || '#ffff00';
+                // Highlighter gets additional opacity if not already set via globalAlpha
+                if (st.opacity === undefined) {
+                    ctx.globalAlpha = 0.4;
+                }
+                ctx.beginPath();
+                ctx.moveTo(st.pts[0].x, st.pts[0].y);
+                for(let i=1; i<st.pts.length; i++) ctx.lineTo(st.pts[i].x, st.pts[i].y);
+                ctx.stroke();
+            }
+        } else {
+            // Pen, eraser, and other stroke-based tools
+            if (st.pts && st.pts.length > 0) {
+                // Use custom lineCap/lineJoin if provided, otherwise default to round
+                ctx.lineCap = st.lineCap || 'round';
+                ctx.lineJoin = st.lineJoin || 'round';
+                ctx.lineWidth = st.size;
                 ctx.strokeStyle = st.tool==='eraser' ? '#000' : st.color;
                 if(st.tool==='eraser') ctx.globalCompositeOperation='destination-out';
                 ctx.beginPath();
@@ -839,6 +926,165 @@ export const ColorRmRenderer = {
         });
 
         return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+    },
+
+    // Image cache for loaded images
+    _imageCache: new Map(),
+
+    // Helper to render images (v2 feature)
+    _renderImage(ctx, st) {
+        const cacheKey = st.src;
+        let img = this._imageCache.get(cacheKey);
+
+        if (!img) {
+            // Load image asynchronously
+            img = new Image();
+            img.onload = () => {
+                this._imageCache.set(cacheKey, img);
+                img._loaded = true;
+                // Trigger re-render
+                this.invalidateCache();
+            };
+            img.onerror = () => {
+                console.warn('Failed to load image:', st.src?.substring(0, 50));
+            };
+            img.src = st.src;
+            this._imageCache.set(cacheKey, img);
+            return; // Don't render until loaded
+        }
+
+        if (!img._loaded) return; // Still loading
+
+        // Check if image has a mask (v2 feature)
+        if (st.mask && st.mask.src) {
+            this._renderMaskedImage(ctx, st, img);
+        } else {
+            // Simple image render
+            ctx.drawImage(img, st.x, st.y, st.w, st.h);
+        }
+    },
+
+    // Helper to render masked images (v2 feature)
+    // Uses 2x supersampling for higher quality output
+    _renderMaskedImage(ctx, st, contentImg) {
+        // Clean up mask src - remove newlines that may be in base64 data
+        const cleanMaskSrc = st.mask.src.replace(/\s/g, '');
+        const maskCacheKey = cleanMaskSrc;
+        let maskImg = this._imageCache.get(maskCacheKey);
+
+        if (!maskImg) {
+            maskImg = new Image();
+            maskImg.onload = () => {
+                this._imageCache.set(maskCacheKey, maskImg);
+                maskImg._loaded = true;
+                this.invalidateCache();
+            };
+            maskImg.src = cleanMaskSrc;
+            this._imageCache.set(maskCacheKey, maskImg);
+            return;
+        }
+
+        if (!maskImg._loaded) return;
+
+        const w = Math.max(1, Math.round(st.w));
+        const h = Math.max(1, Math.round(st.h));
+
+        // Use 2x supersampling for higher quality
+        const scale = 2;
+        const scaledW = w * scale;
+        const scaledH = h * scale;
+
+        // Create offscreen canvas for the content at higher resolution
+        const contentCanvas = document.createElement('canvas');
+        contentCanvas.width = scaledW;
+        contentCanvas.height = scaledH;
+        const contentCtx = contentCanvas.getContext('2d');
+        contentCtx.imageSmoothingEnabled = true;
+        contentCtx.imageSmoothingQuality = 'high';
+
+        // Draw content image at higher resolution
+        contentCtx.drawImage(contentImg, 0, 0, scaledW, scaledH);
+
+        // Create offscreen canvas for the mask at higher resolution
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = scaledW;
+        maskCanvas.height = scaledH;
+        const maskCtx = maskCanvas.getContext('2d');
+        maskCtx.imageSmoothingEnabled = true;
+        maskCtx.imageSmoothingQuality = 'high';
+
+        // Draw mask image at higher resolution
+        maskCtx.drawImage(maskImg, 0, 0, scaledW, scaledH);
+
+        // Convert mask luminance to alpha
+        // In SVG luminance masks: white = visible (alpha 1), black = hidden (alpha 0)
+        const maskData = maskCtx.getImageData(0, 0, scaledW, scaledH);
+        const contentData = contentCtx.getImageData(0, 0, scaledW, scaledH);
+
+        for (let i = 0; i < maskData.data.length; i += 4) {
+            // Calculate luminance from mask RGB
+            const r = maskData.data[i];
+            const g = maskData.data[i + 1];
+            const b = maskData.data[i + 2];
+            const maskAlpha = maskData.data[i + 3] / 255;
+
+            // Luminance formula (ITU-R BT.709)
+            const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+            // Apply luminance as alpha to content
+            // Final alpha = content alpha * mask luminance * mask alpha
+            contentData.data[i + 3] = contentData.data[i + 3] * luminance * maskAlpha;
+        }
+
+        // Put the masked content back
+        contentCtx.putImageData(contentData, 0, 0);
+
+        // Draw result to main canvas, scaling down for final output
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(contentCanvas, st.x, st.y, w, h);
+    },
+
+    // Helper to render text with SVG data (v2 feature)
+    _renderSvgText(ctx, st) {
+        // For now, fall back to simple text rendering
+        // Full SVG text rendering would require parsing transforms and tspans
+        // This is a simplified version that handles common cases
+
+        const svg = st.svgData;
+        ctx.fillStyle = svg.fill || st.color || '#000000';
+        ctx.font = `${svg.fontSize || st.size || 16}px ${svg.fontFamily || st.fontFamily || 'sans-serif'}`;
+        ctx.textBaseline = 'top';
+
+        // If we have a matrix transform, try to apply it
+        if (svg.transform && svg.transform.startsWith('matrix(')) {
+            const match = svg.transform.match(/matrix\(([^)]+)\)/);
+            if (match) {
+                const values = match[1].split(/[\s,]+/).map(parseFloat);
+                if (values.length >= 6) {
+                    // Save current transform
+                    ctx.save();
+                    // Apply matrix transform
+                    ctx.transform(values[0], values[1], values[2], values[3], values[4], values[5]);
+
+                    // Extract text from innerContent (strip tspan tags)
+                    const text = svg.innerContent.replace(/<[^>]*>/g, '').trim();
+
+                    // Get y position from tspan
+                    const yMatch = svg.innerContent.match(/y="([^"]+)"/);
+                    const xMatch = svg.innerContent.match(/x="([^"]+)"/);
+                    const y = yMatch ? parseFloat(yMatch[1]) : 0;
+                    const x = xMatch ? parseFloat(xMatch[1].split(/\s+/)[0]) : 0;
+
+                    ctx.fillText(text, x, y);
+                    ctx.restore();
+                    return;
+                }
+            }
+        }
+
+        // Fallback: use computed position
+        ctx.fillText(st.text, st.x, st.y);
     },
 
     rgbToLab(r,g,b) {

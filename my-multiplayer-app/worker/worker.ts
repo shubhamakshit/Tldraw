@@ -1,7 +1,8 @@
 import { handleUnfurlRequest } from 'cloudflare-workers-unfurl'
 import { AutoRouter, error, IRequest } from 'itty-router'
 import { handleAssetDownload, handleAssetUpload } from './assetUploads'
-import { handleColorRmDownload, handleColorRmUpload, handleColorRmDelete, handleColorRmPageUpload, handleColorRmPageDownload, handleColorRmPageDelete, handleGetPageStructure, handleSetPageStructure, handleListPages } from './colorRmAssets'
+import { handleColorRmDownload, handleColorRmUpload, handleColorRmDelete, handleColorRmPageUpload, handleColorRmPageDownload, handleColorRmPageDelete, handleGetPageStructure, handleSetPageStructure, handleListPages, handleColorRmHistoryUpload, handleColorRmHistoryDownload, handleColorRmHistoryDelete, handleColorRmModificationsUpload, handleColorRmModificationsDownload, handleColorRmModificationsDelete } from './colorRmAssets'
+import { handlePdfUpload, handlePdfJobStatus, handlePdfPageDownload, handlePdfJobDelete } from './pdfToSvg'
 import { Liveblocks } from '@liveblocks/node'
 
 // make sure our sync durable object is made available to cloudflare
@@ -344,6 +345,28 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 	.get('/api/color_rm/page_structure/:roomId', handleGetPageStructure)
 	.post('/api/color_rm/page_structure/:roomId', handleSetPageStructure)
 	.get('/api/color_rm/pages/:roomId', handleListPages)
+
+	// Page history API - base history stored in R2 (for SVG imports)
+	// Liveblocks only syncs deltas, base history is fetched from R2
+	.post('/api/color_rm/history/:roomId/:pageId', handleColorRmHistoryUpload)
+	.get('/api/color_rm/history/:roomId/:pageId', handleColorRmHistoryDownload)
+	.delete('/api/color_rm/history/:roomId/:pageId', handleColorRmHistoryDelete)
+
+	// Page modifications API - R2 storage for large modification sets
+	// Used when modification count exceeds Liveblocks limits (>50 items)
+	.post('/api/color_rm/modifications/:roomId/:pageId', handleColorRmModificationsUpload)
+	.get('/api/color_rm/modifications/:roomId/:pageId', handleColorRmModificationsDownload)
+	.delete('/api/color_rm/modifications/:roomId/:pageId', handleColorRmModificationsDelete)
+
+	// --- PDF to SVG Conversion (Experimental) ---
+	// Upload PDF and create conversion job
+	.post('/api/color_rm/pdf/:roomId', handlePdfUpload)
+	// Get job status
+	.get('/api/color_rm/pdf/:roomId/job/:jobId', handlePdfJobStatus)
+	// Download converted SVG page
+	.get('/api/color_rm/pdf/:roomId/job/:jobId/page/:pageNum', handlePdfPageDownload)
+	// Delete job and all files
+	.delete('/api/color_rm/pdf/:roomId/job/:jobId', handlePdfJobDelete)
 
     // --- Color RM Registry Routes ---
 

@@ -257,3 +257,188 @@ export async function handleListPages(request: IRequest, env: Env) {
         return new Response(JSON.stringify({ error: e.message }), { status: 500 })
     }
 }
+
+// =============================================
+// PAGE HISTORY API
+// Store base history (from SVG imports) in R2
+// Liveblocks only syncs deltas (new strokes)
+// =============================================
+
+// Upload base history for a page (used for SVG imports)
+export async function handleColorRmHistoryUpload(request: IRequest, env: Env) {
+    const { roomId, pageId } = request.params
+    if (!roomId || !pageId) {
+        return new Response('Missing roomId or pageId', { status: 400 })
+    }
+
+    if (!request.body) {
+        return new Response('Missing request body', { status: 400 })
+    }
+
+    const objectKey = `color_rm/history/${roomId}/${pageId}`
+
+    try {
+        const body = await request.text()
+        // Validate it's valid JSON array
+        const parsed = JSON.parse(body)
+        if (!Array.isArray(parsed)) {
+            return new Response('History must be an array', { status: 400 })
+        }
+
+        await env.TLDRAW_BUCKET.put(objectKey, body, {
+            httpMetadata: { contentType: 'application/json' }
+        })
+        console.log(`[HistoryUpload] Stored ${parsed.length} items for page: ${pageId}`)
+        return new Response(JSON.stringify({ success: true, count: parsed.length }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    } catch (e: any) {
+        console.error('Error uploading page history:', e)
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 })
+    }
+}
+
+// Download base history for a page
+export async function handleColorRmHistoryDownload(request: IRequest, env: Env) {
+    const { roomId, pageId } = request.params
+    if (!roomId || !pageId) {
+        return new Response('Missing roomId or pageId', { status: 400 })
+    }
+
+    const objectKey = `color_rm/history/${roomId}/${pageId}`
+
+    try {
+        const obj = await env.TLDRAW_BUCKET.get(objectKey)
+
+        if (!obj) {
+            // No base history - return empty array
+            return new Response('[]', {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            })
+        }
+
+        const data = await obj.text()
+        return new Response(data, {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    } catch (e: any) {
+        console.error('Error downloading page history:', e)
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 })
+    }
+}
+
+// Delete base history for a page
+export async function handleColorRmHistoryDelete(request: IRequest, env: Env) {
+    const { roomId, pageId } = request.params
+    if (!roomId || !pageId) {
+        return new Response('Missing roomId or pageId', { status: 400 })
+    }
+
+    const objectKey = `color_rm/history/${roomId}/${pageId}`
+
+    try {
+        await env.TLDRAW_BUCKET.delete(objectKey)
+        console.log('Deleted page history:', objectKey)
+        return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    } catch (e: any) {
+        console.error('Error deleting page history:', e)
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 })
+    }
+}
+
+// =============================================
+// MODIFICATIONS API - R2 STORAGE FOR LARGE MODS
+// Used when modification count exceeds Liveblocks limits
+// =============================================
+
+// Upload modifications for a page (used when >50 modifications)
+export async function handleColorRmModificationsUpload(request: IRequest, env: Env) {
+    const { roomId, pageId } = request.params
+    if (!roomId || !pageId) {
+        return new Response('Missing roomId or pageId', { status: 400 })
+    }
+
+    if (!request.body) {
+        return new Response('Missing request body', { status: 400 })
+    }
+
+    const objectKey = `color_rm/modifications/${roomId}/${pageId}`
+
+    try {
+        const body = await request.text()
+        // Validate it's valid JSON
+        const parsed = JSON.parse(body)
+
+        await env.TLDRAW_BUCKET.put(objectKey, body, {
+            httpMetadata: { contentType: 'application/json' }
+        })
+        const modCount = parsed.modifications ? Object.keys(parsed.modifications).length : 0
+        console.log(`[ModificationsUpload] Stored ${modCount} modifications for page: ${pageId}`)
+        return new Response(JSON.stringify({ success: true, count: modCount }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    } catch (e: any) {
+        console.error('Error uploading page modifications:', e)
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 })
+    }
+}
+
+// Download modifications for a page
+export async function handleColorRmModificationsDownload(request: IRequest, env: Env) {
+    const { roomId, pageId } = request.params
+    if (!roomId || !pageId) {
+        return new Response('Missing roomId or pageId', { status: 400 })
+    }
+
+    const objectKey = `color_rm/modifications/${roomId}/${pageId}`
+
+    try {
+        const obj = await env.TLDRAW_BUCKET.get(objectKey)
+
+        if (!obj) {
+            // No modifications - return empty object
+            return new Response(JSON.stringify({ modifications: {}, timestamp: 0 }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            })
+        }
+
+        const data = await obj.text()
+        return new Response(data, {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    } catch (e: any) {
+        console.error('Error downloading page modifications:', e)
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 })
+    }
+}
+
+// Delete modifications for a page
+export async function handleColorRmModificationsDelete(request: IRequest, env: Env) {
+    const { roomId, pageId } = request.params
+    if (!roomId || !pageId) {
+        return new Response('Missing roomId or pageId', { status: 400 })
+    }
+
+    const objectKey = `color_rm/modifications/${roomId}/${pageId}`
+
+    try {
+        await env.TLDRAW_BUCKET.delete(objectKey)
+        console.log('Deleted page modifications:', objectKey)
+        return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    } catch (e: any) {
+        console.error('Error deleting page modifications:', e)
+        return new Response(JSON.stringify({ error: e.message }), { status: 500 })
+    }
+}

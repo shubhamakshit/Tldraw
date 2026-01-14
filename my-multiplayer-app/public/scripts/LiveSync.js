@@ -70,7 +70,9 @@ export class LiveSyncClient {
         const { room, leave } = this.client.enterRoom(roomId, {
             initialStorage: {
                 projects: new LiveMap()
-            }
+            },
+            // Use HTTP fallback for large messages that exceed websocket limits
+            largeMessageStrategy: 'http'
         });
 
         this.room = room;
@@ -234,6 +236,8 @@ export class LiveSyncClient {
                     ownerId: this.ownerId
                 }),
                 pagesHistory: new LiveMap(),
+                pagesModifications: new LiveMap(),
+                pagesMetadata: new LiveMap(),
                 bookmarks: new LiveList([]),
                 colors: new LiveList([])
             }));
@@ -248,6 +252,16 @@ export class LiveSyncClient {
              if (this.ownerId === this.userId && (remoteName === "Untitled" || !remoteName) && this.app.state.projectName && this.app.state.projectName !== "Untitled") {
                  console.log(`Liveblocks: Remote name is "${remoteName}", pushing local name: "${this.app.state.projectName}"`);
                  remoteMeta.update({ name: this.app.state.projectName });
+             }
+
+             // Ensure required LiveMaps exist (migration for older projects)
+             if (!remoteProject.get("pagesModifications")) {
+                 console.log('[LiveSync] Adding missing pagesModifications LiveMap');
+                 remoteProject.set("pagesModifications", new LiveMap());
+             }
+             if (!remoteProject.get("pagesMetadata")) {
+                 console.log('[LiveSync] Adding missing pagesMetadata LiveMap');
+                 remoteProject.set("pagesMetadata", new LiveMap());
              }
         }
 
@@ -587,8 +601,98 @@ export class LiveSyncClient {
             this._scheduleReconciliation();
         }
 
+        // Check for R2 modification updates (large file sync) - debounced
+        this._scheduleR2ModificationCheck();
+
         this.syncHistory();
         this.app.updateLockUI();
+    }
+
+    // Debounced R2 modification check to avoid too many fetches
+    _scheduleR2ModificationCheck() {
+        if (this._r2CheckTimeout) {
+            clearTimeout(this._r2CheckTimeout);
+        }
+        this._r2CheckTimeout = setTimeout(() => {
+            this._checkR2ModificationUpdates();
+        }, 300);
+    }
+
+    // Check if any page has new R2 modifications we need to fetch
+    _checkR2ModificationUpdates() {
+        const project = this.getProject();
+        if (!project) return;
+
+        const pagesMetadata = project.get("pagesMetadata");
+        if (!pagesMetadata) return;
+
+        // Check each page for R2 updates (both base history and modifications)
+        this.app.state.images.forEach((img, idx) => {
+            if (!img) return;
+
+            const pageMeta = pagesMetadata.get(idx.toString());
+            if (!pageMeta) return;
+
+            const meta = pageMeta.toObject ? pageMeta.toObject() : pageMeta;
+
+            // Check if base history needs to be fetched
+            if (meta.hasBaseHistory && !img._baseHistory && img.pageId) {
+                console.log(`[LiveSync] Base history needed for page ${idx}, fetching from R2...`);
+                this._fetchBaseHistoryForPage(idx, img);
+            }
+
+            // Check if there are R2 modifications we haven't fetched yet
+            if (meta.hasR2Modifications && meta.r2ModTimestamp) {
+                const lastFetched = img._r2ModTimestamp || 0;
+
+                if (meta.r2ModTimestamp > lastFetched) {
+                    console.log(`[LiveSync] R2 modifications updated for page ${idx}, fetching...`);
+                    this._fetchAndApplyR2Modifications(idx, img, meta.r2ModTimestamp);
+                }
+            }
+        });
+    }
+
+    // Fetch base history for a specific page
+    async _fetchBaseHistoryForPage(pageIdx, img) {
+        if (!img.pageId || img._baseHistoryFetching) return;
+
+        img._baseHistoryFetching = true;
+
+        try {
+            const baseHistory = await this.fetchBaseHistory(img.pageId);
+            if (baseHistory && baseHistory.length > 0) {
+                img._baseHistory = baseHistory;
+                img.hasBaseHistory = true;
+
+                console.log(`[LiveSync] Fetched ${baseHistory.length} base history items for page ${pageIdx}`);
+
+                // Re-sync history to merge base + deltas
+                this.syncHistory();
+                this.app.render();
+            }
+        } catch (e) {
+            console.error(`[LiveSync] Failed to fetch base history for page ${pageIdx}:`, e);
+        } finally {
+            img._baseHistoryFetching = false;
+        }
+    }
+
+    // Fetch R2 modifications and apply them
+    async _fetchAndApplyR2Modifications(pageIdx, img, timestamp) {
+        if (!img.pageId) return;
+
+        const r2Mods = await this.fetchR2Modifications(img.pageId);
+        if (r2Mods && Object.keys(r2Mods).length > 0) {
+            img._r2Modifications = r2Mods;
+            img._r2ModTimestamp = timestamp;
+
+            // Re-sync history to apply the new modifications
+            this.syncHistory();
+            this.app.render();
+
+            console.log(`[LiveSync] Applied ${Object.keys(r2Mods).length} R2 modifications for page ${pageIdx}`);
+        }
     }
 
     // Debounced scheduler for page reconciliation (add/delete pages only)
@@ -1122,14 +1226,42 @@ export class LiveSyncClient {
 
         const pagesHistory = project.get("pagesHistory");
         let currentIdxChanged = false;
+        const pagesToFetchBase = [];
 
         // Priority: Update current page immediately
         const currentRemote = pagesHistory.get(this.app.state.idx.toString());
         if (currentRemote) {
-            const newHist = currentRemote.toArray();
+            const deltaHist = currentRemote.toArray();
             const localImg = this.app.state.images[this.app.state.idx];
             if (localImg) {
-                localImg.history = newHist;
+                // Check if we need to fetch base history first
+                const pageMeta = this.getPageMetadata(this.app.state.idx);
+                const needsBase = (pageMeta?.hasBaseHistory || localImg.hasBaseHistory) && !localImg._baseHistory;
+
+                if (needsBase) {
+                    // Queue for base history fetch, use deltas only for now
+                    pagesToFetchBase.push(this.app.state.idx);
+                    localImg.history = deltaHist;
+                } else if (localImg.hasBaseHistory && localImg._baseHistory) {
+                    // If page has base history, merge it with deltas and apply modifications
+                    // Get modifications from Liveblocks + R2 (if large)
+                    const liveblocksModifications = this.getPageModifications(this.app.state.idx);
+                    const r2Modifications = localImg._r2Modifications || {};
+                    const modifications = { ...liveblocksModifications, ...r2Modifications };
+
+                    // Apply modifications to base history
+                    const modifiedBase = localImg._baseHistory.map(item => {
+                        if (modifications[item.id]) {
+                            // Merge modification onto base item
+                            return { ...item, ...modifications[item.id] };
+                        }
+                        return item;
+                    });
+                    // Merge: modified base + deltas from Liveblocks
+                    localImg.history = [...modifiedBase, ...deltaHist];
+                } else {
+                    localImg.history = deltaHist;
+                }
                 currentIdxChanged = true;
                 if (this.app.invalidateCache) this.app.invalidateCache();
 
@@ -1146,7 +1278,33 @@ export class LiveSyncClient {
             if (idx === this.app.state.idx) return; // Already handled
             const remote = pagesHistory.get(idx.toString());
             if (remote) {
-                img.history = remote.toArray();
+                const deltaHist = remote.toArray();
+
+                // Check if we need to fetch base history first
+                const pageMeta = this.getPageMetadata(idx);
+                const needsBase = (pageMeta?.hasBaseHistory || img.hasBaseHistory) && !img._baseHistory;
+
+                if (needsBase) {
+                    // Queue for base history fetch, use deltas only for now
+                    pagesToFetchBase.push(idx);
+                    img.history = deltaHist;
+                } else if (img.hasBaseHistory && img._baseHistory) {
+                    // If page has base history, merge it with deltas and apply modifications
+                    // Get modifications from Liveblocks + R2 (if large)
+                    const liveblocksModifications = this.getPageModifications(idx);
+                    const r2Modifications = img._r2Modifications || {};
+                    const modifications = { ...liveblocksModifications, ...r2Modifications };
+
+                    const modifiedBase = img._baseHistory.map(item => {
+                        if (modifications[item.id]) {
+                            return { ...item, ...modifications[item.id] };
+                        }
+                        return item;
+                    });
+                    img.history = [...modifiedBase, ...deltaHist];
+                } else {
+                    img.history = deltaHist;
+                }
 
                 // Auto-recalculate infinite canvas bounds for all infinite pages
                 if (img.isInfinite && this.app.recalculateInfiniteCanvasBounds) {
@@ -1156,6 +1314,79 @@ export class LiveSyncClient {
         });
 
         if (currentIdxChanged) this.app.render();
+
+        // Fetch base history for pages that need it (async, will trigger re-sync)
+        if (pagesToFetchBase.length > 0) {
+            this._fetchMissingBaseHistories(pagesToFetchBase);
+        }
+    }
+
+    // Fetches base history for multiple pages and re-syncs
+    async _fetchMissingBaseHistories(pageIndices) {
+        console.log(`[LiveSync] Fetching base history for ${pageIndices.length} pages...`);
+
+        for (const pageIdx of pageIndices) {
+            await this.ensureBaseHistory(pageIdx);
+        }
+
+        // Re-sync history now that base is loaded
+        // Use a small delay to avoid recursion
+        setTimeout(() => {
+            console.log('[LiveSync] Re-syncing history after base fetch...');
+            this.syncHistory();
+        }, 100);
+    }
+
+    // Fetch and cache base history for a page (called when page is loaded)
+    async ensureBaseHistory(pageIdx) {
+        const localImg = this.app.state.images[pageIdx];
+        if (!localImg) return;
+
+        // Check if page has base history and we haven't fetched it yet
+        const pageMeta = this.getPageMetadata(pageIdx);
+        if ((pageMeta?.hasBaseHistory || localImg.hasBaseHistory) && !localImg._baseHistory) {
+            const pageId = localImg.pageId;
+            if (pageId) {
+                const baseHistory = await this.fetchBaseHistory(pageId);
+                if (baseHistory.length > 0) {
+                    localImg._baseHistory = baseHistory;
+                    localImg.hasBaseHistory = true;
+
+                    // Re-sync to merge base + deltas
+                    this.syncHistory();
+                }
+            }
+        }
+
+        // Also check for R2 modifications if they exist
+        if (pageMeta?.hasR2Modifications && localImg.pageId) {
+            const r2Mods = await this.fetchR2Modifications(localImg.pageId);
+            if (r2Mods && Object.keys(r2Mods).length > 0) {
+                localImg._r2Modifications = r2Mods;
+                // Re-sync to apply modifications
+                this.syncHistory();
+            }
+        }
+    }
+
+    // Fetch modifications from R2 (for large modification sets)
+    async fetchR2Modifications(pageId) {
+        if (!this.app.state.sessionId || !pageId) return {};
+
+        try {
+            const modsUrl = window.Config?.apiUrl(`/api/color_rm/modifications/${this.app.state.sessionId}/${pageId}`)
+                || `/api/color_rm/modifications/${this.app.state.sessionId}/${pageId}`;
+
+            const response = await fetch(modsUrl);
+            if (!response.ok) return {};
+
+            const data = await response.json();
+            console.log(`[LiveSync] Fetched ${Object.keys(data.modifications || {}).length} R2 modifications for page ${pageId}`);
+            return data.modifications || {};
+        } catch (e) {
+            console.error('[LiveSync] Failed to fetch R2 modifications:', e);
+            return {};
+        }
     }
 
     // --- Local -> Remote Updates ---
@@ -1180,6 +1411,106 @@ export class LiveSyncClient {
         if (!project) return;
         const pagesHistory = project.get("pagesHistory");
         pagesHistory.set(pageIdx.toString(), new LiveList(history || []));
+    }
+
+    /**
+     * Sync page deltas for pages with base history (SVG imports)
+     * Instead of syncing full history, only sync:
+     * - deltas: new items (user scribbles)
+     * - modifications: changes to base items (moves, deletes, etc.)
+     */
+    syncPageDeltas(pageIdx, deltas, modifications) {
+        const project = this.getProject();
+        if (!project) return;
+
+        const key = pageIdx.toString();
+
+        // Store deltas in pagesHistory (new items only)
+        const pagesHistory = project.get("pagesHistory");
+        pagesHistory.set(key, new LiveList(deltas || []));
+
+        // Store modifications in a separate LiveMap
+        let pagesMods = project.get("pagesModifications");
+        if (!pagesMods) {
+            project.set("pagesModifications", new LiveMap());
+            pagesMods = project.get("pagesModifications");
+        }
+
+        // Store modifications as a LiveObject
+        if (Object.keys(modifications).length > 0) {
+            pagesMods.set(key, new LiveObject(modifications));
+        } else if (pagesMods.has(key)) {
+            pagesMods.delete(key);
+        }
+
+        console.log(`[LiveSync] Synced page ${pageIdx}: ${deltas.length} deltas, ${Object.keys(modifications).length} modifications`);
+    }
+
+    /**
+     * Get modifications for a page (for applying to base history)
+     */
+    getPageModifications(pageIdx) {
+        const project = this.getProject();
+        if (!project) return {};
+
+        const pagesMods = project.get("pagesModifications");
+        if (!pagesMods) return {};
+
+        const mods = pagesMods.get(pageIdx.toString());
+        return mods ? mods.toObject() : {};
+    }
+
+    // Update page metadata (e.g., hasBaseHistory flag for SVG imports)
+    updatePageMetadata(pageIdx, metadata) {
+        const project = this.getProject();
+        if (!project) return;
+
+        // Store page metadata in a separate LiveMap
+        let pagesMetadata = project.get("pagesMetadata");
+        if (!pagesMetadata) {
+            // Initialize if not exists
+            project.set("pagesMetadata", new LiveMap());
+            pagesMetadata = project.get("pagesMetadata");
+        }
+
+        const key = pageIdx.toString();
+        const existing = pagesMetadata.get(key);
+        if (existing) {
+            existing.update(metadata);
+        } else {
+            pagesMetadata.set(key, new LiveObject(metadata));
+        }
+    }
+
+    // Get page metadata (for checking if page has base history)
+    getPageMetadata(pageIdx) {
+        const project = this.getProject();
+        if (!project) return null;
+
+        const pagesMetadata = project.get("pagesMetadata");
+        if (!pagesMetadata) return null;
+
+        const meta = pagesMetadata.get(pageIdx.toString());
+        return meta ? meta.toObject() : null;
+    }
+
+    // Fetch base history from R2 for a page (for SVG imports)
+    async fetchBaseHistory(pageId) {
+        if (!this.app.state.sessionId || !pageId) return [];
+
+        try {
+            const historyUrl = window.Config?.apiUrl(`/api/color_rm/history/${this.app.state.sessionId}/${pageId}`)
+                || `/api/color_rm/history/${this.app.state.sessionId}/${pageId}`;
+            const response = await fetch(historyUrl);
+            if (response.ok) {
+                const history = await response.json();
+                console.log(`[LiveSync] Fetched ${history.length} base history items from R2 for page ${pageId}`);
+                return history;
+            }
+        } catch (e) {
+            console.error('[LiveSync] Failed to fetch base history from R2:', e);
+        }
+        return [];
     }
 
     // DEPRECATED: Bounds are now auto-calculated from synced strokes via math

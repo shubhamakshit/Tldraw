@@ -176,9 +176,12 @@ export const ColorRmExport = {
                 cx.putImageData(imgD, 0, 0);
             }
 
-            // Draw history
+            // Draw history - filter out deleted items
             if (item.history) {
                 item.history.forEach(st => {
+                    // Skip deleted items
+                    if (st.deleted) return;
+
                     cx.save();
                     if(st.rotation && st.tool!=='pen') { const centerx = st.x + st.w/2; const centery = st.y + st.h/2; cx.translate(centerx, centery); cx.rotate(st.rotation); cx.translate(-centerx, -centery); }
                     if(st.tool === 'text') { cx.fillStyle = st.color; cx.font = `${st.size}px sans-serif`; cx.textBaseline = 'top'; cx.fillText(st.text, st.x, st.y); }
@@ -186,10 +189,13 @@ export const ColorRmExport = {
                         cx.strokeStyle = st.border; cx.lineWidth = st.width; if(st.fill!=='transparent') { cx.fillStyle=st.fill; }
                         cx.beginPath(); const {x,y,w,h} = st;
                         if(st.shapeType==='rectangle') cx.rect(x,y,w,h); else if(st.shapeType==='circle') cx.ellipse(x+w/2, y+h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI); else if(st.shapeType==='line') { cx.moveTo(x,y); cx.lineTo(x+w,y+h); } else if(st.shapeType==='arrow') { const head=15; const ang=Math.atan2(h,w); cx.moveTo(x,y); cx.lineTo(x+w,y+h); cx.lineTo(x+w - head*Math.cos(ang-0.5), y+h - head*Math.sin(ang-0.5)); cx.moveTo(x+w,y+h); cx.lineTo(x+w - head*Math.cos(ang+0.5), y+h - head*Math.sin(ang+0.5)); }
-                        if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) ctx.fill(); cx.stroke();
-                    } else {
+                        if(st.fill!=='transparent' && !['line','arrow'].includes(st.shapeType)) cx.fill(); cx.stroke();
+                    } else if(st.tool === 'image') {
+                        // Handle image items
+                        // Skip for now - images are rendered from blob
+                    } else if(st.pts && st.pts.length > 0) {
                         cx.lineCap='round'; cx.lineJoin='round'; cx.lineWidth=st.size; cx.strokeStyle = st.tool==='eraser' ? '#000' : st.color; if(st.tool==='eraser') cx.globalCompositeOperation='destination-out';
-                        cx.beginPath(); if(st.pts.length) cx.moveTo(st.pts[0].x, st.pts[0].y); for(let j=1; j<st.pts.length; j++) cx.lineTo(st.pts[j].x, st.pts[j].y); cx.stroke();
+                        cx.beginPath(); cx.moveTo(st.pts[0].x, st.pts[0].y); for(let j=1; j<st.pts.length; j++) cx.lineTo(st.pts[j].x, st.pts[j].y); cx.stroke();
                     }
                     cx.restore();
                 });

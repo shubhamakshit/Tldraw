@@ -16,6 +16,599 @@ export const ColorRmSession = {
         }
     },
 
+    /**
+     * Rasterize an image or text item to a canvas context
+     * Used for SVG import to flatten images/text to background
+     */
+    async _rasterizeItemToCanvas(ctx, item) {
+        if (item.tool === 'image' && item.src) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = async () => {
+                    ctx.save();
+                    if (item.opacity !== undefined && item.opacity < 1) {
+                        ctx.globalAlpha = item.opacity;
+                    }
+
+                    // Check if image has a mask
+                    if (item.mask && item.mask.src) {
+                        await this._rasterizeMaskedImage(ctx, item, img);
+                    } else {
+                        ctx.drawImage(img, item.x || 0, item.y || 0, item.w || img.width, item.h || img.height);
+                    }
+
+                    ctx.restore();
+                    resolve();
+                };
+                img.onerror = () => {
+                    console.warn('Failed to rasterize image:', item.id);
+                    resolve();
+                };
+                img.src = item.src;
+            });
+        } else if (item.tool === 'text' && item.text) {
+            ctx.save();
+            ctx.fillStyle = item.color || '#000000';
+            ctx.font = `${item.size || 16}px ${item.fontFamily || 'sans-serif'}`;
+            ctx.textBaseline = 'top';
+            if (item.opacity !== undefined && item.opacity < 1) {
+                ctx.globalAlpha = item.opacity;
+            }
+            ctx.fillText(item.text, item.x || 0, item.y || 0);
+            ctx.restore();
+        }
+    },
+
+    /**
+     * Rasterize a masked image using luminance mask
+     * Applies SVG-style luminance masking where white=visible, black=hidden
+     * Uses 2x supersampling for higher quality output
+     */
+    async _rasterizeMaskedImage(ctx, item, contentImg) {
+        return new Promise((resolve) => {
+            const maskImg = new Image();
+            maskImg.onload = () => {
+                const x = item.x || 0;
+                const y = item.y || 0;
+                const w = Math.max(1, Math.round(item.w || contentImg.width));
+                const h = Math.max(1, Math.round(item.h || contentImg.height));
+
+                // Use 2x supersampling for higher quality
+                const scale = 2;
+                const scaledW = w * scale;
+                const scaledH = h * scale;
+
+                // Create offscreen canvas for the content at higher resolution
+                const contentCanvas = document.createElement('canvas');
+                contentCanvas.width = scaledW;
+                contentCanvas.height = scaledH;
+                const contentCtx = contentCanvas.getContext('2d');
+                contentCtx.imageSmoothingEnabled = true;
+                contentCtx.imageSmoothingQuality = 'high';
+
+                // Draw content image at higher resolution
+                contentCtx.drawImage(contentImg, 0, 0, scaledW, scaledH);
+
+                // Create offscreen canvas for the mask at higher resolution
+                const maskCanvas = document.createElement('canvas');
+                maskCanvas.width = scaledW;
+                maskCanvas.height = scaledH;
+                const maskCtx = maskCanvas.getContext('2d');
+                maskCtx.imageSmoothingEnabled = true;
+                maskCtx.imageSmoothingQuality = 'high';
+
+                // Draw mask image at higher resolution
+                maskCtx.drawImage(maskImg, 0, 0, scaledW, scaledH);
+
+                // Convert mask luminance to alpha
+                // In SVG luminance masks: white = visible (alpha 1), black = hidden (alpha 0)
+                const maskData = maskCtx.getImageData(0, 0, scaledW, scaledH);
+                const contentData = contentCtx.getImageData(0, 0, scaledW, scaledH);
+
+                for (let i = 0; i < maskData.data.length; i += 4) {
+                    // Calculate luminance from mask RGB
+                    const r = maskData.data[i];
+                    const g = maskData.data[i + 1];
+                    const b = maskData.data[i + 2];
+                    const maskAlpha = maskData.data[i + 3] / 255;
+
+                    // Luminance formula (ITU-R BT.709)
+                    const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+                    // Apply luminance as alpha to content
+                    contentData.data[i + 3] = contentData.data[i + 3] * luminance * maskAlpha;
+                }
+
+                // Put the masked content back
+                contentCtx.putImageData(contentData, 0, 0);
+
+                // Draw result to main canvas, scaling down for final output
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(contentCanvas, x, y, w, h);
+                resolve();
+            };
+            maskImg.onerror = (e) => {
+                // Fallback: draw without mask
+                console.warn('Failed to load mask image, drawing without mask:', item.id, e);
+                ctx.drawImage(contentImg, item.x || 0, item.y || 0, item.w || contentImg.width, item.h || contentImg.height);
+                resolve();
+            };
+            // Clean up mask src - remove newlines that may be in base64 data
+            const cleanMaskSrc = item.mask.src.replace(/\s/g, '');
+            maskImg.src = cleanMaskSrc;
+        });
+    },
+
+    /**
+     * Import SVG file and create a page with the content
+     * @param {File} file - SVG file to import
+     * @param {number} pageIdx - Page index to insert at
+     * @param {Object} options - Import options
+     * @param {boolean} options.asInfinite - Import as infinite canvas page
+     * @returns {Object} Page object with history
+     */
+    async importSvgAsPage(file, pageIdx, options = {}) {
+        const svgContent = await file.text();
+        const result = await this.svgImporter.importSvg(svgContent);
+
+        if (result.metadata.error) {
+            throw new Error(result.metadata.error);
+        }
+
+        const svgWidth = result.metadata.width || 800;
+        const svgHeight = result.metadata.height || 600;
+
+        // Separate elements: images/text go to background, strokes/shapes stay in history
+        const rasterizeTypes = ['image', 'text'];
+        const toRasterize = result.history.filter(item => rasterizeTypes.includes(item.tool));
+        const toSync = result.history.filter(item => !rasterizeTypes.includes(item.tool));
+
+        // Create background canvas
+        const cvs = document.createElement('canvas');
+        cvs.width = svgWidth;
+        cvs.height = svgHeight;
+        const ctx = cvs.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, svgWidth, svgHeight);
+
+        // Rasterize images and text to background
+        for (const item of toRasterize) {
+            await this._rasterizeItemToCanvas(ctx, item);
+        }
+
+        const blob = await new Promise(r => cvs.toBlob(r, 'image/png', 0.92));
+        const pageId = this._generatePageId('user');
+
+        // Mark synced items with import batch ID for undo support
+        const importBatchId = `svg_import_${Date.now()}`;
+        toSync.forEach(item => {
+            item.importBatchId = importBatchId;
+        });
+
+        const pageObj = {
+            id: `${this.state.sessionId}_${pageIdx}`,
+            sessionId: this.state.sessionId,
+            pageIndex: pageIdx,
+            pageId: pageId,
+            blob: blob,
+            history: toSync,
+            svgMetadata: result.metadata,
+            importBatchId: importBatchId
+        };
+
+        // Add infinite canvas properties if requested
+        if (options.asInfinite) {
+            pageObj.isInfinite = true;
+            pageObj.bounds = {
+                minX: 0,
+                minY: 0,
+                maxX: svgWidth,
+                maxY: svgHeight
+            };
+            pageObj.origin = { x: 0, y: 0 };
+            pageObj.vectorGrid = {
+                bgStyle: 'light',
+                gridStyle: 'none',
+                gridSize: 50
+            };
+        }
+
+        return { pageObj, toSync, toRasterize, result };
+    },
+
+    /**
+     * Import SVG as an infinite canvas page (adds to current project)
+     * Can be called from UI to import SVG with infinite canvas mode
+     */
+    async importSvgAsInfiniteCanvas() {
+        // Create a file picker for SVG
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.svg,image/svg+xml';
+
+        input.onchange = async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            this.ui.toggleLoader(true, 'Importing SVG...');
+
+            try {
+                const newPageIndex = this.state.images.length;
+                const { pageObj, toSync, toRasterize } = await this.importSvgAsPage(file, newPageIndex, { asInfinite: true });
+
+                await this.dbPut('pages', pageObj);
+                this.state.images.push(pageObj);
+
+                // CRITICAL: Upload the page blob to R2 so other users can fetch it
+                const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, pageObj.blob);
+
+                // Sync page structure to R2 and Liveblocks
+                await this._syncPageStructureToServer();
+                this._syncPageStructureToLive();
+
+                // Sync history to LiveSync (for deltas)
+                if (this.liveSync && !this.liveSync.isInitializing && toSync.length > 0) {
+                    this.liveSync.setHistory(newPageIndex, toSync);
+                }
+
+                // Navigate to the new page
+                await this.loadPage(newPageIndex, false);
+                if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
+
+                const syncStatus = uploadSuccess ? '✓ Synced' : '⚠ Local only';
+                this.ui.showToast(`SVG imported as infinite canvas (${toSync.length} editable items) ${syncStatus}`);
+                console.log(`SVG imported as infinite: ${toRasterize.length} rasterized, ${toSync.length} synced`);
+            } catch (e) {
+                console.error('SVG infinite import error:', e);
+                this.ui.showToast(`Import failed: ${e.message}`);
+            } finally {
+                this.ui.toggleLoader(false);
+            }
+        };
+
+        input.click();
+    },
+
+    /**
+     * Shows SVG import options dialog
+     * @param {string} fileName - Name of the file being imported
+     * @returns {Promise<Object>} Import options { asInfinite: boolean }
+     */
+    _showSvgImportOptions(fileName) {
+        return new Promise((resolve) => {
+            const modal = document.createElement('div');
+            modal.className = 'overlay';
+            modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:300; display:flex; align-items:center; justify-content:center;';
+
+            modal.innerHTML = `
+                <div class="card" style="max-width:400px; width:90%; background:var(--bg-panel); border:1px solid var(--border); padding:20px;">
+                    <h3 style="margin:0 0 15px; color:white; font-size:1.1rem;">Import SVG</h3>
+                    <p style="color:#aaa; margin:0 0 15px; font-size:0.9rem;">${fileName}</p>
+
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <button id="svgImportNormal" class="btn" style="width:100%; padding:12px; text-align:left; display:flex; align-items:center; gap:10px;">
+                            <i class="bi bi-file-image" style="font-size:1.2rem;"></i>
+                            <div>
+                                <div style="font-weight:500;">Standard Page</div>
+                                <div style="font-size:0.8rem; color:#888;">Fixed canvas size with background</div>
+                            </div>
+                        </button>
+
+                        <button id="svgImportInfinite" class="btn" style="width:100%; padding:12px; text-align:left; display:flex; align-items:center; gap:10px;">
+                            <i class="bi bi-arrows-fullscreen" style="font-size:1.2rem;"></i>
+                            <div>
+                                <div style="font-weight:500;">Infinite Canvas ∞</div>
+                                <div style="font-size:0.8rem; color:#888;">Expandable workspace, vector elements</div>
+                            </div>
+                        </button>
+                    </div>
+
+                    <button id="svgImportCancel" class="btn btn-secondary" style="width:100%; margin-top:15px;">Cancel</button>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+
+            // Handle clicks
+            modal.querySelector('#svgImportNormal').onclick = () => {
+                document.body.removeChild(modal);
+                resolve({ asInfinite: false });
+            };
+
+            modal.querySelector('#svgImportInfinite').onclick = () => {
+                document.body.removeChild(modal);
+                resolve({ asInfinite: true });
+            };
+
+            modal.querySelector('#svgImportCancel').onclick = () => {
+                document.body.removeChild(modal);
+                resolve({ cancelled: true });
+            };
+
+            // Close on backdrop click
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    document.body.removeChild(modal);
+                    resolve({ cancelled: true });
+                }
+            };
+        });
+    },
+
+    // =============================================
+    // PDF IMPORT (Experimental)
+    // =============================================
+
+    /**
+     * Import PDF file - opens file picker and initiates server-side conversion
+     * This is an experimental feature that converts PDF pages to SVG using pdf2svg
+     * The PDF conversion server runs locally on HuggingFace Spaces (port 7861)
+     */
+    async importPdf() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.pdf,application/pdf';
+
+        input.onchange = async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            this.ui.toggleLoader(true, 'Uploading PDF...');
+
+            try {
+                // Get the base URL for the PDF convert server
+                // On HF Spaces, it runs on port 7861 on the same host
+                const currentHost = window.location.hostname;
+                const pdfServerBase = currentHost.includes('hf.space') || currentHost.includes('huggingface')
+                    ? `${window.location.protocol}//${currentHost}:7861`
+                    : 'http://localhost:7861';
+
+                // Upload PDF to local PDF convert server
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch(`${pdfServerBase}/convert/pdf`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Upload failed');
+                }
+
+                const result = await response.json();
+
+                // Show conversion status dialog (using local server)
+                this._showPdfConversionDialog(result.jobId, file.name, pdfServerBase);
+
+            } catch (e) {
+                console.error('PDF upload error:', e);
+                this.ui.showToast(`PDF upload failed: ${e.message}`);
+            } finally {
+                this.ui.toggleLoader(false);
+            }
+        };
+
+        input.click();
+    },
+
+    /**
+     * Shows PDF conversion status dialog with polling
+     * @param {string} jobId - The conversion job ID
+     * @param {string} fileName - Original file name
+     * @param {string} serverBase - Base URL for PDF convert server
+     */
+    _showPdfConversionDialog(jobId, fileName, serverBase) {
+        const modal = document.createElement('div');
+        modal.className = 'overlay';
+        modal.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:300; display:flex; align-items:center; justify-content:center;';
+
+        modal.innerHTML = `
+            <div class="card" style="max-width:450px; width:90%; background:var(--bg-panel); border:1px solid var(--border); padding:20px;">
+                <h3 style="margin:0 0 15px; color:white; font-size:1.1rem;">
+                    <i class="bi bi-file-pdf" style="color:#ff6b6b;"></i> PDF Import (pdf2svg)
+                </h3>
+                <p style="color:#aaa; margin:0 0 15px; font-size:0.9rem;">${fileName}</p>
+
+                <div id="pdfStatus" style="padding:15px; background:var(--bg-dark); border-radius:8px; margin-bottom:15px;">
+                    <div style="display:flex; align-items:center; gap:10px; color:#888;">
+                        <div class="spinner" style="width:20px; height:20px; border:2px solid #333; border-top-color:#4dabf7; border-radius:50%; animation:spin 1s linear infinite;"></div>
+                        <span>Converting with pdf2svg...</span>
+                    </div>
+                    <div id="pdfProgress" style="margin-top:10px; font-size:0.85rem; color:#666;"></div>
+                </div>
+
+                <div id="pdfPages" style="max-height:200px; overflow-y:auto; display:none;">
+                    <!-- Page list will be populated here -->
+                </div>
+
+                <div style="display:flex; gap:10px; margin-top:15px;">
+                    <button id="pdfImportAll" class="btn btn-primary" style="flex:1; display:none;">Import All Pages</button>
+                    <button id="pdfClose" class="btn btn-secondary" style="flex:1;">Cancel</button>
+                </div>
+
+                <p style="font-size:0.75rem; color:#666; margin:15px 0 0; text-align:center;">
+                    Using pdf2svg for high-quality vector conversion
+                </p>
+            </div>
+            <style>
+                @keyframes spin { to { transform: rotate(360deg); } }
+            </style>
+        `;
+
+        document.body.appendChild(modal);
+
+        let pollInterval = null;
+        let jobData = null;
+
+        const pollStatus = async () => {
+            try {
+                const response = await fetch(`${serverBase}/convert/status/${jobId}`);
+                if (!response.ok) throw new Error('Status check failed');
+
+                jobData = await response.json();
+                const statusEl = modal.querySelector('#pdfStatus');
+                const progressEl = modal.querySelector('#pdfProgress');
+                const pagesEl = modal.querySelector('#pdfPages');
+                const importAllBtn = modal.querySelector('#pdfImportAll');
+
+                if (jobData.status === 'processing') {
+                    progressEl.textContent = `Converting page ${jobData.processedPages} of ${jobData.pageCount || '?'}...`;
+                } else if (jobData.status === 'completed') {
+                    clearInterval(pollInterval);
+
+                    statusEl.innerHTML = `
+                        <div style="color:#51cf66; display:flex; align-items:center; gap:10px;">
+                            <i class="bi bi-check-circle-fill"></i>
+                            <span>Conversion complete! ${jobData.pageCount} pages ready.</span>
+                        </div>
+                    `;
+
+                    if (jobData.pages && jobData.pages.length > 0) {
+                        pagesEl.style.display = 'block';
+                        pagesEl.innerHTML = jobData.pages.map(p => `
+                            <div class="pdf-page-item" data-page="${p.page}" style="padding:10px; border:1px solid var(--border); margin-bottom:5px; border-radius:4px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+                                <span>Page ${p.page}</span>
+                                <button class="btn btn-sm pdf-import-page" data-page="${p.page}" data-url="${serverBase}${p.url}">Import</button>
+                            </div>
+                        `).join('');
+
+                        importAllBtn.style.display = 'block';
+
+                        // Add click handlers for individual page imports
+                        pagesEl.querySelectorAll('.pdf-import-page').forEach(btn => {
+                            btn.onclick = (e) => {
+                                e.stopPropagation();
+                                this._importPdfPageFromUrl(btn.dataset.url, parseInt(btn.dataset.page));
+                            };
+                        });
+                    }
+                } else if (jobData.status === 'failed') {
+                    clearInterval(pollInterval);
+                    statusEl.innerHTML = `
+                        <div style="color:#ff6b6b; display:flex; align-items:center; gap:10px;">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <span>Conversion failed: ${jobData.error || 'Unknown error'}</span>
+                        </div>
+                    `;
+                } else if (jobData.status === 'pending') {
+                    progressEl.textContent = 'Starting conversion...';
+                }
+
+            } catch (e) {
+                console.error('Status poll error:', e);
+            }
+        };
+
+        // Start polling
+        pollInterval = setInterval(pollStatus, 1000);
+        pollStatus(); // Initial check
+
+        // Import all pages button
+        modal.querySelector('#pdfImportAll').onclick = async () => {
+            if (jobData?.pages) {
+                modal.querySelector('#pdfImportAll').disabled = true;
+                modal.querySelector('#pdfImportAll').textContent = 'Importing...';
+                for (const p of jobData.pages) {
+                    await this._importPdfPageFromUrl(`${serverBase}${p.url}`, p.page);
+                }
+                document.body.removeChild(modal);
+            }
+        };
+
+        // Close button
+        modal.querySelector('#pdfClose').onclick = () => {
+            clearInterval(pollInterval);
+            document.body.removeChild(modal);
+        };
+
+        // Close on backdrop click
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                clearInterval(pollInterval);
+                document.body.removeChild(modal);
+            }
+        };
+    },
+
+    /**
+     * Import a PDF page from a URL (from local pdf2svg server)
+     * @param {string} svgUrl - URL to fetch SVG content
+     * @param {number} pageNum - Page number for display
+     */
+    async _importPdfPageFromUrl(svgUrl, pageNum) {
+        this.ui.toggleLoader(true, `Importing page ${pageNum}...`);
+
+        try {
+            const response = await fetch(svgUrl);
+            if (!response.ok) throw new Error('Failed to download page');
+
+            const svgContent = await response.text();
+
+            // Create a File-like object for the SVG importer
+            const svgBlob = new Blob([svgContent], { type: 'image/svg+xml' });
+            const svgFile = new File([svgBlob], `pdf_page_${pageNum}.svg`, { type: 'image/svg+xml' });
+
+            // Show import options
+            const options = await this._showSvgImportOptions(`PDF Page ${pageNum}`);
+            if (options.cancelled) {
+                this.ui.toggleLoader(false);
+                return;
+            }
+
+            // Import using existing SVG import logic
+            const newPageIndex = this.state.images.length;
+            const { pageObj, toSync } = await this.importSvgAsPage(svgFile, newPageIndex, options);
+
+            await this.dbPut('pages', pageObj);
+            this.state.images.push(pageObj);
+
+            // Upload base history to R2 for SVG items
+            if (toSync.length > 0 && this.state.sessionId && pageObj.pageId) {
+                try {
+                    const historyUrl = window.Config?.apiUrl(`/api/color_rm/history/${this.state.sessionId}/${pageObj.pageId}`)
+                        || `/api/color_rm/history/${this.state.sessionId}/${pageObj.pageId}`;
+                    await fetch(historyUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(toSync)
+                    });
+                    pageObj.hasBaseHistory = true;
+                    pageObj._baseHistory = [...toSync];
+                    await this.dbPut('pages', pageObj);
+                } catch (e) {
+                    console.error('[PDF Import] Failed to upload history:', e);
+                }
+            }
+
+            // Upload page blob and sync structure
+            const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, pageObj.blob);
+            await this._syncPageStructureToServer();
+            this._syncPageStructureToLive();
+
+            if (this.liveSync && !this.liveSync.isInitializing) {
+                this.liveSync.setHistory(newPageIndex, []);
+                this.liveSync.updatePageMetadata(newPageIndex, { hasBaseHistory: true, baseHistoryCount: toSync.length });
+            }
+
+            // Navigate to the new page
+            this.state.idx = newPageIndex;
+            await this.loadImage();
+
+            if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
+
+            const syncStatus = uploadSuccess ? '✓' : '⚠';
+            this.ui.showToast(`Imported PDF page ${pageNum} ${syncStatus}`);
+
+        } catch (e) {
+            console.error('PDF page import error:', e);
+            this.ui.showToast(`Import failed: ${e.message}`);
+        } finally {
+            this.ui.toggleLoader(false);
+        }
+    },
+
     // =============================================
     // REFACTORED HELPERS (Phase 1 - Core Helpers)
     // =============================================
@@ -1027,6 +1620,74 @@ export const ColorRmSession = {
                         console.error(e);
                         this.ui.showToast("Failed to load PDF");
                     }
+                } else if (f.type === 'image/svg+xml' || f.name?.toLowerCase().endsWith('.svg')) {
+                    // SVG import - show options dialog
+                    try {
+                        const importOptions = await this._showSvgImportOptions(f.name);
+
+                        // Handle cancel
+                        if (importOptions.cancelled) {
+                            processNext();
+                            return;
+                        }
+
+                        const { pageObj, toSync, toRasterize } = await this.importSvgAsPage(f, idx, importOptions);
+
+                        await this.dbPut('pages', pageObj);
+                        this.state.images.push(pageObj);
+
+                        // Upload base history to R2 instead of Liveblocks (avoids size limits)
+                        // Liveblocks will only sync deltas (new strokes added after import)
+                        if (toSync.length > 0 && this.state.sessionId && pageObj.pageId) {
+                            try {
+                                const historyUrl = window.Config?.apiUrl(`/api/color_rm/history/${this.state.sessionId}/${pageObj.pageId}`)
+                                    || `/api/color_rm/history/${this.state.sessionId}/${pageObj.pageId}`;
+                                await fetch(historyUrl, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(toSync)
+                                });
+                                console.log(`[SVG Import] Uploaded ${toSync.length} items to R2 for page ${pageObj.pageId}`);
+
+                                // Mark page as having base history in R2 and store _baseHistory for delta sync
+                                pageObj.hasBaseHistory = true;
+                                pageObj._baseHistory = [...toSync]; // CRITICAL: Store base history for delta sync
+                                await this.dbPut('pages', pageObj);
+                            } catch (uploadErr) {
+                                console.error('[SVG Import] Failed to upload history to R2:', uploadErr);
+                                // Fall back to keeping history local-only
+                            }
+                        }
+
+                        // CRITICAL: Upload the page blob to R2 so other users can fetch it
+                        const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, pageObj.blob);
+                        if (!uploadSuccess) {
+                            console.warn('[SVG Import] Failed to upload page blob to R2');
+                        }
+
+                        // Sync page structure to R2 and Liveblocks
+                        await this._syncPageStructureToServer();
+                        this._syncPageStructureToLive();
+
+                        // Notify Liveblocks that this page has base history (metadata only, no data)
+                        // Also clear Liveblocks history to avoid syncing large SVG data
+                        if (this.liveSync && !this.liveSync.isInitializing) {
+                            this.liveSync.setHistory(idx, []); // Clear Liveblocks history - base is in R2
+                            this.liveSync.updatePageMetadata(idx, { hasBaseHistory: true, baseHistoryCount: toSync.length });
+                        }
+
+                        if (this.state.images.length === 1) await this.loadPage(0, false);
+                        if (this.state.activeSideTab === 'pages') this.renderPageSidebar();
+                        idx++;
+
+                        const modeText = importOptions.asInfinite ? 'as infinite canvas ∞' : '';
+                        const syncStatus = uploadSuccess ? '✓ Synced' : '⚠ Local only';
+                        this.ui.showToast(`SVG imported ${modeText} (${toSync.length} editable items) ${syncStatus}`);
+                        console.log(`SVG imported: ${toRasterize.length} items rasterized, ${toSync.length} items stored in R2, infinite=${importOptions.asInfinite}`);
+                    } catch (e) {
+                        console.error('SVG import error:', e);
+                        this.ui.showToast(`Failed to import SVG: ${e.message}`);
+                    }
                 } else {
                     const pageId = this._generatePageId('user');
                     const pageObj = {
@@ -1152,6 +1813,42 @@ export const ColorRmSession = {
         } catch (e) {
             // Final fallback: show URL in custom prompt
             this.ui.showAlert("Share URL", shareUrl);
+        }
+    },
+
+    /**
+     * Toggle sync on/off for working with large files offline
+     */
+    toggleSync() {
+        this.state.syncEnabled = !this.state.syncEnabled;
+        this._updateSyncToggleUI();
+
+        if (this.state.syncEnabled) {
+            this.ui.showToast("Sync enabled - changes will be synced");
+            // Trigger a sync of pending changes
+            if (this.liveSync && !this.liveSync.isInitializing) {
+                this.saveCurrentImg();
+            }
+        } else {
+            this.ui.showToast("Sync disabled - working offline");
+        }
+    },
+
+    /**
+     * Update the sync toggle button UI
+     */
+    _updateSyncToggleUI() {
+        const btn = this.getElement('syncToggle');
+        if (!btn) return;
+
+        if (this.state.syncEnabled) {
+            btn.innerHTML = '<i class="bi bi-cloud-check"></i>';
+            btn.style.color = '#4ade80';
+            btn.title = 'Sync ON - Click to disable';
+        } else {
+            btn.innerHTML = '<i class="bi bi-cloud-slash"></i>';
+            btn.style.color = '#f87171';
+            btn.title = 'Sync OFF - Click to enable';
         }
     },
 
@@ -2432,6 +3129,71 @@ export const ColorRmSession = {
             // Save to IndexedDB (non-blocking)
             this.dbPut('pages', page);
         }
+    },
+
+    /**
+     * Checks if any object (stroke, shape, text, image, group) is within the visible viewport
+     * Used for viewport culling to improve rendering performance
+     * @param {Object} obj - The history object to check
+     * @returns {boolean} - True if any part of the object is visible
+     */
+    isObjectVisible(obj) {
+        if (!obj) return false;
+
+        // Get viewport bounds in canvas coordinates
+        const viewLeft = -this.state.pan.x / this.state.zoom;
+        const viewTop = -this.state.pan.y / this.state.zoom;
+        const viewRight = viewLeft + this.state.viewW / this.state.zoom;
+        const viewBottom = viewTop + this.state.viewH / this.state.zoom;
+
+        // Get object bounding box
+        let minX, minY, maxX, maxY;
+
+        if (obj.tool === 'pen' || obj.tool === 'eraser' || obj.tool === 'highlighter') {
+            // Stroke-based objects - use points
+            if (!obj.pts || obj.pts.length === 0) return false;
+
+            minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
+            for (const pt of obj.pts) {
+                minX = Math.min(minX, pt.x);
+                minY = Math.min(minY, pt.y);
+                maxX = Math.max(maxX, pt.x);
+                maxY = Math.max(maxY, pt.y);
+            }
+            // Add stroke size to bounds
+            const strokeSize = obj.size || 5;
+            minX -= strokeSize;
+            minY -= strokeSize;
+            maxX += strokeSize;
+            maxY += strokeSize;
+        } else if (obj.tool === 'group') {
+            // Group - check children recursively
+            if (!obj.children || obj.children.length === 0) return false;
+            for (const child of obj.children) {
+                if (this.isObjectVisible(child)) return true;
+            }
+            return false;
+        } else {
+            // Shape, text, image - use x, y, w, h
+            minX = obj.x;
+            minY = obj.y;
+            maxX = obj.x + (obj.w || 0);
+            maxY = obj.y + (obj.h || 0);
+
+            // Handle negative widths/heights
+            if (maxX < minX) [minX, maxX] = [maxX, minX];
+            if (maxY < minY) [minY, maxY] = [maxY, minY];
+
+            // Add padding for stroke width
+            const padding = (obj.width || 2) / 2;
+            minX -= padding;
+            minY -= padding;
+            maxX += padding;
+            maxY += padding;
+        }
+
+        // Check bounding box intersection with viewport
+        return !(maxX < viewLeft || minX > viewRight || maxY < viewTop || minY > viewBottom);
     },
 
     /**

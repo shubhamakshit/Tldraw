@@ -6,6 +6,7 @@ import { ColorRmUI } from './modules/ColorRmUI.js';
 import { ColorRmSession } from './modules/ColorRmSession.js';
 import { ColorRmExport } from './modules/ColorRmExport.js';
 import { PerformanceManager } from './modules/ColorRmPerformance.js';
+import { ColorRmSvgImporter } from './modules/ColorRmSvgImporter.js';
 
 export class ColorRmApp {
     constructor(config = {}) {
@@ -32,6 +33,8 @@ export class ColorRmApp {
             ownerId: null, pageLocked: false,
             selectedSessions: new Set(), isMultiSelect: false, showCursors: true,
             zoom: 1, pan: { x: 0, y: 0 },
+            // Sync control
+            syncEnabled: true,
             // Eraser options
             eraserOptions: {
                 scribble: true,
@@ -964,6 +967,12 @@ export class ColorRmApp {
                         this.liveSync.notifyPageNavigation(this.state.idx);
                     }
                 }
+
+                // Fetch base history from R2 if page has SVG import data
+                if (this.liveSync && item.hasBaseHistory) {
+                    this.liveSync.ensureBaseHistory(this.state.idx);
+                }
+
                 resolve();
             };
         });
@@ -978,6 +987,9 @@ Object.assign(ColorRmApp.prototype, ColorRmInput);
 Object.assign(ColorRmApp.prototype, ColorRmUI);
 Object.assign(ColorRmApp.prototype, ColorRmSession);
 Object.assign(ColorRmApp.prototype, ColorRmExport);
+
+// Make SVG importer available for importing SVG files
+ColorRmApp.prototype.svgImporter = ColorRmSvgImporter;
 
 // Ensure the app instance has access to export methods for other modules
 ColorRmApp.prototype.sanitizeFilename = ColorRmExport.sanitizeFilename;

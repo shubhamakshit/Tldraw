@@ -31,12 +31,35 @@ export const ColorRmBox = {
             return;
         }
 
-        // Capture from canvas
+        // Capture from canvas - transform coordinates based on zoom/pan
         const cvs = this.getElement('canvas');
         const ctx = cvs.getContext('2d');
-        const id = ctx.getImageData(x, y, w, h);
+
+        // Transform from canvas/world coordinates to pixel coordinates
+        const zoom = this.state.zoom || 1;
+        const panX = this.state.pan?.x || 0;
+        const panY = this.state.pan?.y || 0;
+
+        // Convert world coordinates to pixel coordinates
+        const pixelX = Math.round((x + panX / zoom) * zoom);
+        const pixelY = Math.round((y + panY / zoom) * zoom);
+        const pixelW = Math.round(w * zoom);
+        const pixelH = Math.round(h * zoom);
+
+        // Clamp to canvas bounds
+        const clampedX = Math.max(0, Math.min(pixelX, cvs.width - 1));
+        const clampedY = Math.max(0, Math.min(pixelY, cvs.height - 1));
+        const clampedW = Math.min(pixelW, cvs.width - clampedX);
+        const clampedH = Math.min(pixelH, cvs.height - clampedY);
+
+        if (clampedW <= 0 || clampedH <= 0) {
+            this.ui.showToast("Invalid capture region");
+            return;
+        }
+
+        const id = ctx.getImageData(clampedX, clampedY, clampedW, clampedH);
         const tmp = document.createElement('canvas');
-        tmp.width = w; tmp.height = h;
+        tmp.width = clampedW; tmp.height = clampedH;
         tmp.getContext('2d').putImageData(id, 0, 0);
 
         // Use toBlob instead of toDataURL

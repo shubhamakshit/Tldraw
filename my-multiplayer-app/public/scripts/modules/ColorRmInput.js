@@ -36,18 +36,21 @@ export const ColorRmInput = {
                 scribble: true,
                 text: true,
                 shapes: true,
-                images: true
+                images: true,
+                locked: false
             };
 
             const scribbleCb = this.getElement('lassoScribble');
             const textCb = this.getElement('lassoText');
             const shapesCb = this.getElement('lassoShapes');
             const imagesCb = this.getElement('lassoImages');
+            const lockedCb = this.getElement('lassoLocked');
 
             if(scribbleCb) scribbleCb.checked = options.scribble;
             if(textCb) textCb.checked = options.text;
             if(shapesCb) shapesCb.checked = options.shapes;
             if(imagesCb) imagesCb.checked = options.images;
+            if(lockedCb) lockedCb.checked = options.locked;
         }
 
         // Update the checkboxes based on current eraser options
@@ -194,8 +197,25 @@ export const ColorRmInput = {
         }
     },
 
+    /**
+     * Clears the redo stack when new items are added to history.
+     * This ensures the redo stack doesn't contain stale items after new operations.
+     */
+    _clearRedoStack() {
+        const img = this.state.images[this.state.idx];
+        if (img) {
+            img.redo = [];
+            img._modificationRedo = [];
+        }
+    },
+
     deleteSelected() {
         const img = this.state.images[this.state.idx];
+        if (this.state.selection.length === 0) return;
+
+        // Save state for undo before deleting
+        this._pushModificationUndo('delete', this.state.selection);
+
         this.state.selection.forEach(i => {
             const item = img.history[i];
             if (item) {
@@ -215,6 +235,7 @@ export const ColorRmInput = {
     copySelected(cut=false) {
         const img = this.state.images[this.state.idx];
         const newIds = [];
+        this._clearRedoStack(); // Clear redo when adding new items
         this.state.selection.forEach(i => {
             const item = JSON.parse(JSON.stringify(img.history[i]));
             item.id = Date.now() + Math.random();
@@ -239,6 +260,35 @@ export const ColorRmInput = {
         const img = this.state.images[this.state.idx];
         this.state.selection.forEach(i => img.history[i].locked = true);
         this.state.selection = [];
+        this.saveCurrentImg();
+        this.render();
+    },
+
+    unlockSelected() {
+        const img = this.state.images[this.state.idx];
+        this.state.selection.forEach(i => img.history[i].locked = false);
+        this.saveCurrentImg();
+        this.render();
+    },
+
+    toggleLockSelected() {
+        const img = this.state.images[this.state.idx];
+        if (this.state.selection.length === 0) return;
+
+        // Check if any selected items are locked
+        const anyLocked = this.state.selection.some(i => img.history[i].locked);
+
+        if (anyLocked) {
+            // Unlock all
+            this.state.selection.forEach(i => img.history[i].locked = false);
+            this.ui.showToast('Unlocked');
+        } else {
+            // Lock all
+            this.state.selection.forEach(i => img.history[i].locked = true);
+            this.state.selection = [];
+            this.ui.showToast('Locked');
+        }
+        this.saveCurrentImg();
         this.render();
     },
 
@@ -356,7 +406,8 @@ export const ColorRmInput = {
                 e.preventDefault();
                 const img = this.state.images[this.state.idx];
                 if(img && img.history) {
-                    this.state.selection = img.history.map((_, i) => i).filter(i => !img.history[i].deleted && !img.history[i].locked);
+                    // Select all non-deleted items (including locked ones so they can be unlocked)
+                    this.state.selection = img.history.map((_, i) => i).filter(i => !img.history[i].deleted);
                     if(this.state.selection.length > 0) {
                         this.setTool('lasso');
                         this.ui.showToast(`Selected ${this.state.selection.length} items`);
@@ -404,6 +455,13 @@ export const ColorRmInput = {
                 if(this.state.selection.length > 0) {
                     this.deleteSelected();
                 }
+            }
+
+            // === Toggle Lock (Ctrl+L or Cmd+L) ===
+            if((e.ctrlKey||e.metaKey) && key==='l' && this.state.selection.length > 0) {
+                e.preventDefault();
+                this.toggleLockSelected();
+                return;
             }
 
             // === Shortcuts Help (? key) ===
@@ -675,8 +733,19 @@ export const ColorRmInput = {
             if(['none','lasso'].includes(this.state.tool) && this.state.selection.length>0) {
                 const hit = hitTest(pt);
                 if(hit) {
-                    startBounds = getSelectionBounds();
+                    // Check if any selected items are locked - prevent move/resize/rotate but allow selection
                     const img = this.state.images[this.state.idx];
+                    const hasLockedItems = this.state.selection.some(i => img.history[i].locked);
+
+                    if (hasLockedItems && hit !== 'none') {
+                        // Allow clicking but show toast for move/resize/rotate attempts
+                        if (hit === 'move' || hit === 'rot' || ['tl','tr','bl','br'].includes(hit)) {
+                            this.ui.showToast('Cannot modify locked items. Press L to unlock.');
+                            return;
+                        }
+                    }
+
+                    startBounds = getSelectionBounds();
                     initialHistoryState = this.state.selection.map(i => JSON.parse(JSON.stringify(img.history[i])));
                     if(hit==='rot') { isRotating=true; startRotation = Math.atan2(pt.y - startBounds.cy, pt.x - startBounds.cx); }
                     else if(hit==='move') { isMovingSelection=true; dragStart=pt; this.dragOffset={x:0,y:0}; }
@@ -1078,7 +1147,7 @@ export const ColorRmInput = {
 
                     for (let i = img.history.length - 1; i >= 0; i--) {
                         const st = img.history[i];
-                        if (st.locked) continue;
+                        if (st.locked || st.deleted) continue; // Skip locked and already deleted items
 
                         let hit = false;
                         let shouldErase = false;
@@ -1272,6 +1341,21 @@ export const ColorRmInput = {
             if (!wasOurInteraction) return;
 
             if(isMovingSelection) {
+                // Push undo state before finalizing move
+                if (initialHistoryState.length > 0 && this.state.selection.length > 0) {
+                    const img = this.state.images[this.state.idx];
+                    if (!img._modificationUndo) img._modificationUndo = [];
+                    img._modificationRedo = []; // Clear redo on new action
+                    img._modificationUndo.push({
+                        type: 'move',
+                        indices: [...this.state.selection],
+                        items: initialHistoryState.map((state, i) => ({
+                            idx: this.state.selection[i],
+                            state: state
+                        }))
+                    });
+                }
+
                 isMovingSelection=false;
                 this.state.selection.forEach(idx => {
                     const st = this.state.images[this.state.idx].history[idx];
@@ -1295,6 +1379,7 @@ export const ColorRmInput = {
                     st.lastMod = Date.now();
                 });
                 this.dragOffset = null;
+                initialHistoryState = [];
                 this._clearSnapGuides();
                 this.invalidateCache();
                 this.saveCurrentImg();
@@ -1304,6 +1389,21 @@ export const ColorRmInput = {
 
             // Finalize resize operation
             if(isResizing) {
+                // Push undo state before finalizing resize
+                if (initialHistoryState.length > 0 && this.state.selection.length > 0) {
+                    const img = this.state.images[this.state.idx];
+                    if (!img._modificationUndo) img._modificationUndo = [];
+                    img._modificationRedo = [];
+                    img._modificationUndo.push({
+                        type: 'resize',
+                        indices: [...this.state.selection],
+                        items: initialHistoryState.map((state, i) => ({
+                            idx: this.state.selection[i],
+                            state: state
+                        }))
+                    });
+                }
+
                 isResizing = false;
                 resizeHandle = null;
                 initialHistoryState = [];
@@ -1316,6 +1416,21 @@ export const ColorRmInput = {
 
             // Finalize rotation operation
             if(isRotating) {
+                // Push undo state before finalizing rotation
+                if (initialHistoryState.length > 0 && this.state.selection.length > 0) {
+                    const img = this.state.images[this.state.idx];
+                    if (!img._modificationUndo) img._modificationUndo = [];
+                    img._modificationRedo = [];
+                    img._modificationUndo.push({
+                        type: 'rotate',
+                        indices: [...this.state.selection],
+                        items: initialHistoryState.map((state, i) => ({
+                            idx: this.state.selection[i],
+                            state: state
+                        }))
+                    });
+                }
+
                 isRotating = false;
                 initialHistoryState = [];
                 startBounds = null;
@@ -1356,7 +1471,7 @@ export const ColorRmInput = {
                 // The lassoPath points are in document coordinates (converted by getPt function)
                 // So we need to compare with object coordinates in document space
                 this.state.images[this.state.idx].history.forEach((st,i)=>{
-                    if(st.locked || st.deleted) return;
+                    if(st.deleted) return; // Skip deleted but allow locked items to be selected
 
                     // Filter by lasso options
                     if(!this._filterByLassoOptions(st)) return;
@@ -1378,6 +1493,7 @@ export const ColorRmInput = {
                 let h = pt.y - startPt.y;
 
                 if(Math.abs(w)>2 || Math.abs(h)>2) { // Allow for very thin shapes
+                    this._clearRedoStack(); // Clear redo when adding new item
                     const newShape = {
                         id: Date.now() + Math.random(),
                         lastMod: Date.now(),
@@ -1406,46 +1522,6 @@ export const ColorRmInput = {
                     if (this.liveSync) {
                         this.liveSync.addStroke(this.state.idx, newShape);
                     }
-                }
-            } else if(this.state.tool==='capture') {
-                // Calculate width and height from the startPt and current pt
-                let w = pt.x - startPt.x;
-                let h = pt.y - startPt.y;
-
-                if(Math.abs(w)>2 || Math.abs(h)>2) { // Allow for very thin shapes
-                    const newShape = {
-                        id: Date.now() + Math.random(),
-                        lastMod: Date.now(),
-                        tool: 'shape',
-                        shapeType: this.state.shapeType,
-                        x: startPt.x,
-                        y: startPt.y,
-                        w: w,
-                        h: h,
-                        border: this.state.shapeBorder,
-                        fill: this.state.shapeFill,
-                        width: this.state.shapeWidth,
-                        rotation: 0
-                    };
-
-                    this.state.images[this.state.idx].history.push(newShape);
-                    this.saveCurrentImg();
-                    this.state.selection=[this.state.images[this.state.idx].history.length-1];
-                    this.setTool('lasso');
-                    syncSidebarToSelection();
-
-                    // Ensure the shape is rendered immediately for the owner
-                    this.render();
-
-                    // Synchronize with Liveblocks if in collaborative mode
-                    if (this.liveSync) {
-                        this.liveSync.addStroke(this.state.idx, newShape);
-                    }
-                }
-
-                // Clear the pending shape if it exists
-                if (this.pendingShape) {
-                    delete this.pendingShape;
                 }
             } else if(this.state.tool==='capture') {
                 let w = pt.x - startPt.x, h = pt.y - startPt.y;
@@ -1464,6 +1540,7 @@ export const ColorRmInput = {
                     const shapeObj = this._convertToShape(this.currentStroke);
                     if (shapeObj) {
                         // Convert stroke to shape
+                        this._clearRedoStack(); // Clear redo when adding new item
                         this.state.images[this.state.idx].history.push(shapeObj);
                         this.saveCurrentImg(true);
                         if (this.liveSync && !this.liveSync.isInitializing) {
@@ -1476,6 +1553,7 @@ export const ColorRmInput = {
                 }
 
                 // Normal stroke
+                this._clearRedoStack(); // Clear redo when adding new item
                 const newStroke = {id: Date.now() + Math.random(), lastMod: Date.now(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize, deleted: false};
                 this.state.images[this.state.idx].history.push(newStroke);
                 this.saveCurrentImg(true);
@@ -1499,7 +1577,7 @@ export const ColorRmInput = {
 
                 for (let i = img.history.length - 1; i >= 0; i--) {
                     const st = img.history[i];
-                    if (st.locked) continue;
+                    if (st.locked || st.deleted) continue; // Skip locked and already deleted items
 
                     let hit = false;
 
@@ -1573,7 +1651,8 @@ export const ColorRmInput = {
                 scribble: true,
                 text: true,
                 shapes: true,
-                images: true
+                images: true,
+                locked: false
             };
         }
         this.state.lassoOptions[option] = checked;
@@ -1589,8 +1668,12 @@ export const ColorRmInput = {
             scribble: true,
             text: true,
             shapes: true,
-            images: true
+            images: true,
+            locked: false
         };
+
+        // Check locked status first
+        if (item.locked && !options.locked) return false;
 
         if ((item.tool === 'pen' || item.tool === 'eraser') && !options.scribble) return false;
         if (item.tool === 'text' && !options.text) return false;
@@ -2216,6 +2299,9 @@ export const ColorRmInput = {
         // Sort selection indices
         const sortedSelection = [...this.state.selection].sort((a, b) => a - b);
 
+        // Clear redo stack when reordering (modifying history)
+        this._clearRedoStack();
+
         switch (direction) {
             case 'front':
                 // Move all selected to end (maintain relative order)
@@ -2525,6 +2611,7 @@ export const ColorRmInput = {
             existingItem.lastMod = Date.now();
         } else {
             // Add new text
+            this._clearRedoStack(); // Clear redo when adding new item
             img.history.push({
                 id: Date.now() + Math.random(),
                 lastMod: Date.now(),
@@ -2645,6 +2732,7 @@ export const ColorRmInput = {
         });
 
         // Add group to history
+        this._clearRedoStack(); // Clear redo when adding new item
         history.push(groupObj);
 
         // Select the new group
@@ -2688,6 +2776,7 @@ export const ColorRmInput = {
         const dy = groupObj.y - originalBounds.minY;
 
         // Extract children and add as new items
+        this._clearRedoStack(); // Clear redo when adding new items
         const newIndices = [];
         groupObj.children.forEach(child => {
             // Apply any offset from group movement
@@ -3147,6 +3236,7 @@ export const ColorRmInput = {
         const offsetY = pasteY - clipboardBounds.minY;
 
         // Create new items with new IDs and apply offset
+        this._clearRedoStack(); // Clear redo when adding new items
         const newIndices = [];
         this.state.clipboard.items.forEach(item => {
             const newItem = JSON.parse(JSON.stringify(item));
