@@ -276,10 +276,16 @@ export class LiveSyncClient {
      * Send current state as Yjs update
      */
     _sendYjsUpdate() {
-        if (!this._yjsSocket || !this._yjsConnected) return;
+        if (!this._yjsSocket || !this._yjsConnected) {
+            console.warn('[Yjs] Cannot send update - not connected');
+            return;
+        }
 
         const img = this.app.state.images[this.app.state.idx];
-        if (!img) return;
+        if (!img) {
+            console.warn('[Yjs] Cannot send update - no image for current page');
+            return;
+        }
 
         const msg = {
             type: 'state-update',
@@ -293,6 +299,7 @@ export class LiveSyncClient {
         };
 
         this._yjsSocket.send(JSON.stringify(msg));
+        console.log(`[Yjs] Sent state update for page ${this.app.state.idx}: ${msg.history.length} strokes`);
     }
 
     /**
@@ -303,6 +310,7 @@ export class LiveSyncClient {
 
         if (msg.type === 'state-update') {
             // Apply remote state
+            console.log(`[Yjs] Received state-update for page ${msg.pageIdx}: ${msg.history?.length || 0} strokes`);
             const localImg = this.app.state.images[msg.pageIdx];
             if (localImg && msg.history) {
                 // For beta sync, we always accept remote state as the source of truth
@@ -334,7 +342,7 @@ export class LiveSyncClient {
             const remotePageIds = msg.pageIds || [];
             const localPageIds = this.app.state.images.map(img => img?.pageId).filter(Boolean);
 
-            console.log(`[Yjs] Received page structure: ${remotePageCount} pages (local: ${localPageCount})`);
+            console.log(`[Yjs] Received page-structure: remote=${remotePageCount} pages, local=${localPageCount} pages`);
 
             // Check if structure actually differs (count or order)
             const countDiffers = remotePageCount !== localPageCount;
@@ -348,6 +356,8 @@ export class LiveSyncClient {
                 this._yjsReconcileTimer = setTimeout(() => {
                     this.reconcilePageStructure();
                 }, 500);
+            } else {
+                console.log(`[Yjs] Page structure matches, no reconciliation needed`);
             }
         } else if (msg.type === 'presence') {
             // Update presence map
@@ -360,6 +370,21 @@ export class LiveSyncClient {
                 color: msg.color,
                 size: msg.size
             });
+            console.log(`[Yjs] Received presence from ${msg.clientId}: page ${msg.pageIdx}`);
+
+            // Follow mode: Navigate to the same page as the other user
+            // (Skip if this is an echo of our own change or if we recently changed pages)
+            const timeSinceLocalChange = Date.now() - (this.lastLocalPageChange || 0);
+            if (msg.pageIdx !== undefined && msg.pageIdx !== this.app.state.idx) {
+                if (timeSinceLocalChange < 2000) {
+                    console.log(`[Yjs] Ignoring remote page=${msg.pageIdx}, local change was ${timeSinceLocalChange}ms ago`);
+                } else {
+                    console.log(`[Yjs] Following remote user to page ${msg.pageIdx}`);
+                    this.lastLocalPageChange = Date.now(); // Prevent echo
+                    this.app.loadPage(msg.pageIdx, false); // false = don't broadcast back
+                }
+            }
+
             this.renderCursors();
             this.renderUsers();
         }
@@ -2246,7 +2271,10 @@ export class LiveSyncClient {
      * Send presence update via Yjs WebSocket
      */
     _sendYjsPresence() {
-        if (!this._yjsSocket || !this._yjsConnected) return;
+        if (!this._yjsSocket || !this._yjsConnected) {
+            console.warn('[Yjs] Cannot send presence - not connected');
+            return;
+        }
 
         const msg = {
             type: 'presence',
@@ -2261,6 +2289,7 @@ export class LiveSyncClient {
         };
 
         this._yjsSocket.send(JSON.stringify(msg));
+        console.log(`[Yjs] Sent presence: page ${msg.pageIdx}`);
     }
 
     // Internal: Actually send the page structure change notification
@@ -2294,9 +2323,14 @@ export class LiveSyncClient {
         }
 
         this._pageNavDebounceTimer = setTimeout(() => {
-            // Beta mode: Update presence via Yjs
+            // Beta mode: Update presence and sync page history
             if (this.useBetaSync) {
+                // Mark time to prevent echo-back from other users
+                this.lastLocalPageChange = Date.now();
                 this._sendYjsPresence();
+                // Also sync current page history so other clients see our page
+                this._sendYjsUpdate();
+                console.log(`[Yjs] Page navigation: ${pageIdx}`);
                 return;
             }
 
