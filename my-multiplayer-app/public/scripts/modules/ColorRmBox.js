@@ -505,6 +505,51 @@ export const ColorRmBox = {
         ctx.restore();
     },
 
+    /**
+     * Render a vector item to canvas at full quality for export
+     */
+    async _renderVectorItemToCanvas(ctx, item, destX, destY, destW, destH) {
+        const scale = Math.min(destW / item.w, destH / item.h);
+
+        ctx.save();
+        ctx.translate(destX, destY);
+
+        // Draw background first
+        if (item.backgroundBlob) {
+            try {
+                const img = new Image();
+                const url = URL.createObjectURL(item.backgroundBlob);
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = url;
+                });
+                ctx.drawImage(img, 0, 0, destW, destH);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                // No background, fill with default
+                ctx.fillStyle = item.isInfinite ?
+                    (item.vectorGrid?.bgStyle === 'light' ? '#f8fafc' : '#1a1a2e') : '#fff';
+                ctx.fillRect(0, 0, destW, destH);
+            }
+        } else if (item.isInfinite) {
+            ctx.fillStyle = item.vectorGrid?.bgStyle === 'light' ? '#f8fafc' : '#1a1a2e';
+            ctx.fillRect(0, 0, destW, destH);
+        }
+
+        // Scale and render history items
+        ctx.scale(scale, scale);
+
+        if (item.history) {
+            for (const st of item.history) {
+                if (st.deleted) continue;
+                this._renderItemToContext(ctx, st);
+            }
+        }
+
+        ctx.restore();
+    },
+
     async clearBox() {
         const confirmed = await this.ui.showConfirm("Clear Box", "Clear all items in Box?");
         if(confirmed) {
@@ -616,20 +661,23 @@ export const ColorRmBox = {
                 const {item, finalH, seq} = row.items[c];
                 const x = pad + (c * colW);
                 const y = currentY;
-
-                // Draw Image
-                const im = new Image();
-                if (item.blob) {
-                    im.src = URL.createObjectURL(item.blob);
-                } else {
-                    im.src = item.src;
-                }
-                await new Promise(res => im.onload = res);
-
                 const effectiveImgW = practiceOn ? (colW/2 - 10) : colW;
-                ctx.drawImage(im, x, y, effectiveImgW, finalH);
 
-                if (item.blob) URL.revokeObjectURL(im.src);
+                // Handle vector items - render at full quality
+                if (item.type === 'vector') {
+                    await this._renderVectorItemToCanvas(ctx, item, x, y, effectiveImgW, finalH);
+                } else {
+                    // Legacy raster items
+                    const im = new Image();
+                    if (item.blob) {
+                        im.src = URL.createObjectURL(item.blob);
+                    } else {
+                        im.src = item.src;
+                    }
+                    await new Promise(res => im.onload = res);
+                    ctx.drawImage(im, x, y, effectiveImgW, finalH);
+                    if (item.blob) URL.revokeObjectURL(im.src);
+                }
 
                 // Draw Practice Space
                 if (practiceOn) {
@@ -667,9 +715,9 @@ export const ColorRmBox = {
                  this.ui.showToast("jsPDF library not loaded");
                  return;
              }
-             this.ui.toggleLoader(true, "Generating PDF...");
+             this.ui.toggleLoader(true, "Generating Vector PDF...");
 
-             // A4 Size in mm: 210 x 297. Canvas is 2480x3508 (approx 300dpi for A4)
+             // A4 Size in mm: 210 x 297
              const pdf = new window.jspdf.jsPDF({
                  orientation: 'p',
                  unit: 'mm',
@@ -680,23 +728,227 @@ export const ColorRmBox = {
              const pdfW = 210;
              const pdfH = 297;
 
-             for(let i=0; i<pages.length; i++) {
-                 this.ui.updateProgress((i/pages.length)*100, `Adding Page ${i+1}/${pages.length}...`);
-                 if (i > 0) pdf.addPage();
+             // Helper to convert hex to RGB
+             const hexToRgb = (hex) => {
+                 const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+                 return r ? [parseInt(r[1], 16), parseInt(r[2], 16), parseInt(r[3], 16)] : [0, 0, 0];
+             };
 
-                 const pCanvas = pages[i];
-                 const imgFormat = hiQuality ? 'image/png' : 'image/jpeg';
-                 const imgQuality = hiQuality ? 1.0 : 0.85;
-                 const pdfFormat = hiQuality ? 'PNG' : 'JPEG';
-                 const imgData = pCanvas.toDataURL(imgFormat, imgQuality);
-                 pdf.addImage(imgData, pdfFormat, 0, 0, pdfW, pdfH);
+             // Helper to convert blob to base64
+             const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+                 const reader = new FileReader();
+                 reader.onloadend = () => resolve(reader.result);
+                 reader.onerror = reject;
+                 reader.readAsDataURL(blob);
+             });
+
+             // Render stroke to PDF as vector
+             const renderStrokeToPDF = (pdfDoc, stroke, offsetX, offsetY, scale) => {
+                 if (stroke.tool === 'pen' && stroke.pts && stroke.pts.length > 0) {
+                     const color = hexToRgb(stroke.color || '#000000');
+                     const lineWidth = (stroke.size || 3) * scale;
+
+                     pdfDoc.setDrawColor(color[0], color[1], color[2]);
+                     pdfDoc.setLineWidth(lineWidth);
+                     pdfDoc.setLineCap('round');
+                     pdfDoc.setLineJoin('round');
+
+                     if (stroke.pts.length >= 2) {
+                         const pts = stroke.pts.map(p => [
+                             offsetX + p.x * scale,
+                             offsetY + p.y * scale
+                         ]);
+                         for (let i = 0; i < pts.length - 1; i++) {
+                             pdfDoc.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+                         }
+                     }
+                 } else if (stroke.tool === 'shape') {
+                     renderShapeToPDF(pdfDoc, stroke, offsetX, offsetY, scale);
+                 } else if (stroke.tool === 'text') {
+                     renderTextToPDF(pdfDoc, stroke, offsetX, offsetY, scale);
+                 } else if (stroke.tool === 'group' && stroke.children) {
+                     for (const child of stroke.children) {
+                         renderStrokeToPDF(pdfDoc, child, offsetX, offsetY, scale);
+                     }
+                 }
+             };
+
+             // Render shape to PDF
+             const renderShapeToPDF = (pdfDoc, stroke, offsetX, offsetY, scale) => {
+                 const { x, y, w, h, border, fill, width, shapeType } = stroke;
+                 const pdfX = offsetX + x * scale;
+                 const pdfY = offsetY + y * scale;
+                 const pdfW_s = w * scale;
+                 const pdfH_s = h * scale;
+                 const lineWidth = (width || 2) * scale;
+
+                 const borderColor = hexToRgb(border || '#000000');
+                 pdfDoc.setDrawColor(borderColor[0], borderColor[1], borderColor[2]);
+                 pdfDoc.setLineWidth(lineWidth);
+
+                 const hasFill = fill && fill !== 'transparent';
+                 if (hasFill) {
+                     const fillColor = hexToRgb(fill);
+                     pdfDoc.setFillColor(fillColor[0], fillColor[1], fillColor[2]);
+                 }
+
+                 const cx = pdfX + pdfW_s / 2;
+                 const cy = pdfY + pdfH_s / 2;
+                 const rx = Math.abs(pdfW_s / 2);
+                 const ry = Math.abs(pdfH_s / 2);
+
+                 switch (shapeType) {
+                     case 'rectangle':
+                         pdfDoc.rect(pdfX, pdfY, pdfW_s, pdfH_s, hasFill ? 'FD' : 'S');
+                         break;
+                     case 'circle':
+                         pdfDoc.ellipse(cx, cy, rx, ry, hasFill ? 'FD' : 'S');
+                         break;
+                     case 'line':
+                         pdfDoc.line(pdfX, pdfY, pdfX + pdfW_s, pdfY + pdfH_s);
+                         break;
+                     case 'arrow': {
+                         const head = 15 * scale;
+                         const ang = Math.atan2(pdfH_s, pdfW_s);
+                         const x2 = pdfX + pdfW_s, y2 = pdfY + pdfH_s;
+                         pdfDoc.line(pdfX, pdfY, x2, y2);
+                         pdfDoc.line(x2, y2, x2 - head * Math.cos(ang - 0.5), y2 - head * Math.sin(ang - 0.5));
+                         pdfDoc.line(x2, y2, x2 - head * Math.cos(ang + 0.5), y2 - head * Math.sin(ang + 0.5));
+                         break;
+                     }
+                     case 'triangle':
+                         pdfDoc.triangle(cx, pdfY, pdfX + pdfW_s, pdfY + pdfH_s, pdfX, pdfY + pdfH_s, hasFill ? 'FD' : 'S');
+                         break;
+                     default:
+                         pdfDoc.rect(pdfX, pdfY, pdfW_s, pdfH_s, 'S');
+                 }
+             };
+
+             // Render text to PDF
+             const renderTextToPDF = (pdfDoc, stroke, offsetX, offsetY, scale) => {
+                 const { x, y, text, color, size } = stroke;
+                 if (!text) return;
+
+                 const pdfX = offsetX + x * scale;
+                 const pdfY = offsetY + (y + size) * scale;
+                 const fontSize = size * scale * 0.75;
+
+                 const textColor = hexToRgb(color || '#000000');
+                 pdfDoc.setTextColor(textColor[0], textColor[1], textColor[2]);
+                 pdfDoc.setFontSize(fontSize);
+                 pdfDoc.text(text, pdfX, pdfY);
+             };
+
+             // Process each box item directly to PDF as vectors
+             const boxItems = this.state.clipboardBox;
+             let currentPage = 0;
+             let currentY = this.getElement('boxHeaderOn').checked ? 50 : 10; // mm
+             const margin = 10; // mm
+             const headerHeight = this.getElement('boxHeaderOn').checked ? 15 : 0;
+             const footerHeight = this.getElement('boxFooterOn').checked ? 15 : 0;
+             const usableHeight = pdfH - headerHeight - footerHeight - 20;
+             const usableWidth = pdfW - margin * 2;
+             const colWidthMm = (usableWidth - (cols - 1) * 5) / cols;
+
+             let row = [];
+             let rowHeights = [];
+
+             for (let i = 0; i < boxItems.length; i++) {
+                 this.ui.updateProgress((i / boxItems.length) * 100, `Processing item ${i + 1}/${boxItems.length}...`);
+                 const item = boxItems[i];
+
+                 // Calculate item dimensions in mm
+                 const effectiveImgWMm = practiceOn ? (colWidthMm / 2 - 2) : colWidthMm;
+                 const aspectRatio = item.w / item.h;
+                 const itemHeightMm = effectiveImgWMm / aspectRatio;
+
+                 row.push({ item, widthMm: effectiveImgWMm, heightMm: itemHeightMm, seq: i + 1 });
+                 rowHeights.push(itemHeightMm);
+
+                 // When row is full or last item
+                 if (row.length === cols || i === boxItems.length - 1) {
+                     const maxRowH = Math.max(...rowHeights) + (labelsOn ? 8 : 0);
+
+                     // Check if we need a new page
+                     if (currentY + maxRowH > usableHeight + headerHeight) {
+                         // Draw header/footer for current page
+                         this._drawPDFHeaderFooter(pdf, pdfW, pdfH, headerHeight, footerHeight, currentPage + 1);
+                         pdf.addPage();
+                         currentPage++;
+                         currentY = this.getElement('boxHeaderOn').checked ? 50 : 10;
+                     }
+
+                     // Draw each item in the row
+                     for (let c = 0; c < row.length; c++) {
+                         const { item: boxItem, widthMm, heightMm, seq } = row[c];
+                         const xMm = margin + c * (colWidthMm + 5);
+                         const yMm = currentY;
+
+                         // Scale factor: pixel to mm
+                         const scale = widthMm / boxItem.w;
+
+                         // Draw background image if present
+                         if (boxItem.backgroundBlob) {
+                             try {
+                                 const base64 = await blobToBase64(boxItem.backgroundBlob);
+                                 pdf.addImage(base64, 'JPEG', xMm, yMm, widthMm, heightMm);
+                             } catch (e) {
+                                 // Fill with default background
+                                 if (boxItem.isInfinite) {
+                                     const bgColor = boxItem.vectorGrid?.bgStyle === 'light' ? [248, 250, 252] : [26, 26, 46];
+                                     pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
+                                 } else {
+                                     pdf.setFillColor(255, 255, 255);
+                                 }
+                                 pdf.rect(xMm, yMm, widthMm, heightMm, 'F');
+                             }
+                         } else if (boxItem.isInfinite) {
+                             // Draw infinite canvas background
+                             const bgColor = boxItem.vectorGrid?.bgStyle === 'light' ? [248, 250, 252] : [26, 26, 46];
+                             pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
+                             pdf.rect(xMm, yMm, widthMm, heightMm, 'F');
+                         }
+
+                         // Render history items as vectors
+                         if (boxItem.type === 'vector' && boxItem.history) {
+                             for (const stroke of boxItem.history) {
+                                 if (stroke.deleted) continue;
+                                 renderStrokeToPDF(pdf, stroke, xMm, yMm, scale);
+                             }
+                         }
+
+                         // Draw practice space if enabled
+                         if (practiceOn) {
+                             const practiceX = xMm + widthMm + 2;
+                             pdf.setFillColor(practiceCol === 'black' ? 0 : 240, practiceCol === 'black' ? 0 : 240, practiceCol === 'black' ? 0 : 240);
+                             pdf.rect(practiceX, yMm, widthMm, heightMm, 'F');
+                         }
+
+                         // Draw label if enabled
+                         if (labelsOn) {
+                             pdf.setFillColor(51, 51, 51);
+                             pdf.setFontSize(8);
+                             pdf.setTextColor(51, 51, 51);
+                             const labelYMm = labelPos === 'top' ? yMm - 3 : yMm + heightMm + 5;
+                             const labelX = xMm + (practiceOn ? colWidthMm : widthMm) / 2;
+                             pdf.text(this.processTags(labelTxt, { seq, page: boxItem.pageIdx + 1 }), labelX, labelYMm, { align: 'center' });
+                         }
+                     }
+
+                     currentY += maxRowH + 5;
+                     row = [];
+                     rowHeights = [];
+                 }
 
                  await new Promise(r => setTimeout(r, 0));
              }
-             
+
+             // Draw header/footer for last page
+             this._drawPDFHeaderFooter(pdf, pdfW, pdfH, headerHeight, footerHeight, currentPage + 1);
+
              // Use the export module's sanitizeFilename method
              const sanitizedProjectName = this.sanitizeFilename ? this.sanitizeFilename(this.state.projectName) : this.state.projectName.replace(/[^a-z0-9]/gi, '_');
-             const filename = `${sanitizedProjectName}_Sheets.pdf`;
+             const filename = `${sanitizedProjectName}_Sheets_Vector.pdf`;
 
              try {
                  const blob = pdf.output('blob');
@@ -707,8 +959,8 @@ export const ColorRmBox = {
                      if (navigator.canShare && navigator.canShare({ files: [file] })) {
                         await navigator.share({
                             files: [file],
-                            title: 'Export PDF',
-                            text: 'Here is your exported PDF.'
+                            title: 'Export Vector PDF',
+                            text: 'Here is your exported vector PDF.'
                         });
                      } else {
                          pdf.save(filename);
@@ -803,6 +1055,30 @@ export const ColorRmBox = {
             this.ui.showToast("Export failed: " + e.message);
         }
         this.ui.toggleLoader(false);
+    },
+
+    /**
+     * Draw header/footer to PDF (vector)
+     */
+    _drawPDFHeaderFooter(pdf, w, h, headerHeight, footerHeight, pageNum) {
+        pdf.setTextColor(51, 51, 51);
+        pdf.setFontSize(10);
+
+        if (this.getElement('boxHeaderOn').checked && headerHeight > 0) {
+            const txt = this.processTags(this.getElement('boxHeaderTxt').value);
+            pdf.text(txt, w / 2, 25, { align: 'center' });
+            pdf.setDrawColor(51, 51, 51);
+            pdf.setLineWidth(0.3);
+            pdf.line(10, 35, w - 10, 35);
+        }
+
+        if (this.getElement('boxFooterOn').checked && footerHeight > 0) {
+            const txt = this.processTags(this.getElement('boxFooterTxt').value);
+            pdf.setDrawColor(51, 51, 51);
+            pdf.setLineWidth(0.3);
+            pdf.line(10, h - 25, w - 10, h - 25);
+            pdf.text(txt, w / 2, h - 15, { align: 'center' });
+        }
     },
 
     drawHeaderFooter(ctx, w, h) {
