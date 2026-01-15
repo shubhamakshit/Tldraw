@@ -65,17 +65,20 @@ export const Config = {
     // In bundled mode, this returns the full backend URL
     // In remote/web mode, this returns empty string (relative URLs work)
     getApiBase() {
-        // Remote mode: relative URLs work
-        if (this.isRemoteMode()) {
+        const isCap = this.isCapacitor();
+        
+        // Remote mode in standard browser: relative URLs work
+        if (this.isRemoteMode() && !isCap) {
             return '';
         }
 
-        // Bundled Capacitor mode: need absolute URL to backend
-        if (this.isBundledMode() || this.isCapacitor()) {
-            const defaultBackend = 'cloudflare'; // REPLACED_BY_BUILD_SCRIPT
+        // Bundled Capacitor mode OR Remote Capacitor mode: 
+        // NEED absolute URL because CapacitorHttp doesn't support relative paths
+        if (this.isBundledMode() || isCap) {
+            const defaultBackend = 'hf'; // Changed from cloudflare
             const preferredBackend = localStorage.getItem('color_rm_backend') || defaultBackend;
             const base = this.BACKENDS[preferredBackend] || this.BACKENDS[defaultBackend];
-            console.log('[Config] Bundled mode - using backend:', base);
+            console.log('[Config] Capacitor/Bundled mode - using backend:', base);
             return base;
         }
 

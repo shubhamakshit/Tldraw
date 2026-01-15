@@ -1492,16 +1492,50 @@ export const ColorRmSession = {
             console.log('ColorRM Sync: Uploading base file to server for ID:', this.state.sessionId);
             this.ui.toggleLoader(true, "Uploading to server...");
             try {
-                // Convert to ArrayBuffer for Android Capacitor compatibility
-                const fileBuffer = await files[0].arrayBuffer();
-                const uploadRes = await fetch(window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`, {
-                    method: 'POST',
-                    body: fileBuffer,
-                    headers: {
-                        'Content-Type': files[0].type,
-                        'x-project-name': encodeURIComponent(pName)
-                    }
-                });
+                const url = window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`;
+                const isCapacitorNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+                
+                let uploadRes;
+                
+                if (isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
+                    console.log('ColorRM Sync: Using CapacitorHttp for base file upload');
+                    // Convert to base64 for CapacitorHttp compatibility
+                    const base64Data = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(files[0]);
+                    });
+
+                    const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                        url: url,
+                        method: 'POST',
+                        data: base64Data,
+                        headers: {
+                            'Content-Type': files[0].type,
+                            'x-project-name': encodeURIComponent(pName)
+                        }
+                    });
+                    
+                    // Map Capacitor response to fetch-like object
+                    uploadRes = {
+                        ok: response.status >= 200 && response.status < 300,
+                        status: response.status,
+                        text: async () => JSON.stringify(response.data)
+                    };
+                } else {
+                    // Standard Web fetch
+                    const fileBuffer = await files[0].arrayBuffer();
+                    uploadRes = await fetch(url, {
+                        method: 'POST',
+                        body: fileBuffer,
+                        headers: {
+                            'Content-Type': files[0].type,
+                            'x-project-name': encodeURIComponent(pName)
+                        }
+                    });
+                }
+
                 if (uploadRes.ok) {
                     console.log('ColorRM Sync: Base file upload successful.');
                 } else {

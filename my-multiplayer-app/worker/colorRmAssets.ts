@@ -27,19 +27,23 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
 
 export async function handleColorRmDownload(request: IRequest, env: Env) {
     const { roomId } = request.params
+    console.log(`[handleColorRmDownload] Fetching base file for roomId: ${roomId}`);
     if (!roomId) {
         return new Response('Missing roomId', { status: 400 })
     }
 
     const objectKey = `color_rm/base_files/${roomId}`
+    console.log(`[handleColorRmDownload] Object key: ${objectKey}`);
 
     try {
         const obj = await env.TLDRAW_BUCKET.get(objectKey)
 
         if (!obj) {
+            console.log(`[handleColorRmDownload] Base file NOT FOUND for key: ${objectKey}`);
             return new Response('Base file not found', { status: 404 })
         }
 
+        console.log(`[handleColorRmDownload] Base file FOUND, size: ${obj.size} bytes`);
         const headers = new Headers()
         obj.writeHttpMetadata(headers)
         headers.set('etag', obj.httpEtag)
