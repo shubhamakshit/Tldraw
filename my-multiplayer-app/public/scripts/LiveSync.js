@@ -311,6 +311,28 @@ export class LiveSyncClient {
         if (msg.type === 'state-update') {
             // Apply remote state
             console.log(`[Yjs] Received state-update for page ${msg.pageIdx}: ${msg.history?.length || 0} strokes`);
+
+            // Sync project name from metadata (like Liveblocks does)
+            if (msg.metadata && msg.metadata.name) {
+                const remoteName = msg.metadata.name;
+                const localName = this.app.state.projectName;
+
+                // If we're the owner and remote is "Untitled" but we have a real name, don't overwrite
+                const isOwner = this.ownerId === this.userId;
+                const remoteIsUntitled = remoteName === 'Untitled' || !remoteName;
+                const localHasName = localName && localName !== 'Untitled';
+
+                if (!(isOwner && remoteIsUntitled && localHasName)) {
+                    // Accept remote name
+                    if (localName !== remoteName) {
+                        console.log(`[Yjs] Name Sync: "${localName}" -> "${remoteName}"`);
+                        this.app.state.projectName = remoteName;
+                        const titleEl = this.app.getElement('headerTitle');
+                        if (titleEl) titleEl.innerText = remoteName;
+                    }
+                }
+            }
+
             const localImg = this.app.state.images[msg.pageIdx];
             if (localImg && msg.history) {
                 // For beta sync, we always accept remote state as the source of truth

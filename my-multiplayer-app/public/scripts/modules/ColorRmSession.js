@@ -1743,28 +1743,143 @@ export const ColorRmSession = {
             return;
         }
 
-        // Build the share URL
+        // Build the share URL - use beta path if in beta mode
         const baseUrl = window.Config?.getApiBase() || window.location.origin;
-        const shareUrl = `${baseUrl}/color_rm.html#/color_rm/${ownerId}/${projectId}`;
+        const prefix = this.config.useBetaSync ? '#/beta/color_rm' : '#/color_rm';
+        const shareUrl = `${baseUrl}/color_rm.html${prefix}/${ownerId}/${projectId}`;
+
+        // Also generate a simple room code for easy sharing
+        const roomCode = this.config.useBetaSync
+            ? `beta-${ownerId}-${projectId}`
+            : `${ownerId}-${projectId}`;
 
         try {
             // Try native share first (works on mobile)
             if (navigator.share) {
                 await navigator.share({
                     title: this.state.projectName || 'ColorRM Session',
-                    text: 'Join my ColorRM session',
+                    text: `Join my ColorRM session!\nRoom Code: ${roomCode}`,
                     url: shareUrl
                 });
                 return;
             }
 
-            // Fallback to clipboard
-            await navigator.clipboard.writeText(shareUrl);
-            this.ui.showToast("Link copied to clipboard!");
+            // Fallback to clipboard with room code
+            await navigator.clipboard.writeText(`${shareUrl}\n\nRoom Code: ${roomCode}`);
+            this.ui.showToast("Link & code copied!");
         } catch (e) {
-            // Final fallback: show URL in custom prompt
-            this.ui.showAlert("Share URL", shareUrl);
+            // Final fallback: show URL and code in custom prompt
+            this.ui.showAlert("Share Session", `URL: ${shareUrl}\n\nRoom Code: ${roomCode}`);
         }
+    },
+
+    /**
+     * Join a room using a room code
+     * Code format: [beta-]userId-projectId
+     */
+    async joinWithCode(code) {
+        if (!code || typeof code !== 'string') {
+            this.ui.showToast("Invalid room code");
+            return false;
+        }
+
+        code = code.trim();
+
+        // Parse the room code
+        let isBeta = false;
+        let ownerId, projectId;
+
+        if (code.startsWith('beta-')) {
+            isBeta = true;
+            const parts = code.substring(5).split('-');
+            if (parts.length < 2) {
+                this.ui.showToast("Invalid room code format");
+                return false;
+            }
+            ownerId = parts[0];
+            projectId = parts.slice(1).join('-'); // Project ID might contain dashes
+        } else {
+            const parts = code.split('-');
+            if (parts.length < 2) {
+                this.ui.showToast("Invalid room code format");
+                return false;
+            }
+            ownerId = parts[0];
+            projectId = parts.slice(1).join('-');
+        }
+
+        // Navigate to the room
+        const prefix = isBeta ? '/beta/color_rm' : '/color_rm';
+        window.location.hash = `${prefix}/${ownerId}/${projectId}`;
+
+        this.ui.showToast("Joining room...");
+        return true;
+    },
+
+    /**
+     * Show join room dialog for Android users
+     */
+    showJoinRoomDialog() {
+        // Create a simple modal for entering room code
+        const modal = document.createElement('div');
+        modal.className = 'join-room-modal';
+        modal.innerHTML = `
+            <div class="join-room-backdrop"></div>
+            <div class="join-room-content">
+                <h3>Join Room</h3>
+                <p>Enter the room code shared with you:</p>
+                <input type="text" id="roomCodeInput" placeholder="e.g., user_abc123-proj_xyz789" autocomplete="off" />
+                <div class="join-room-buttons">
+                    <button id="joinRoomCancel">Cancel</button>
+                    <button id="joinRoomSubmit" class="primary">Join</button>
+                </div>
+            </div>
+        `;
+
+        // Add styles if not already present
+        if (!document.getElementById('join-room-styles')) {
+            const style = document.createElement('style');
+            style.id = 'join-room-styles';
+            style.textContent = `
+                .join-room-modal { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; }
+                .join-room-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.5); }
+                .join-room-content { position: relative; background: var(--bg, #fff); padding: 20px; border-radius: 12px; max-width: 90%; width: 320px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+                .join-room-content h3 { margin: 0 0 10px; font-size: 18px; }
+                .join-room-content p { margin: 0 0 15px; font-size: 14px; opacity: 0.7; }
+                .join-room-content input { width: 100%; padding: 12px; border: 1px solid var(--border, #ccc); border-radius: 8px; font-size: 14px; box-sizing: border-box; }
+                .join-room-buttons { display: flex; gap: 10px; margin-top: 15px; justify-content: flex-end; }
+                .join-room-buttons button { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+                .join-room-buttons button.primary { background: var(--primary, #007bff); color: white; }
+            `;
+            document.head.appendChild(style);
+        }
+
+        document.body.appendChild(modal);
+
+        const input = modal.querySelector('#roomCodeInput');
+        const cancelBtn = modal.querySelector('#joinRoomCancel');
+        const submitBtn = modal.querySelector('#joinRoomSubmit');
+        const backdrop = modal.querySelector('.join-room-backdrop');
+
+        const close = () => modal.remove();
+
+        cancelBtn.onclick = close;
+        backdrop.onclick = close;
+
+        submitBtn.onclick = async () => {
+            const code = input.value;
+            if (code) {
+                const success = await this.joinWithCode(code);
+                if (success) close();
+            }
+        };
+
+        input.onkeydown = (e) => {
+            if (e.key === 'Enter') submitBtn.click();
+            if (e.key === 'Escape') close();
+        };
+
+        input.focus();
     },
 
     /**
