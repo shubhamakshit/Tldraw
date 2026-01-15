@@ -703,17 +703,18 @@ export const ColorRmSession = {
                             });
                             console.log(`[_uploadPageBlob] CapacitorHttp response status: ${response.status}`);
 
-                        if (response.status >= 200 && response.status < 300) {
-                            console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via CapacitorHttp`);
-                            success = true;
-                        } else {
-                            console.error(`[_uploadPageBlob] CapacitorHttp failed for ${pageId} with status ${response.status}:`, response.data);
-                        }
-                    } catch (capErr) {
-                        console.error(`[_uploadPageBlob] CapacitorHttp exception for ${pageId}:`, capErr);
-                        // If it's a protocol error,apiUrl is likely returning relative path
-                        if (capErr.message && capErr.message.includes('no protocol')) {
-                            console.error(`[_uploadPageBlob] CRITICAL: No protocol in URL: ${url}`);
+                            if (response.status >= 200 && response.status < 300) {
+                                console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via CapacitorHttp`);
+                                success = true;
+                            } else {
+                                console.error(`[_uploadPageBlob] CapacitorHttp failed for ${pageId} with status ${response.status}:`, response.data);
+                            }
+                        } catch (capErr) {
+                            console.error(`[_uploadPageBlob] CapacitorHttp exception for ${pageId}:`, capErr);
+                            // If it's a protocol error,apiUrl is likely returning relative path
+                            if (capErr.message && capErr.message.includes('no protocol')) {
+                                console.error(`[_uploadPageBlob] CRITICAL: No protocol in URL: ${url}`);
+                            }
                         }
                     }
                 } else {
