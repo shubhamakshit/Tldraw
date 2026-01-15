@@ -1401,9 +1401,11 @@ export class LiveSyncClient {
                 console.log(`[_fetchPageByIdWithRetry] Fetching page ${pageId} (hydrating: ${isHydrating}), attempt ${attempt}/${maxRetries}`);
 
                 const response = await fetch(url);
+                console.log(`[_fetchPageByIdWithRetry] Fetch response status: ${response.status} for page ${pageId}`);
 
                 if (response.ok) {
                     const blob = await response.blob();
+                    console.log(`[_fetchPageByIdWithRetry] Received blob for page ${pageId}: size=${blob.size} bytes, type=${blob.type}`);
 
                     // Validate blob
                     if (!blob || blob.size === 0) {
@@ -1612,7 +1614,7 @@ export class LiveSyncClient {
             console.log('[reconcilePageStructure] Already running, skipping.');
             return;
         }
-        
+
         // Skip if a local page operation is in progress
         if (this._isLocalPageOperation) {
             console.log('[reconcilePageStructure] Skipped - local page operation in progress');
@@ -1620,9 +1622,56 @@ export class LiveSyncClient {
         }
 
         this._isReconciling = true;
+
+        // Show non-obtrusive progress bar
+        this.app.ui.updateProgress(0, 'Syncing pages...');
+
         console.log('[reconcilePageStructure] Starting page structure reconciliation...');
 
         try {
+            // SPECIAL CASE: If base_file exists but page structure says 0 pages,
+            // the project has never been opened - simply import the PDF
+            const baseFileUrl = window.Config?.apiUrl(`/api/color_rm/base_file/${this.app.state.sessionId}`) ||
+                `/api/color_rm/base_file/${this.app.state.sessionId}`;
+
+            const baseFileResponse = await fetch(baseFileUrl);
+            if (baseFileResponse.ok && this.app.state.images.length === 0) {
+                console.log('[reconcilePageStructure] Base file exists but no pages in structure, importing PDF...');
+
+                // Fetch the base file
+                const baseBlob = await baseFileResponse.blob();
+
+                // Import the base file as PDF
+                await this.app.importBaseFile(baseBlob);
+
+                // Update UI
+                const pt = this.app.getElement('pageTotal');
+                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+                // Update page input max value to reflect new total
+                const pageInput = this.app.getElement('pageInput');
+                if (pageInput) {
+                    pageInput.max = this.app.state.images.length;
+                }
+
+                if (this.app.state.activeSideTab === 'pages') {
+                    this.app.renderPageSidebar();
+                }
+
+                // Reload current page if anything changed
+                if (this.app.state.images.length > 0) {
+                    this.app.invalidateCache();
+                    await this.app.loadPage(this.app.state.idx, false);
+                }
+
+                // Clear progress bar
+                this.app.ui.updateProgress(100, 'Sync complete');
+                setTimeout(() => this.app.ui.updateProgress(0, ''), 1000);
+
+                console.log(`[reconcilePageStructure] PDF import complete. Local pages: ${this.app.state.images.length}`);
+                return;
+            }
+
             // STEP 1: Get the page structure (this is the source of truth for ordering)
             const structureUrl = window.Config?.apiUrl(`/api/color_rm/page_structure/${this.app.state.sessionId}`) ||
                 `/api/color_rm/page_structure/${this.app.state.sessionId}`;
@@ -1631,6 +1680,24 @@ export class LiveSyncClient {
 
             if (!structureResponse.ok) {
                 console.log('[reconcilePageStructure] No structure file found, nothing to sync');
+
+                // Clear progress bar
+                this.app.ui.updateProgress(0, '');
+
+                // Update UI to reflect current page count even if no structure
+                const pt = this.app.getElement('pageTotal');
+                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+                // Update page input max value to reflect current total
+                const pageInput = this.app.getElement('pageInput');
+                if (pageInput) {
+                    pageInput.max = this.app.state.images.length;
+                }
+
+                if (this.app.state.activeSideTab === 'pages') {
+                    this.app.renderPageSidebar();
+                }
+
                 return;
             }
 
@@ -1643,6 +1710,10 @@ export class LiveSyncClient {
 
             if (remotePageIds.length === 0) {
                 console.log('[reconcilePageStructure] Empty structure, nothing to sync');
+
+                // Clear progress bar
+                this.app.ui.updateProgress(0, '');
+
                 return;
             }
 
@@ -1656,6 +1727,9 @@ export class LiveSyncClient {
             if (missingPageIds.length > 0) {
                 console.log(`[reconcilePageStructure] Missing ${missingPageIds.length} pages. Synchronizing...`);
 
+                // Update progress bar
+                this.app.ui.updateProgress(30, `Syncing ${missingPageIds.length} missing pages...`);
+
                 // Separate PDF pages from user pages
                 const missingPdfPages = missingPageIds.filter(pid => pid.startsWith('pdf_'));
                 const missingUserPages = missingPageIds.filter(pid => pid.startsWith('user_'));
@@ -1663,13 +1737,17 @@ export class LiveSyncClient {
                 // 1. PDF pages: render from base PDF
                 if (missingPdfPages.length > 0) {
                     console.log(`[reconcilePageStructure] Rendering ${missingPdfPages.length} PDF pages from base file...`);
+                    this.app.ui.updateProgress(40, `Rendering ${missingPdfPages.length} PDF pages...`);
                     await this._renderPdfPagesFromBase(missingPdfPages);
+
+                    // Update progress after PDF pages
+                    this.app.ui.updateProgress(60, `Syncing user pages...`);
                 }
 
                 // 2. User pages: fetch from R2
                 if (missingUserPages.length > 0) {
                     const currentIdx = this.app.state.idx;
-                    const pendingIdx = this._pendingPageIdx; 
+                    const pendingIdx = this._pendingPageIdx;
                     const targetPageId = remotePageIds[pendingIdx !== undefined ? pendingIdx : currentIdx];
 
                     // Sort: Target page first for faster response
@@ -1681,11 +1759,16 @@ export class LiveSyncClient {
 
                     let fetchedCount = 0;
                     const CONCURRENCY = 5;
-                    
+
                     for (let i = 0; i < missingUserPages.length; i += CONCURRENCY) {
                         const chunk = missingUserPages.slice(i, i + CONCURRENCY);
+
+                        // Update progress for each chunk
+                        const progressPercent = 60 + Math.floor((i / missingUserPages.length) * 30);
+                        this.app.ui.updateProgress(progressPercent, `Syncing pages ${i + 1}-${Math.min(i + CONCURRENCY, missingUserPages.length)} of ${missingUserPages.length}...`);
+
                         const results = await Promise.all(chunk.map(async pageId => {
-                            const targetIndex = this.app.state.images.length; 
+                            const targetIndex = this.app.state.images.length;
                             const meta = pageMetadata[pageId] || null;
                             return await this._fetchPageByIdWithRetry(pageId, targetIndex, 3, 1000, meta);
                         }));
@@ -1699,6 +1782,7 @@ export class LiveSyncClient {
             }
 
             // STEP 4: Reorder local pages to match remote structure
+            this.app.ui.updateProgress(90, 'Finalizing sync...');
             await this._reorderPagesToMatchStructure(remotePageIds);
 
             // STEP 5: Update UI
@@ -1715,9 +1799,30 @@ export class LiveSyncClient {
                 await this.app.loadPage(this.app.state.idx, false);
             }
 
+            // Final progress update
+            this.app.ui.updateProgress(100, 'Sync complete');
+            setTimeout(() => this.app.ui.updateProgress(0, ''), 1000);
+
+            // Update UI to reflect new page count
+            const pt = this.app.getElement('pageTotal');
+            if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+
+            // Update page input max value to reflect new total
+            const pageInput = this.app.getElement('pageInput');
+            if (pageInput) {
+                pageInput.max = this.app.state.images.length;
+            }
+
+            if (this.app.state.activeSideTab === 'pages') {
+                this.app.renderPageSidebar();
+            }
+
             console.log(`[reconcilePageStructure] Complete. Local pages: ${this.app.state.images.length}`);
         } catch (error) {
             console.error('[reconcilePageStructure] Error:', error);
+
+            // Clear progress bar on error
+            this.app.ui.updateProgress(0, '');
         } finally {
             this._isReconciling = false;
         }
@@ -1733,17 +1838,22 @@ export class LiveSyncClient {
             const baseUrl = window.Config?.apiUrl(`/api/color_rm/base_file/${this.app.state.sessionId}`) ||
                 `/api/color_rm/base_file/${this.app.state.sessionId}`;
 
+            console.log(`[_renderPdfPagesFromBase] Fetching base PDF from: ${baseUrl}`);
+
             const response = await fetch(baseUrl);
+            console.log(`[_renderPdfPagesFromBase] Fetch response status: ${response.status}`);
+
             if (!response.ok) {
                 console.error('[_renderPdfPagesFromBase] Failed to fetch base PDF');
                 return;
             }
 
             const blob = await response.blob();
+            console.log(`[_renderPdfPagesFromBase] Received blob: size=${blob.size} bytes, type=${blob.type}`);
 
             // Check if it's a PDF
             if (!blob.type.includes('pdf')) {
-                console.log('[_renderPdfPagesFromBase] Base file is not a PDF, treating as single image');
+                console.warn(`[_renderPdfPagesFromBase] Base file is not a PDF (type: ${blob.type}), treating as single image`);
                 // Handle single image base file
                 if (pdfPageIds.includes('pdf_0')) {
                     const pageObj = {
@@ -1761,14 +1871,32 @@ export class LiveSyncClient {
             }
 
             // Load PDF with pdf.js
+            console.log(`[_renderPdfPagesFromBase] Converting blob to arrayBuffer...`);
             const arrayBuffer = await blob.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            console.log(`[_renderPdfPagesFromBase] ArrayBuffer size: ${arrayBuffer.byteLength}, expected PDF size: ${blob.size}`);
+
+            try {
+                console.log(`[_renderPdfPagesFromBase] Loading PDF with pdf.js...`);
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                console.log(`[_renderPdfPagesFromBase] PDF loaded successfully, numPages: ${pdf.numPages}`);
+            } catch (pdfError) {
+                console.error(`[_renderPdfPagesFromBase] PDF loading failed:`, pdfError);
+                console.error(`[_renderPdfPagesFromBase] ArrayBuffer byte check - first 100 bytes:`,
+                    Array.from(new Uint8Array(arrayBuffer.slice(0, 100))).map(b => b.toString(16).padStart(2, '0')).join(' '));
+                console.error(`[_renderPdfPagesFromBase] Content type check:`, blob.type);
+                throw pdfError;
+            }
 
             console.log(`[_renderPdfPagesFromBase] PDF has ${pdf.numPages} pages, rendering ${pdfPageIds.length} missing pages in parallel`);
 
             const CONCURRENCY = 3;
             for (let i = 0; i < pdfPageIds.length; i += CONCURRENCY) {
                 const chunk = pdfPageIds.slice(i, i + CONCURRENCY);
+
+                // Update progress for each chunk
+                const progressPercent = 40 + Math.floor((i / pdfPageIds.length) * 20); // Distribute 20% across PDF rendering
+                this.app.ui.updateProgress(progressPercent, `Rendering PDF pages ${i + 1}-${Math.min(i + CONCURRENCY, pdfPageIds.length)} of ${pdfPageIds.length}...`);
+
                 await Promise.all(chunk.map(async (pageId) => {
                     // Extract page number from pageId (e.g., 'pdf_0' -> 0, 'pdf_5' -> 5)
                     const pageNum = parseInt(pageId.replace('pdf_', ''), 10);

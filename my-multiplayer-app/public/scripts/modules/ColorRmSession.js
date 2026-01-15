@@ -644,28 +644,36 @@ export const ColorRmSession = {
 
                 if (isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
                     console.log(`[_uploadPageBlob] Using native CapacitorHttp for upload to: ${url}`);
-                    
-                    // Recommended by Capacitor docs for complex types: serialize to base64
+                    console.log(`[_uploadPageBlob] Blob size: ${blob.size} bytes, type: ${blob.type}`);
+
+                    // Convert blob to base64 for CapacitorHttp
                     const base64Data = await new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onloadend = () => {
+                            // Extract base64 data after the data URL prefix
                             const base64 = reader.result.split(',')[1];
+                            console.log(`[_uploadPageBlob] Base64 data length: ${base64.length}, expected: ~${Math.ceil(blob.size * 4 / 3)}`);
                             resolve(base64);
                         };
-                        reader.onerror = reject;
+                        reader.onerror = (error) => {
+                            console.error(`[_uploadPageBlob] FileReader error:`, error);
+                            reject(error);
+                        };
                         reader.readAsDataURL(blob);
                     });
 
                     try {
+                        console.log(`[_uploadPageBlob] Sending POST request via CapacitorHttp`);
                         const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                             url: url,
                             method: 'POST',
                             data: base64Data,
                             headers: {
-                                'Content-Type': blob.type || 'image/jpeg',
+                                'Content-Type': blob.type || 'application/octet-stream', // More generic content type
                                 'x-project-name': encodeURIComponent(this.state.projectName)
                             }
                         });
+                        console.log(`[_uploadPageBlob] CapacitorHttp response status: ${response.status}`);
 
                         if (response.status >= 200 && response.status < 300) {
                             console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via CapacitorHttp`);
@@ -1507,29 +1515,41 @@ export const ColorRmSession = {
                 
                 if (isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
                     console.log('ColorRM Sync: Using CapacitorHttp for base file upload');
+                    console.log(`ColorRM Sync: File size: ${files[0].size} bytes, type: ${files[0].type}`);
+
                     // Convert to base64 for CapacitorHttp compatibility
                     const base64Data = await new Promise((resolve, reject) => {
                         const reader = new FileReader();
-                        reader.onloadend = () => resolve(reader.result.split(',')[1]);
-                        reader.onerror = reject;
+                        reader.onloadend = () => {
+                            // Extract base64 data after the data URL prefix
+                            const base64 = reader.result.split(',')[1];
+                            console.log(`ColorRM Sync: Base64 data length: ${base64.length}, expected size: ~${Math.ceil(files[0].size * 4 / 3)}`);
+                            resolve(base64);
+                        };
+                        reader.onerror = (error) => {
+                            console.error('ColorRM Sync: FileReader error:', error);
+                            reject(error);
+                        };
                         reader.readAsDataURL(files[0]);
                     });
 
+                    console.log(`ColorRM Sync: Sending POST request to ${url}`);
                     const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                         url: url,
                         method: 'POST',
-                        data: base64Data,
+                        data: base64Data, // Send just the base64 string
                         headers: {
-                            'Content-Type': files[0].type,
+                            'Content-Type': files[0].type || 'application/octet-stream',
                             'x-project-name': encodeURIComponent(pName)
                         }
                     });
-                    
+                    console.log(`ColorRM Sync: CapacitorHttp response status: ${response.status}`);
+
                     // Map Capacitor response to fetch-like object
                     uploadRes = {
                         ok: response.status >= 200 && response.status < 300,
                         status: response.status,
-                        text: async () => JSON.stringify(response.data)
+                        text: async () => response.data ? JSON.stringify(response.data) : ''
                     };
                 } else {
                     // Standard Web fetch
@@ -1865,17 +1885,55 @@ export const ColorRmSession = {
         if (this.state.images.length > 0 && this.state.images[0].blob) {
             this.ui.showToast("Re-uploading base...");
             try {
-                // Convert to ArrayBuffer for Android Capacitor compatibility
-                const blobBuffer = await this.state.images[0].blob.arrayBuffer();
-                await fetch(window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`, {
-                    method: 'POST',
-                    body: blobBuffer,
-                    headers: {
-                        'Content-Type': this.state.images[0].blob.type
+                const url = window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`;
+                const isCapacitorNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+
+                if (isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
+                    // Convert to base64 for CapacitorHttp compatibility
+                    const base64Data = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            // Extract base64 data after the data URL prefix
+                            const base64 = reader.result.split(',')[1];
+                            resolve(base64);
+                        };
+                        reader.onerror = reject;
+                        reader.readAsDataURL(this.state.images[0].blob);
+                    });
+
+                    const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                        url: url,
+                        method: 'POST',
+                        data: base64Data,
+                        headers: {
+                            'Content-Type': this.state.images[0].blob.type || 'application/octet-stream'
+                        }
+                    });
+
+                    if (response.status >= 200 && response.status < 300) {
+                        this.ui.showToast("Base file restored!");
+                    } else {
+                        throw new Error(`Upload failed with status: ${response.status}`);
                     }
-                });
-                this.ui.showToast("Base file restored!");
+                } else {
+                    // Standard Web fetch
+                    const blobBuffer = await this.state.images[0].blob.arrayBuffer();
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        body: blobBuffer,
+                        headers: {
+                            'Content-Type': this.state.images[0].blob.type
+                        }
+                    });
+
+                    if (response.ok) {
+                        this.ui.showToast("Base file restored!");
+                    } else {
+                        throw new Error(`Upload failed with status: ${response.status}`);
+                    }
+                }
             } catch (e) {
+                console.error('Reupload base file error:', e);
                 this.ui.showToast("Restore failed");
             }
         } else {
