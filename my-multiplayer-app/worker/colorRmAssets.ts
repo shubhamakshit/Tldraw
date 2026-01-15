@@ -23,7 +23,7 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
         const contentType = request.headers.get('content-type') || '';
         let finalData: ArrayBuffer;
 
-        // If content type is application/json, it might contain base64 data
+        // If content type is application/json, it might contain base64 data from CapacitorHttp
         if (contentType.includes('application/json')) {
             // Parse the JSON to see if it contains base64 data
             const decoder = new TextDecoder();
@@ -31,7 +31,7 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
             try {
                 const jsonData = JSON.parse(jsonString);
 
-                // Check if the JSON has a 'data' field with base64 content
+                // Check if the JSON has a 'data' field with base64 content (common CapacitorHttp format)
                 if (jsonData.data && typeof jsonData.data === 'string') {
                     // Assume it's base64 encoded, decode it
                     console.log(`[handleColorRmUpload] Detected base64 data in JSON, decoding...`);
