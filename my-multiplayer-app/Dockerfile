@@ -27,4 +27,4 @@ EXPOSE 7860
 # Run disk check, init, restore, then start dev server, backup worker, and PDF convert server concurrently
 #CMD ["sh", "-c", "df -h && node cmd/hf_init.mjs && node cmd/hf_restore.mjs && npx concurrently \"npm run dev\" \"node cmd/hf_backup.mjs\" \"node cmd/pdf_convert_server.mjs\""]
 
-CMD ["sh", "-c", "df -h &&  \"npm run dev\" "]
+CMD ["sh", "-c", "df -h &&  npx concurrently \"npm run dev\" "]
