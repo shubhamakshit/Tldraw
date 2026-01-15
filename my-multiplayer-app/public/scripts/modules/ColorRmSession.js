@@ -637,9 +637,13 @@ export const ColorRmSession = {
             const url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${pageId}`)
                      || `/api/color_rm/page/${this.state.sessionId}/${pageId}`;
 
+            // Convert blob to ArrayBuffer for Android Capacitor compatibility
+            // Android WebView can fail silently when sending Blob directly
+            const arrayBuffer = await blob.arrayBuffer();
+
             const res = await fetch(url, {
                 method: 'POST',
-                body: blob,
+                body: arrayBuffer,
                 headers: {
                     'Content-Type': blob.type || 'image/jpeg',
                     'x-project-name': encodeURIComponent(this.state.projectName)
@@ -1374,9 +1378,11 @@ export const ColorRmSession = {
             console.log('ColorRM Sync: Uploading base file to server for ID:', this.state.sessionId);
             this.ui.toggleLoader(true, "Uploading to server...");
             try {
+                // Convert to ArrayBuffer for Android Capacitor compatibility
+                const fileBuffer = await files[0].arrayBuffer();
                 const uploadRes = await fetch(window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`, {
                     method: 'POST',
-                    body: files[0],
+                    body: fileBuffer,
                     headers: {
                         'Content-Type': files[0].type,
                         'x-project-name': encodeURIComponent(pName)
@@ -1701,9 +1707,11 @@ export const ColorRmSession = {
         if (this.state.images.length > 0 && this.state.images[0].blob) {
             this.ui.showToast("Re-uploading base...");
             try {
+                // Convert to ArrayBuffer for Android Capacitor compatibility
+                const blobBuffer = await this.state.images[0].blob.arrayBuffer();
                 await fetch(window.Config?.apiUrl(`/api/color_rm/upload/${this.state.sessionId}`) || `/api/color_rm/upload/${this.state.sessionId}`, {
                     method: 'POST',
-                    body: this.state.images[0].blob,
+                    body: blobBuffer,
                     headers: {
                         'Content-Type': this.state.images[0].blob.type
                     }
