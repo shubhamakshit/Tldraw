@@ -634,31 +634,46 @@ export const ColorRmSession = {
             console.log(`[_uploadPageBlob] Uploading page ${pageId}, size: ${blob.size} bytes`);
 
             // Use new UUID-based endpoint
-            const url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${pageId}`)
-                     || `/api/color_rm/page/${this.state.sessionId}/${pageId}`;
+            const url = window.Config?.apiUrl(`/api/color_rm/page/${this.app.state.sessionId}/${pageId}`)
+                     || `/api/color_rm/page/${this.app.state.sessionId}/${pageId}`;
 
-            // Convert blob to ArrayBuffer for Android Capacitor compatibility
-            // Android WebView can fail silently when sending Blob directly
+            // Convert blob to Uint8Array for maximum compatibility with Capacitor/Android
             const arrayBuffer = await blob.arrayBuffer();
+            const body = new Uint8Array(arrayBuffer);
 
-            const res = await fetch(url, {
-                method: 'POST',
-                body: arrayBuffer,
-                headers: {
-                    'Content-Type': blob.type || 'image/jpeg',
-                    'x-project-name': encodeURIComponent(this.state.projectName)
-                }
+            // Use XMLHttpRequest for better reliability on Android Capacitor with binary data
+            return new Promise((resolve) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', url, true);
+                
+                xhr.setRequestHeader('Content-Type', blob.type || 'image/jpeg');
+                xhr.setRequestHeader('x-project-name', encodeURIComponent(this.state.projectName));
+
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId}`);
+                        resolve(true);
+                    } else {
+                        console.error(`[_uploadPageBlob] Upload failed for ${pageId} with status ${xhr.status}:`, xhr.responseText);
+                        resolve(false);
+                    }
+                };
+
+                xhr.onerror = (err) => {
+                    console.error(`[_uploadPageBlob] XHR Error uploading page ${pageId}:`, err);
+                    resolve(false);
+                };
+
+                xhr.ontimeout = () => {
+                    console.error(`[_uploadPageBlob] Timeout uploading page ${pageId}`);
+                    resolve(false);
+                };
+
+                // Send the binary data
+                xhr.send(body);
             });
-
-            if (!res.ok) {
-                const errText = await res.text();
-                console.error(`[_uploadPageBlob] Upload failed for ${pageId}:`, errText);
-                return false;
-            }
-            console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId}`);
-            return true;
         } catch (err) {
-            console.error(`[_uploadPageBlob] Error uploading page ${pageId}:`, err);
+            console.error(`[_uploadPageBlob] Critical error in _uploadPageBlob for ${pageId}:`, err);
             return false;
         }
     },
@@ -1823,38 +1838,68 @@ export const ColorRmSession = {
     },
 
     /**
-     * Join a room using a room code
-     * Code format: [beta-]userId-projectId
+     * Join a room using a room code or URL
+     * Code format: [beta-]userId-projectId OR URL
      */
-    async joinWithCode(code) {
-        if (!code || typeof code !== 'string') {
-            this.ui.showToast("Invalid room code");
+    async joinWithCode(input) {
+        if (!input || typeof input !== 'string') {
+            this.ui.showToast("Invalid input");
             return false;
         }
 
-        code = code.trim();
-
-        // Parse the room code
+        let code = input.trim();
         let isBeta = false;
         let ownerId, projectId;
 
-        if (code.startsWith('beta-')) {
-            isBeta = true;
-            const parts = code.substring(5).split('-');
-            if (parts.length < 2) {
-                this.ui.showToast("Invalid room code format");
-                return false;
+        // Check if input is a URL (contains /color_rm/)
+        if (code.includes('/color_rm/')) {
+            try {
+                // Extract hash part
+                const hashIndex = code.indexOf('#');
+                let hash = hashIndex !== -1 ? code.substring(hashIndex) : code;
+                
+                // Match regex: #/(beta/)?color_rm/([^/]+)/([^/?]+)
+                const match = hash.match(/#\/?(beta\/)?color_rm\/([^\/]+)\/([^\/?]+)/);
+                
+                if (match) {
+                    isBeta = !!match[1];
+                    ownerId = match[2];
+                    projectId = match[3];
+                } else {
+                    // Fallback: split by /
+                    const parts = hash.split('/');
+                    const idx = parts.indexOf('color_rm');
+                    if (idx !== -1 && parts.length > idx + 2) {
+                        isBeta = parts[idx-1] === 'beta';
+                        ownerId = parts[idx+1];
+                        projectId = parts[idx+2];
+                    }
+                }
+            } catch (e) {
+                console.warn("Failed to parse URL:", e);
             }
-            ownerId = parts[0];
-            projectId = parts.slice(1).join('-'); // Project ID might contain dashes
-        } else {
-            const parts = code.split('-');
-            if (parts.length < 2) {
-                this.ui.showToast("Invalid room code format");
-                return false;
+        }
+
+        // If URL parsing failed or input wasn't a URL, try room code format
+        if (!ownerId || !projectId) {
+            if (code.startsWith('beta-')) {
+                isBeta = true;
+                const parts = code.substring(5).split('-');
+                if (parts.length < 2) {
+                    this.ui.showToast("Invalid room code format");
+                    return false;
+                }
+                ownerId = parts[0];
+                projectId = parts.slice(1).join('-'); 
+            } else {
+                const parts = code.split('-');
+                if (parts.length < 2) {
+                    this.ui.showToast("Invalid room code format");
+                    return false;
+                }
+                ownerId = parts[0];
+                projectId = parts.slice(1).join('-');
             }
-            ownerId = parts[0];
-            projectId = parts.slice(1).join('-');
         }
 
         // Navigate to the room with force reload
