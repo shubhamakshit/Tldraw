@@ -1873,6 +1873,19 @@ export class LiveSyncClient {
             console.log(`[_renderPdfPagesFromBase] ArrayBuffer size: ${arrayBuffer.byteLength}, expected PDF size: ${blob.size}`);
 
             try {
+                // Check the first few bytes to see if it's a valid PDF header
+                const headerBytes = Array.from(new Uint8Array(arrayBuffer.slice(0, 8)));
+                const headerHex = headerBytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
+                const headerAscii = String.fromCharCode(...headerBytes);
+
+                console.log(`[_renderPdfPagesFromBase] PDF header check: ${headerHex} ('${headerAscii}')`);
+
+                // Valid PDF header should start with %PDF-
+                if (!headerAscii.startsWith('%PDF-')) {
+                    console.error(`[_renderPdfPagesFromBase] ERROR: Invalid PDF header! Expected '%PDF-', got '${headerAscii}'`);
+                    console.error(`[_renderPdfPagesFromBase] Full header bytes:`, headerHex);
+                }
+
                 console.log(`[_renderPdfPagesFromBase] Loading PDF with pdf.js...`);
                 const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
                 console.log(`[_renderPdfPagesFromBase] PDF loaded successfully, numPages: ${pdf.numPages}`);
@@ -1881,6 +1894,13 @@ export class LiveSyncClient {
                 console.error(`[_renderPdfPagesFromBase] ArrayBuffer byte check - first 100 bytes:`,
                     Array.from(new Uint8Array(arrayBuffer.slice(0, 100))).map(b => b.toString(16).padStart(2, '0')).join(' '));
                 console.error(`[_renderPdfPagesFromBase] Content type check:`, blob.type);
+
+                // Additional debugging for PDF header
+                const headerBytes = Array.from(new Uint8Array(arrayBuffer.slice(0, 8)));
+                const headerHex = headerBytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
+                const headerAscii = String.fromCharCode(...headerBytes);
+                console.error(`[_renderPdfPagesFromBase] Actual PDF header: ${headerHex} ('${headerAscii}')`);
+
                 throw pdfError;
             }
 
