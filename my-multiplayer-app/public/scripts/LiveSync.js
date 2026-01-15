@@ -2337,14 +2337,26 @@ export class LiveSyncClient {
         }
     }
 
-    // Notify other users about page navigation (debounced)
+    // Notify other users about page navigation (smart debounced)
+    // When user is rapidly flipping pages, we wait until they stop
     notifyPageNavigation(pageIdx) {
-        // Debounce to prevent flooding during rapid page flipping
+        // Mark that we're in a page flip session
+        this._isFlippingPages = true;
+        this._pendingPageIdx = pageIdx;
+
+        // Show visual feedback that we're flipping (dim canvas)
+        this._showFlippingFeedback(true);
+
+        // Debounce - only notify after user stops flipping for 600ms
         if (this._pageNavDebounceTimer) {
             clearTimeout(this._pageNavDebounceTimer);
         }
 
         this._pageNavDebounceTimer = setTimeout(() => {
+            // Page flipping stopped - send final page
+            this._isFlippingPages = false;
+            this._showFlippingFeedback(false);
+
             // Beta mode: Update presence and sync page history
             if (this.useBetaSync) {
                 // Mark time to prevent echo-back from other users
@@ -2352,7 +2364,7 @@ export class LiveSyncClient {
                 this._sendYjsPresence();
                 // Also sync current page history so other clients see our page
                 this._sendYjsUpdate();
-                console.log(`[Yjs] Page navigation: ${pageIdx}`);
+                console.log(`[Yjs] Page navigation complete: ${pageIdx}`);
                 return;
             }
 
@@ -2369,7 +2381,23 @@ export class LiveSyncClient {
             if (this.room) {
                 this.room.updatePresence({ pageIdx: pageIdx });
             }
-        }, 150); // 150ms debounce for page navigation
+        }, 600); // 600ms debounce - wait for rapid flipping to stop
+    }
+
+    // Visual feedback when user is rapidly flipping pages
+    _showFlippingFeedback(show) {
+        const canvas = this.app.getElement('canvas');
+        if (!canvas) return;
+
+        if (show) {
+            // Dim canvas slightly but keep content visible
+            canvas.style.transition = 'opacity 0.1s ease';
+            canvas.style.opacity = '0.7';
+        } else {
+            // Restore full opacity
+            canvas.style.transition = 'opacity 0.2s ease';
+            canvas.style.opacity = '1';
+        }
     }
 
     // Handle page structure change notifications from other users (debounced)
