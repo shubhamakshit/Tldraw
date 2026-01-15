@@ -16,8 +16,50 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
     const projectName = request.headers.get('x-project-name') ? decodeURIComponent(request.headers.get('x-project-name')!) : 'ColorRM Project'
 
     try {
-        console.log(`[handleColorRmUpload] Storing base file to R2: ${objectKey}, project: ${projectName}`);
-        await env.TLDRAW_BUCKET.put(objectKey, request.body, {
+        // Get the raw body data
+        let bodyData = await request.arrayBuffer();
+
+        // Check if the content type suggests it might be base64 encoded data
+        const contentType = request.headers.get('content-type') || '';
+        let finalData: ArrayBuffer;
+
+        // If content type is application/json, it might contain base64 data
+        if (contentType.includes('application/json')) {
+            // Parse the JSON to see if it contains base64 data
+            const decoder = new TextDecoder();
+            const jsonString = decoder.decode(bodyData);
+            try {
+                const jsonData = JSON.parse(jsonString);
+
+                // Check if the JSON has a 'data' field with base64 content
+                if (jsonData.data && typeof jsonData.data === 'string') {
+                    // Assume it's base64 encoded, decode it
+                    console.log(`[handleColorRmUpload] Detected base64 data in JSON, decoding...`);
+                    const base64String = jsonData.data;
+
+                    // Decode base64 to binary
+                    const binaryString = atob(base64String);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    finalData = bytes.buffer;
+                } else {
+                    // If not base64, use the original body
+                    finalData = bodyData;
+                }
+            } catch (parseError) {
+                // If JSON parsing fails, use the original body
+                console.log(`[handleColorRmUpload] Could not parse JSON, using raw data: ${parseError}`);
+                finalData = bodyData;
+            }
+        } else {
+            // For non-JSON content types, use the original body
+            finalData = bodyData;
+        }
+
+        console.log(`[handleColorRmUpload] Storing base file to R2: ${objectKey}, project: ${projectName}, size: ${finalData.byteLength} bytes`);
+        await env.TLDRAW_BUCKET.put(objectKey, finalData, {
             httpMetadata: request.headers,
             customMetadata: { name: projectName }
         })
@@ -103,11 +145,53 @@ export async function handleColorRmPageUpload(request: IRequest, env: Env) {
     const projectName = request.headers.get('x-project-name') ? decodeURIComponent(request.headers.get('x-project-name')!) : 'ColorRM Project'
 
     try {
-        await env.TLDRAW_BUCKET.put(objectKey, request.body, {
+        // Get the raw body data
+        let bodyData = await request.arrayBuffer();
+
+        // Check if the content type suggests it might be base64 encoded data
+        const contentType = request.headers.get('content-type') || '';
+        let finalData: ArrayBuffer;
+
+        // If content type is application/json, it might contain base64 data
+        if (contentType.includes('application/json')) {
+            // Parse the JSON to see if it contains base64 data
+            const decoder = new TextDecoder();
+            const jsonString = decoder.decode(bodyData);
+            try {
+                const jsonData = JSON.parse(jsonString);
+
+                // Check if the JSON has a 'data' field with base64 content
+                if (jsonData.data && typeof jsonData.data === 'string') {
+                    // Assume it's base64 encoded, decode it
+                    console.log(`[PageUpload] Detected base64 data in JSON, decoding...`);
+                    const base64String = jsonData.data;
+
+                    // Decode base64 to binary
+                    const binaryString = atob(base64String);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    finalData = bytes.buffer;
+                } else {
+                    // If not base64, use the original body
+                    finalData = bodyData;
+                }
+            } catch (parseError) {
+                // If JSON parsing fails, use the original body
+                console.log(`[PageUpload] Could not parse JSON, using raw data: ${parseError}`);
+                finalData = bodyData;
+            }
+        } else {
+            // For non-JSON content types, use the original body
+            finalData = bodyData;
+        }
+
+        await env.TLDRAW_BUCKET.put(objectKey, finalData, {
             httpMetadata: request.headers,
             customMetadata: { name: projectName, pageId: pageId }
         })
-        console.log(`[PageUpload] Stored page: ${objectKey}`)
+        console.log(`[PageUpload] Stored page: ${objectKey}, size: ${finalData.byteLength} bytes`)
         return new Response('Page upload successful', { status: 200 })
     } catch (e: any) {
         console.error('Error uploading color_rm page file:', e)
