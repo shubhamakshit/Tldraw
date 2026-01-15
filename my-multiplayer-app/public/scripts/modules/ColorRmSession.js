@@ -646,34 +646,62 @@ export const ColorRmSession = {
                     console.log(`[_uploadPageBlob] Using native CapacitorHttp for upload to: ${url}`);
                     console.log(`[_uploadPageBlob] Blob size: ${blob.size} bytes, type: ${blob.type}`);
 
-                    // Convert blob to base64 for CapacitorHttp
-                    const base64Data = await new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                            // Extract base64 data after the data URL prefix
-                            const base64 = reader.result.split(',')[1];
-                            console.log(`[_uploadPageBlob] Base64 data length: ${base64.length}, expected: ~${Math.ceil(blob.size * 4 / 3)}`);
-                            resolve(base64);
-                        };
-                        reader.onerror = (error) => {
-                            console.error(`[_uploadPageBlob] FileReader error:`, error);
-                            reject(error);
-                        };
-                        reader.readAsDataURL(blob);
-                    });
+                    // Check if CapacitorHttp patching is enabled
+                    const isPatchingEnabled = window.CapacitorHttp && typeof fetch !== 'undefined' && fetch.__capacitorHttpFetch;
 
-                    try {
-                        console.log(`[_uploadPageBlob] Sending POST request via CapacitorHttp`);
-                        const response = await window.Capacitor.Plugins.CapacitorHttp.request({
-                            url: url,
-                            method: 'POST',
-                            data: base64Data,
-                            headers: {
-                                'Content-Type': blob.type || 'application/octet-stream', // More generic content type
-                                'x-project-name': encodeURIComponent(this.state.projectName)
+                    if (isPatchingEnabled) {
+                        // Use patched fetch which can handle binary data properly
+                        console.log('[_uploadPageBlob] Using patched fetch for binary upload');
+                        const blobBuffer = await blob.arrayBuffer();
+
+                        try {
+                            const response = await fetch(url, {
+                                method: 'POST',
+                                body: blobBuffer,
+                                headers: {
+                                    'Content-Type': blob.type || 'application/octet-stream',
+                                    'x-project-name': encodeURIComponent(this.state.projectName)
+                                }
+                            });
+
+                            if (response.ok) {
+                                console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via patched fetch`);
+                                success = true;
+                            } else {
+                                console.error(`[_uploadPageBlob] Patched fetch failed for ${pageId} with status ${response.status}:`, await response.text());
                             }
+                        } catch (fetchErr) {
+                            console.error(`[_uploadPageBlob] Patched fetch error for ${pageId}:`, fetchErr);
+                        }
+                    } else {
+                        // Convert blob to base64 for CapacitorHttp
+                        const base64Data = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                // Extract base64 data after the data URL prefix
+                                const base64 = reader.result.split(',')[1];
+                                console.log(`[_uploadPageBlob] Base64 data length: ${base64.length}, expected: ~${Math.ceil(blob.size * 4 / 3)}`);
+                                resolve(base64);
+                            };
+                            reader.onerror = (error) => {
+                                console.error(`[_uploadPageBlob] FileReader error:`, error);
+                                reject(error);
+                            };
+                            reader.readAsDataURL(blob);
                         });
-                        console.log(`[_uploadPageBlob] CapacitorHttp response status: ${response.status}`);
+
+                        try {
+                            console.log(`[_uploadPageBlob] Sending POST request via CapacitorHttp`);
+                            const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                                url: url,
+                                method: 'POST',
+                                data: base64Data,
+                                headers: {
+                                    'Content-Type': blob.type || 'application/octet-stream', // More generic content type
+                                    'x-project-name': encodeURIComponent(this.state.projectName)
+                                }
+                            });
+                            console.log(`[_uploadPageBlob] CapacitorHttp response status: ${response.status}`);
 
                         if (response.status >= 200 && response.status < 300) {
                             console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via CapacitorHttp`);
@@ -1517,40 +1545,59 @@ export const ColorRmSession = {
                     console.log('ColorRM Sync: Using CapacitorHttp for base file upload');
                     console.log(`ColorRM Sync: File size: ${files[0].size} bytes, type: ${files[0].type}`);
 
-                    // Convert to base64 for CapacitorHttp compatibility
-                    const base64Data = await new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                            // Extract base64 data after the data URL prefix
-                            const base64 = reader.result.split(',')[1];
-                            console.log(`ColorRM Sync: Base64 data length: ${base64.length}, expected size: ~${Math.ceil(files[0].size * 4 / 3)}`);
-                            resolve(base64);
-                        };
-                        reader.onerror = (error) => {
-                            console.error('ColorRM Sync: FileReader error:', error);
-                            reject(error);
-                        };
-                        reader.readAsDataURL(files[0]);
-                    });
+                    // For Capacitor, we need to send the raw ArrayBuffer, not base64, when possible
+                    // Check if CapacitorHttp patching is enabled
+                    const isPatchingEnabled = window.CapacitorHttp && typeof fetch !== 'undefined' && fetch.__capacitorHttpFetch;
 
-                    console.log(`ColorRM Sync: Sending POST request to ${url}`);
-                    const response = await window.Capacitor.Plugins.CapacitorHttp.request({
-                        url: url,
-                        method: 'POST',
-                        data: base64Data, // Send just the base64 string
-                        headers: {
-                            'Content-Type': files[0].type || 'application/octet-stream',
-                            'x-project-name': encodeURIComponent(pName)
-                        }
-                    });
-                    console.log(`ColorRM Sync: CapacitorHttp response status: ${response.status}`);
+                    if (isPatchingEnabled) {
+                        // Use patched fetch which can handle binary data properly
+                        console.log('ColorRM Sync: Using patched fetch for binary upload');
+                        const fileBuffer = await files[0].arrayBuffer();
 
-                    // Map Capacitor response to fetch-like object
-                    uploadRes = {
-                        ok: response.status >= 200 && response.status < 300,
-                        status: response.status,
-                        text: async () => response.data ? JSON.stringify(response.data) : ''
-                    };
+                        uploadRes = await fetch(url, {
+                            method: 'POST',
+                            body: fileBuffer,
+                            headers: {
+                                'Content-Type': files[0].type || 'application/octet-stream',
+                                'x-project-name': encodeURIComponent(pName)
+                            }
+                        });
+                    } else {
+                        // Fallback to base64 encoding for CapacitorHttp.request
+                        const base64Data = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                // Extract base64 data after the data URL prefix
+                                const base64 = reader.result.split(',')[1];
+                                console.log(`ColorRM Sync: Base64 data length: ${base64.length}, expected size: ~${Math.ceil(files[0].size * 4 / 3)}`);
+                                resolve(base64);
+                            };
+                            reader.onerror = (error) => {
+                                console.error('ColorRM Sync: FileReader error:', error);
+                                reject(error);
+                            };
+                            reader.readAsDataURL(files[0]);
+                        });
+
+                        console.log(`ColorRM Sync: Sending POST request to ${url}`);
+                        const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                            url: url,
+                            method: 'POST',
+                            data: base64Data, // Send just the base64 string
+                            headers: {
+                                'Content-Type': files[0].type || 'application/octet-stream',
+                                'x-project-name': encodeURIComponent(pName)
+                            }
+                        });
+                        console.log(`ColorRM Sync: CapacitorHttp response status: ${response.status}`);
+
+                        // Map Capacitor response to fetch-like object
+                        uploadRes = {
+                            ok: response.status >= 200 && response.status < 300,
+                            status: response.status,
+                            text: async () => response.data ? JSON.stringify(response.data) : ''
+                        };
+                    }
                 } else {
                     // Standard Web fetch
                     const fileBuffer = await files[0].arrayBuffer();
@@ -1889,31 +1936,54 @@ export const ColorRmSession = {
                 const isCapacitorNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
 
                 if (isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
-                    // Convert to base64 for CapacitorHttp compatibility
-                    const base64Data = await new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                            // Extract base64 data after the data URL prefix
-                            const base64 = reader.result.split(',')[1];
-                            resolve(base64);
-                        };
-                        reader.onerror = reject;
-                        reader.readAsDataURL(this.state.images[0].blob);
-                    });
+                    // Check if CapacitorHttp patching is enabled
+                    const isPatchingEnabled = window.CapacitorHttp && typeof fetch !== 'undefined' && fetch.__capacitorHttpFetch;
 
-                    const response = await window.Capacitor.Plugins.CapacitorHttp.request({
-                        url: url,
-                        method: 'POST',
-                        data: base64Data,
-                        headers: {
-                            'Content-Type': this.state.images[0].blob.type || 'application/octet-stream'
+                    if (isPatchingEnabled) {
+                        // Use patched fetch which can handle binary data properly
+                        console.log('Reupload: Using patched fetch for binary upload');
+                        const blobBuffer = await this.state.images[0].blob.arrayBuffer();
+
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            body: blobBuffer,
+                            headers: {
+                                'Content-Type': this.state.images[0].blob.type || 'application/octet-stream'
+                            }
+                        });
+
+                        if (response.ok) {
+                            this.ui.showToast("Base file restored!");
+                        } else {
+                            throw new Error(`Upload failed with status: ${response.status}`);
                         }
-                    });
-
-                    if (response.status >= 200 && response.status < 300) {
-                        this.ui.showToast("Base file restored!");
                     } else {
-                        throw new Error(`Upload failed with status: ${response.status}`);
+                        // Fallback to base64 encoding for CapacitorHttp.request
+                        const base64Data = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                // Extract base64 data after the data URL prefix
+                                const base64 = reader.result.split(',')[1];
+                                resolve(base64);
+                            };
+                            reader.onerror = reject;
+                            reader.readAsDataURL(this.state.images[0].blob);
+                        });
+
+                        const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                            url: url,
+                            method: 'POST',
+                            data: base64Data,
+                            headers: {
+                                'Content-Type': this.state.images[0].blob.type || 'application/octet-stream'
+                            }
+                        });
+
+                        if (response.status >= 200 && response.status < 300) {
+                            this.ui.showToast("Base file restored!");
+                        } else {
+                            throw new Error(`Upload failed with status: ${response.status}`);
+                        }
                     }
                 } else {
                     // Standard Web fetch
