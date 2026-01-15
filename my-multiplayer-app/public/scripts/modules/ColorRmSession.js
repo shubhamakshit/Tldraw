@@ -621,61 +621,109 @@ export const ColorRmSession = {
      * @param {Blob} blob - The image blob to upload
      * @returns {boolean} True if upload succeeded or skipped (non-collaborative)
      */
-    async _uploadPageBlob(pageId, blob) {
+    async _uploadPageBlob(pageId, blob, retries = 3) {
         if (!this.config.collaborative || !this.state.ownerId) return true;
 
-        try {
-            // Validate blob before upload
-            if (!blob || blob.size === 0) {
-                console.error('[_uploadPageBlob] Invalid blob - empty or null');
-                return false;
-            }
+        const isCapacitorNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
 
-            console.log(`[_uploadPageBlob] Uploading page ${pageId}, size: ${blob.size} bytes`);
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                // Validate blob before upload
+                if (!blob || blob.size === 0) {
+                    console.error('[_uploadPageBlob] Invalid blob - empty or null');
+                    return false;
+                }
 
-            // Use new UUID-based endpoint
-            const url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${pageId}`)
-                     || `/api/color_rm/page/${this.state.sessionId}/${pageId}`;
+                console.log(`[_uploadPageBlob] Uploading page ${pageId}, size: ${blob.size} bytes (attempt ${attempt}/${retries})`);
 
-            // Convert blob to Uint8Array for maximum compatibility with Capacitor/Android
-            const arrayBuffer = await blob.arrayBuffer();
-            const body = new Uint8Array(arrayBuffer);
+                // Use new UUID-based endpoint
+                const url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${pageId}`)
+                         || `/api/color_rm/page/${this.state.sessionId}/${pageId}`;
 
-            // Use XMLHttpRequest for better reliability on Android Capacitor with binary data
-            return new Promise((resolve) => {
-                const xhr = new XMLHttpRequest();
-                xhr.open('POST', url, true);
-                
-                xhr.setRequestHeader('Content-Type', blob.type || 'image/jpeg');
-                xhr.setRequestHeader('x-project-name', encodeURIComponent(this.state.projectName));
+                let success = false;
 
-                xhr.onload = () => {
-                    if (xhr.status >= 200 && xhr.status < 300) {
-                        console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId}`);
-                        resolve(true);
+                if (isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
+                    console.log(`[_uploadPageBlob] Using native CapacitorHttp for upload`);
+                    
+                    // Recommended by Capacitor docs for complex types: serialize to base64
+                    const base64Data = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            const base64 = reader.result.split(',')[1];
+                            resolve(base64);
+                        };
+                        reader.onerror = reject;
+                        reader.readAsDataURL(blob);
+                    });
+
+                    const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                        url: url,
+                        method: 'POST',
+                        data: base64Data,
+                        headers: {
+                            'Content-Type': blob.type || 'image/jpeg',
+                            'x-project-name': encodeURIComponent(this.state.projectName)
+                        }
+                    });
+
+                    if (response.status >= 200 && response.status < 300) {
+                        console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via CapacitorHttp`);
+                        success = true;
                     } else {
-                        console.error(`[_uploadPageBlob] Upload failed for ${pageId} with status ${xhr.status}:`, xhr.responseText);
-                        resolve(false);
+                        console.error(`[_uploadPageBlob] CapacitorHttp failed for ${pageId} with status ${response.status}:`, response.data);
                     }
-                };
+                } else {
+                    // Standard Web / Fallback: Use XMLHttpRequest
+                    console.log(`[_uploadPageBlob] Using XMLHttpRequest for upload`);
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const body = new Uint8Array(arrayBuffer);
 
-                xhr.onerror = (err) => {
-                    console.error(`[_uploadPageBlob] XHR Error uploading page ${pageId}:`, err);
-                    resolve(false);
-                };
+                    success = await new Promise((resolve) => {
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('POST', url, true);
+                        
+                        xhr.setRequestHeader('Content-Type', blob.type || 'image/jpeg');
+                        xhr.setRequestHeader('x-project-name', encodeURIComponent(this.state.projectName));
 
-                xhr.ontimeout = () => {
-                    console.error(`[_uploadPageBlob] Timeout uploading page ${pageId}`);
-                    resolve(false);
-                };
+                        xhr.onload = () => {
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId}`);
+                                resolve(true);
+                            } else {
+                                console.error(`[_uploadPageBlob] Upload failed for ${pageId} with status ${xhr.status}:`, xhr.responseText);
+                                resolve(false);
+                            }
+                        };
 
-                // Send the binary data
-                xhr.send(body);
-            });
-        } catch (err) {
-            console.error(`[_uploadPageBlob] Critical error in _uploadPageBlob for ${pageId}:`, err);
-            return false;
+                        xhr.onerror = (err) => {
+                            console.error(`[_uploadPageBlob] XHR Error uploading page ${pageId}:`, err);
+                            resolve(false);
+                        };
+
+                        xhr.ontimeout = () => {
+                            console.error(`[_uploadPageBlob] Timeout uploading page ${pageId}`);
+                            resolve(false);
+                        };
+
+                        xhr.send(body);
+                    });
+                }
+
+                if (success) return true;
+                
+                // Wait before retry
+                if (attempt < retries) {
+                    const delay = 1000 * attempt;
+                    console.log(`[_uploadPageBlob] Waiting ${delay}ms before retry...`);
+                    await new Promise(r => setTimeout(r, delay));
+                }
+
+            } catch (err) {
+                console.error(`[_uploadPageBlob] Error in attempt ${attempt} for ${pageId}:`, err);
+                if (attempt === retries) return false;
+            }
         }
+        return false;
     },
 
     /**
@@ -2362,13 +2410,17 @@ export const ColorRmSession = {
             // This ensures the blob is available when other users try to fetch it
             const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
 
-            // Now sync structure to server and LiveSync
-            await this._syncPageStructureToServer();
-            this._syncPageStructureToLive();
+            if (uploadSuccess) {
+                // Now sync structure to server and LiveSync
+                await this._syncPageStructureToServer();
+                this._syncPageStructureToLive();
+            } else {
+                console.error(`[addBlankPage] Upload failed for ${pageObj.pageId}. Skipping structure sync.`);
+            }
 
             // Show toast based on upload result
             if (this.config.collaborative && this.state.ownerId) {
-                this.ui.showToast(`Added blank page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+                this.ui.showToast(`Added blank page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed - local only'}`);
             } else {
                 this.ui.showToast(`Added blank page ${newPageIndex + 1} (Local)`);
             }
@@ -2425,14 +2477,18 @@ export const ColorRmSession = {
             // CRITICAL: Upload page BEFORE syncing structure
             const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
 
-            // Now sync structure to server and LiveSync
-            await this._syncPageStructureToServer();
-            this._syncPageStructureToLive();
+            if (uploadSuccess) {
+                // Now sync structure to server and LiveSync
+                await this._syncPageStructureToServer();
+                this._syncPageStructureToLive();
+            } else {
+                console.error(`[addImageAsPage] Upload failed for ${pageObj.pageId}. Skipping structure sync.`);
+            }
 
             // Update canvas dimensions
             this._setCanvasDimensions(width, height);
 
-            this.ui.showToast(`Added image as page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+            this.ui.showToast(`Added image as page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed - local only'}`);
 
             // Navigate AFTER everything is synced
             await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
@@ -2874,14 +2930,18 @@ export const ColorRmSession = {
             // CRITICAL: Upload page BEFORE syncing structure
             const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
 
-            // Now sync structure to server and LiveSync
-            await this._syncPageStructureToServer();
-            this._syncPageStructureToLive();
+            if (uploadSuccess) {
+                // Now sync structure to server and LiveSync
+                await this._syncPageStructureToServer();
+                this._syncPageStructureToLive();
+            } else {
+                console.error(`[addTemplatePage] Upload failed for ${pageObj.pageId}. Skipping structure sync.`);
+            }
 
             // Update canvas dimensions
             this._setCanvasDimensions(width, height);
 
-            this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+            this.ui.showToast(`Added ${templateType} template page ${newPageIndex + 1} ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed - local only'}`);
 
             // Navigate AFTER everything is synced
             await this._handlePostInsertNavigation(newPageIndex, false);
@@ -3045,14 +3105,18 @@ export const ColorRmSession = {
             // CRITICAL: Upload page BEFORE syncing structure
             const uploadSuccess = await this._uploadPageBlob(pageObj.pageId, blob);
 
-            // Now sync structure to server and LiveSync
-            await this._syncPageStructureToServer();
-            this._syncPageStructureToLive();
+            if (uploadSuccess) {
+                // Now sync structure to server and LiveSync
+                await this._syncPageStructureToServer();
+                this._syncPageStructureToLive();
+            } else {
+                console.error(`[addInfiniteCanvasPage] Upload failed for ${pageObj.pageId}. Skipping structure sync.`);
+            }
 
             // Update canvas dimensions
             this._setCanvasDimensions(initialWidth, initialHeight);
 
-            this.ui.showToast(`Added infinite canvas page ${newPageIndex + 1} ∞ ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed'}`);
+            this.ui.showToast(`Added infinite canvas page ${newPageIndex + 1} ∞ ${uploadSuccess ? '✓ Synced' : '⚠ Upload failed - local only'}`);
 
             // Navigate AFTER everything is synced
             await this._handlePostInsertNavigation(newPageIndex, insertAtCurrent);
