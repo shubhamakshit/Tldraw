@@ -194,6 +194,9 @@ export class ColorRmApp {
             }
 
             // 5. Sync Base File (only for collaborative mode)
+            // REMOVED: Redundant with LiveSync.reconcilePageStructure() which handles base file and structure sync.
+            // Keeping this caused double-rendering of all PDF pages.
+            /*
             if (this.config.collaborative) {
                 try {
                     const res = await fetch(window.Config?.apiUrl(`/api/color_rm/base_file/${projectId}`) || `/api/color_rm/base_file/${projectId}`, { method: 'GET' });
@@ -214,6 +217,7 @@ export class ColorRmApp {
                     console.error("Liveblocks: Sync check error:", e);
                 }
             }
+            */
         }
 
         // 6. Initialize Android Intent Handling for URLs and PDF files
@@ -822,8 +826,8 @@ export class ColorRmApp {
         const viewport = this.getElement('viewport');
         const canvas = this.getElement('canvas');
 
-        // Skip animation if only one page or same page OR if skipAnimation is requested (e.g. remote sync)
-        const shouldAnimate = !skipAnimation && this.state.images.length > 1 && this.state.idx !== i;
+        // Skip animation - permanently disabled for faster feel
+        const shouldAnimate = false;
 
         // Apply exit animation non-blocking
         if (canvas && viewport && shouldAnimate) {

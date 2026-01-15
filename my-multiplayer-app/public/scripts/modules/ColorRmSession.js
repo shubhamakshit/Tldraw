@@ -1219,10 +1219,13 @@ export const ColorRmSession = {
 
                     // CRITICAL: Sync updated page structure to server after assigning pageIds
                     // This ensures the server has the correct page structure for reconciliation
+                    // Removed to prevent auto-sync on load. Sync will happen on next user action (create/delete).
+                    /*
                     if (this.config.collaborative && this.state.ownerId) {
                         console.log(`[loadSessionPages] Syncing page structure to server after pageId assignment...`);
                         await this._syncPageStructureToServer();
                     }
+                    */
                 }
 
                 // Check if we have all pages according to the project metadata
@@ -1293,7 +1296,10 @@ export const ColorRmSession = {
 
                 if (this.state.images.length === 0) {
                     // Try to fetch base from server if pages are missing
-                    this.retryBaseFetch();
+                    // Only if NOT using LiveSync (LiveSync handles reconciliation separately)
+                    if (!this.liveSync) {
+                        this.retryBaseFetch();
+                    }
                 }
 
                 if (this.state.activeSideTab === 'pages') this.renderPageSidebar();

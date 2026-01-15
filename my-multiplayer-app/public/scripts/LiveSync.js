@@ -1607,12 +1607,19 @@ export class LiveSyncClient {
      * - User pages (user_*) are fetched individually from R2
      */
     async reconcilePageStructure() {
+        // Prevent concurrent reconciliation
+        if (this._isReconciling) {
+            console.log('[reconcilePageStructure] Already running, skipping.');
+            return;
+        }
+        
         // Skip if a local page operation is in progress
         if (this._isLocalPageOperation) {
             console.log('[reconcilePageStructure] Skipped - local page operation in progress');
             return;
         }
 
+        this._isReconciling = true;
         console.log('[reconcilePageStructure] Starting page structure reconciliation...');
 
         try {
@@ -1711,6 +1718,8 @@ export class LiveSyncClient {
             console.log(`[reconcilePageStructure] Complete. Local pages: ${this.app.state.images.length}`);
         } catch (error) {
             console.error('[reconcilePageStructure] Error:', error);
+        } finally {
+            this._isReconciling = false;
         }
     }
 
@@ -1755,45 +1764,49 @@ export class LiveSyncClient {
             const arrayBuffer = await blob.arrayBuffer();
             const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
 
-            console.log(`[_renderPdfPagesFromBase] PDF has ${pdf.numPages} pages, rendering ${pdfPageIds.length} missing pages`);
+            console.log(`[_renderPdfPagesFromBase] PDF has ${pdf.numPages} pages, rendering ${pdfPageIds.length} missing pages in parallel`);
 
-            for (const pageId of pdfPageIds) {
-                // Extract page number from pageId (e.g., 'pdf_0' -> 0, 'pdf_5' -> 5)
-                const pageNum = parseInt(pageId.replace('pdf_', ''), 10);
+            const CONCURRENCY = 3;
+            for (let i = 0; i < pdfPageIds.length; i += CONCURRENCY) {
+                const chunk = pdfPageIds.slice(i, i + CONCURRENCY);
+                await Promise.all(chunk.map(async (pageId) => {
+                    // Extract page number from pageId (e.g., 'pdf_0' -> 0, 'pdf_5' -> 5)
+                    const pageNum = parseInt(pageId.replace('pdf_', ''), 10);
 
-                if (pageNum >= pdf.numPages) {
-                    console.warn(`[_renderPdfPagesFromBase] Page ${pageNum} exceeds PDF page count ${pdf.numPages}`);
-                    continue;
-                }
+                    if (pageNum >= pdf.numPages) {
+                        console.warn(`[_renderPdfPagesFromBase] Page ${pageNum} exceeds PDF page count ${pdf.numPages}`);
+                        return;
+                    }
 
-                // pdf.js uses 1-indexed pages
-                const page = await pdf.getPage(pageNum + 1);
-                const viewport = page.getViewport({ scale: 1.5 });
+                    // pdf.js uses 1-indexed pages
+                    const page = await pdf.getPage(pageNum + 1);
+                    const viewport = page.getViewport({ scale: 1.5 });
 
-                const canvas = document.createElement('canvas');
-                canvas.width = viewport.width;
-                canvas.height = viewport.height;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
 
-                await page.render({
-                    canvasContext: canvas.getContext('2d'),
-                    viewport: viewport
-                }).promise;
+                    await page.render({
+                        canvasContext: canvas.getContext('2d'),
+                        viewport: viewport
+                    }).promise;
 
-                const pageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+                    const pageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
 
-                const pageObj = {
-                    id: `${this.app.state.sessionId}_${this.app.state.images.length}`,
-                    sessionId: this.app.state.sessionId,
-                    pageIndex: this.app.state.images.length,
-                    pageId: pageId,
-                    blob: pageBlob,
-                    history: []
-                };
+                    const pageObj = {
+                        id: `${this.app.state.sessionId}_${this.app.state.images.length}`,
+                        sessionId: this.app.state.sessionId,
+                        pageIndex: this.app.state.images.length,
+                        pageId: pageId,
+                        blob: pageBlob,
+                        history: []
+                    };
 
-                await this.app.dbPut('pages', pageObj);
-                this.app.state.images.push(pageObj);
+                    await this.app.dbPut('pages', pageObj);
+                    this.app.state.images.push(pageObj);
 
-                console.log(`[_renderPdfPagesFromBase] Rendered page ${pageId}`);
+                    console.log(`[_renderPdfPagesFromBase] Rendered page ${pageId}`);
+                }));
             }
         } catch (error) {
             console.error('[_renderPdfPagesFromBase] Error:', error);
