@@ -33,7 +33,7 @@ export class LiveSyncClient {
 
         // Track recent local page changes to prevent sync conflicts
         this.lastLocalPageChange = 0;
-        this.PAGE_CHANGE_GRACE_PERIOD = 2000; // 2 seconds grace period
+        this.PAGE_CHANGE_GRACE_PERIOD = 500; // 500ms grace period for fluid sync
         this.remoteTrails = {};
 
         // Lock to prevent reconciliation during local page operations
@@ -398,7 +398,7 @@ export class LiveSyncClient {
             // (Skip if this is an echo of our own change or if we recently changed pages)
             const timeSinceLocalChange = Date.now() - (this.lastLocalPageChange || 0);
             if (msg.pageIdx !== undefined && msg.pageIdx !== this.app.state.idx) {
-                if (timeSinceLocalChange < 2000) {
+                if (timeSinceLocalChange < 500) {
                     console.log(`[Yjs] Ignoring remote page=${msg.pageIdx}, local change was ${timeSinceLocalChange}ms ago`);
                 } else {
                     console.log(`[Yjs] Following remote user to page ${msg.pageIdx}`);
@@ -2347,7 +2347,7 @@ export class LiveSyncClient {
         // Show visual feedback that we're flipping (dim canvas)
         this._showFlippingFeedback(true);
 
-        // Debounce - only notify after user stops flipping for 600ms
+        // Debounce - only notify after user stops flipping for 300ms
         if (this._pageNavDebounceTimer) {
             clearTimeout(this._pageNavDebounceTimer);
         }
@@ -2381,7 +2381,7 @@ export class LiveSyncClient {
             if (this.room) {
                 this.room.updatePresence({ pageIdx: pageIdx });
             }
-        }, 600); // 600ms debounce - wait for rapid flipping to stop
+        }, 300); // 300ms debounce - quick but prevents spam
     }
 
     // Visual feedback when user is rapidly flipping pages
