@@ -42,6 +42,10 @@ export class LiveSyncClient {
     }
 
     async init(ownerId, projectId) {
+        // 1. Reconcile Immediately (Parallel)
+        console.log('[LiveSync] Triggering early reconciliation...');
+        this.reconcilePageStructure();
+
         // We need Registry to be available globally or passed in.
         // Assuming window.Registry is still global for now or we import it.
         const regUser = window.Registry?.getUsername();
@@ -151,7 +155,7 @@ export class LiveSyncClient {
         // This ensures we catch any pages that were added while we were connecting
         setTimeout(() => {
             this._immediatePageSync();
-        }, 500);
+        }, 0);
     }
 
     /**
@@ -159,6 +163,10 @@ export class LiveSyncClient {
      * Uses Yjs CRDTs over WebSocket for real-time collaboration
      */
     async _initYjs(ownerId, projectId) {
+        // 1. Reconcile Immediately (Parallel)
+        console.log('[LiveSync] Triggering early reconciliation...');
+        this.reconcilePageStructure();
+
         await loadYjs();
 
         this.app.ui.setSyncStatus('syncing');
@@ -257,10 +265,8 @@ export class LiveSyncClient {
             this.isInitializing = false;
             console.log('[Yjs] Beta sync initialized');
 
-            // Sync current state
-            setTimeout(() => {
-                this.syncHistory();
-            }, 500);
+            // Sync current state and structure immediately
+            this._immediatePageSync();
 
         } catch (err) {
             console.error('[Yjs] Failed to initialize:', err);
@@ -1375,12 +1381,16 @@ export class LiveSyncClient {
      * @returns {boolean} - Whether the fetch was successful
      */
     async _fetchPageByIdWithRetry(pageId, targetIndex, maxRetries = 3, retryDelay = 1000, metadata = null) {
-        // Check if page with this pageId already exists
+        // Check if page with this pageId already exists AND has content
         const existingPage = this.app.state.images.find(img => img && img.pageId === pageId);
-        if (existingPage) {
-            console.log(`[_fetchPageByIdWithRetry] Page ${pageId} already exists, skipping`);
+        // Only skip if it exists, is NOT a skeleton, and has a blob
+        if (existingPage && !existingPage.isSkeleton && existingPage.blob) {
+            console.log(`[_fetchPageByIdWithRetry] Page ${pageId} already exists and has blob, skipping`);
             return true;
         }
+        
+        // If it exists but has no blob (skeleton), we update it in place
+        const isHydrating = !!existingPage;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
@@ -1388,7 +1398,7 @@ export class LiveSyncClient {
                 const url = window.Config?.apiUrl(`/api/color_rm/page/${this.app.state.sessionId}/${pageId}`) ||
                     `/api/color_rm/page/${this.app.state.sessionId}/${pageId}`;
 
-                console.log(`[_fetchPageByIdWithRetry] Fetching page ${pageId} for index ${targetIndex}, attempt ${attempt}/${maxRetries}`);
+                console.log(`[_fetchPageByIdWithRetry] Fetching page ${pageId} (hydrating: ${isHydrating}), attempt ${attempt}/${maxRetries}`);
 
                 const response = await fetch(url);
 
@@ -1407,6 +1417,15 @@ export class LiveSyncClient {
                     }
 
                     console.log(`[_fetchPageByIdWithRetry] Page ${pageId} blob size: ${blob.size} bytes`);
+
+                    if (isHydrating) {
+                        // Update existing skeleton
+                        existingPage.blob = blob;
+                        existingPage.isSkeleton = false; // Clear flag
+                        await this.app.dbPut('pages', existingPage);
+                        console.log(`[_fetchPageByIdWithRetry] Successfully hydrated page ${pageId}`);
+                        return true;
+                    }
 
                     const pageObj = {
                         id: `${this.app.state.sessionId}_${targetIndex}`,
@@ -1444,6 +1463,12 @@ export class LiveSyncClient {
                         console.log(`[_fetchPageByIdWithRetry] Successfully added page ${pageId}`);
                         return true;
                     } else {
+                        // If it appeared during fetch, maybe update its blob if missing?
+                        if (!existsNow.blob) {
+                             existsNow.blob = blob;
+                             await this.app.dbPut('pages', existsNow);
+                             return true;
+                        }
                         console.log(`[_fetchPageByIdWithRetry] Page ${pageId} was added by another process`);
                         return true;
                     }
@@ -1622,88 +1647,46 @@ export class LiveSyncClient {
             const missingPageIds = remotePageIds.filter(pid => !localPageIds.includes(pid));
 
             if (missingPageIds.length > 0) {
-                console.log(`[reconcilePageStructure] Missing ${missingPageIds.length} pages: ${missingPageIds.join(', ')}`);
+                console.log(`[reconcilePageStructure] Missing ${missingPageIds.length} pages. Synchronizing...`);
 
                 // Separate PDF pages from user pages
                 const missingPdfPages = missingPageIds.filter(pid => pid.startsWith('pdf_'));
                 const missingUserPages = missingPageIds.filter(pid => pid.startsWith('user_'));
 
-                // For PDF pages: Create skeletons (Lazy Load)
+                // 1. PDF pages: render from base PDF
                 if (missingPdfPages.length > 0) {
-                    console.log(`[reconcilePageStructure] Creating ${missingPdfPages.length} PDF skeletons (Lazy)...`);
-                    
-                    for (const pageId of missingPdfPages) {
-                        if (this.app.state.images.find(img => img && img.pageId === pageId)) continue;
-                        
-                        const skeleton = {
-                            id: `${this.app.state.sessionId}_${this.app.state.images.length}`,
-                            sessionId: this.app.state.sessionId,
-                            pageIndex: this.app.state.images.length,
-                            pageId: pageId,
-                            blob: null, // Lazy load
-                            history: []
-                        };
-                        
-                        await this.app.dbPut('pages', skeleton);
-                        this.app.state.images.push(skeleton);
-                    }
+                    console.log(`[reconcilePageStructure] Rendering ${missingPdfPages.length} PDF pages from base file...`);
+                    await this._renderPdfPagesFromBase(missingPdfPages);
                 }
 
-                // For user pages: fetch from R2
+                // 2. User pages: fetch from R2
                 if (missingUserPages.length > 0) {
-                    console.log(`[reconcilePageStructure] Found ${missingUserPages.length} missing user pages. Lazy loading...`);
-                    
                     const currentIdx = this.app.state.idx;
                     const pendingIdx = this._pendingPageIdx; 
                     const targetPageId = remotePageIds[pendingIdx !== undefined ? pendingIdx : currentIdx];
 
-                    // 1. Create Skeletons for ALL missing pages immediately
-                    // This updates the structure instantly without waiting for network
-                    let newPagesAdded = 0;
+                    // Sort: Target page first for faster response
+                    missingUserPages.sort((a, b) => {
+                        if (a === targetPageId) return -1;
+                        if (b === targetPageId) return 1;
+                        return 0;
+                    });
+
+                    let fetchedCount = 0;
+                    const CONCURRENCY = 5;
                     
-                    for (const pageId of missingUserPages) {
-                        // Skip if already exists (double check)
-                        if (this.app.state.images.find(img => img && img.pageId === pageId)) continue;
-
-                        const meta = pageMetadata[pageId] || null;
-                        
-                        // Create Skeleton Page (No Blob)
-                        const skeleton = {
-                            id: `${this.app.state.sessionId}_${this.app.state.images.length}`, // Temp ID
-                            sessionId: this.app.state.sessionId,
-                            pageIndex: this.app.state.images.length, // Temp index
-                            pageId: pageId,
-                            blob: null, // <--- LAZY LOAD: Null blob means "fetch on view"
-                            history: []
-                        };
-
-                        if (meta) {
-                            if (meta.templateType) { skeleton.templateType = meta.templateType; skeleton.templateConfig = meta.templateConfig; }
-                            if (meta.isInfinite) { skeleton.isInfinite = true; skeleton.vectorGrid = meta.vectorGrid; skeleton.bounds = meta.bounds; skeleton.origin = meta.origin; }
-                        }
-
-                        // Save to DB and State
-                        await this.app.dbPut('pages', skeleton);
-                        this.app.state.images.push(skeleton);
-                        newPagesAdded++;
+                    for (let i = 0; i < missingUserPages.length; i += CONCURRENCY) {
+                        const chunk = missingUserPages.slice(i, i + CONCURRENCY);
+                        const results = await Promise.all(chunk.map(async pageId => {
+                            const targetIndex = this.app.state.images.length; 
+                            const meta = pageMetadata[pageId] || null;
+                            return await this._fetchPageByIdWithRetry(pageId, targetIndex, 3, 1000, meta);
+                        }));
+                        fetchedCount += results.filter(Boolean).length;
                     }
 
-                    if (newPagesAdded > 0) {
-                        console.log(`[reconcilePageStructure] Created ${newPagesAdded} skeleton pages.`);
-                    }
-
-                    // 2. Fetch ONLY the Target Page immediately (if it was missing)
-                    if (missingUserPages.includes(targetPageId)) {
-                        console.log(`[reconcilePageStructure] Target page ${targetPageId} is missing blob. Fetching priority...`);
-                        const targetIndex = this.app.state.images.length; // Placeholder index
-                        const meta = pageMetadata[targetPageId] || null;
-                        
-                        // We use the existing fetch method which handles blob download and updates the object
-                        await this._fetchPageByIdWithRetry(targetPageId, targetIndex, 3, 1000, meta);
-                        this.app.ui.showToast("Synced current page");
-                    } else {
-                        // If we are not on a missing page, just show a general toast
-                        if (newPagesAdded > 0) this.app.ui.showToast(`Synced ${newPagesAdded} pages (Lazy)`);
+                    if (fetchedCount > 0) {
+                        this.app.ui.showToast(`Synced ${fetchedCount} new page${fetchedCount > 1 ? 's' : ''}`);
                     }
                 }
             }
@@ -1814,65 +1797,6 @@ export class LiveSyncClient {
             }
         } catch (error) {
             console.error('[_renderPdfPagesFromBase] Error:', error);
-        }
-    }
-
-    /**
-     * Hydrates a skeleton PDF page by rendering it from the base PDF on demand
-     */
-    async hydratePdfPage(pageObj) {
-        if (!pageObj || !pageObj.pageId || !pageObj.pageId.startsWith('pdf_')) return false;
-        
-        console.log(`[hydratePdfPage] Hydrating ${pageObj.pageId}...`);
-        
-        try {
-            // Fetch base PDF (browser cache should make this fast after first load)
-            const baseUrl = window.Config?.apiUrl(`/api/color_rm/base_file/${this.app.state.sessionId}`) ||
-                `/api/color_rm/base_file/${this.app.state.sessionId}`;
-
-            const response = await fetch(baseUrl);
-            if (!response.ok) return false;
-            
-            const blob = await response.blob();
-            
-            // Handle single image base
-            if (!blob.type.includes('pdf')) {
-                if (pageObj.pageId === 'pdf_0') {
-                    pageObj.blob = blob;
-                    await this.app.dbPut('pages', pageObj);
-                    return true;
-                }
-                return false;
-            }
-
-            const arrayBuffer = await blob.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-            
-            const pageNum = parseInt(pageObj.pageId.replace('pdf_', ''), 10);
-            if (pageNum >= pdf.numPages) return false;
-
-            const page = await pdf.getPage(pageNum + 1);
-            const viewport = page.getViewport({ scale: 1.5 });
-
-            const canvas = document.createElement('canvas');
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-
-            await page.render({
-                canvasContext: canvas.getContext('2d'),
-                viewport: viewport
-            }).promise;
-
-            const pageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-            
-            pageObj.blob = pageBlob;
-            await this.app.dbPut('pages', pageObj);
-            
-            console.log(`[hydratePdfPage] Successfully hydrated ${pageObj.pageId}`);
-            return true;
-        } catch (e) {
-            console.error('[hydratePdfPage] Error:', e);
-            return false;
         }
     }
 

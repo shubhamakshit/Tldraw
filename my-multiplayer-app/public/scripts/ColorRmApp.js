@@ -863,31 +863,32 @@ export class ColorRmApp {
 
         let item = this.state.images[i];
         if (!item) {
-            // OPTIMIZATION: If page is missing, it might be a newly added page we haven't synced yet.
-            // Trigger reconciliation and try to load again once done.
-            if (this.liveSync) {
-                console.log(`Page ${i} missing from state. Triggering reconciliation...`);
-                await this.liveSync.reconcilePageStructure();
-                item = this.state.images[i]; // Try again
-            }
-            
-            if (!item) {
-                console.warn(`Page ${i} missing from state. Skipping loadPage.`);
-                return;
-            }
+            console.warn(`Page ${i} missing from state. Skipping loadPage.`);
+            return;
         }
 
         // If the page doesn't have a blob, try to fetch it from the backend
         if (!item.blob && this.config.collaborative && this.state.ownerId) {
             try {
-                const response = await fetch(window.Config?.apiUrl(`/api/color_rm/page_file/${this.state.sessionId}/${i}`) || `/api/color_rm/page_file/${this.state.sessionId}/${i}`);
+                // Prefer UUID-based fetch if pageId is available (reliable)
+                let url;
+                if (item.pageId) {
+                     url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${item.pageId}`) || 
+                           `/api/color_rm/page/${this.state.sessionId}/${item.pageId}`;
+                } else {
+                     // Legacy fallback: Fetch by index
+                     url = window.Config?.apiUrl(`/api/color_rm/page_file/${this.state.sessionId}/${i}`) || 
+                           `/api/color_rm/page_file/${this.state.sessionId}/${i}`;
+                }
+
+                const response = await fetch(url);
                 if (response.ok) {
                     const blob = await response.blob();
                     item.blob = blob;
                     // Update the database with the fetched blob
                     await this.dbPut('pages', item);
                 } else {
-                    console.warn(`Page ${i} not found on backend. Attempting to fetch from base file...`);
+                    console.warn(`Page ${i} (${item.pageId}) not found on backend. Attempting to fetch from base file...`);
                     // If page not found, try to get base file (first page)
                     if (i === 0) {
                         const baseResponse = await fetch(window.Config?.apiUrl(`/api/color_rm/base_file/${this.state.sessionId}`) || `/api/color_rm/base_file/${this.state.sessionId}`);
@@ -904,15 +905,8 @@ export class ColorRmApp {
         }
 
         if (!item || !item.blob) {
-            // Check if it's a PDF skeleton that needs hydration
-            if (item && item.pageId && item.pageId.startsWith('pdf_') && this.liveSync) {
-                 await this.liveSync.hydratePdfPage(item);
-            }
-
-            if (!item || !item.blob) {
-                console.warn(`Page ${i} missing blob data. Skipping loadPage.`);
-                return;
-            }
+            console.warn(`Page ${i} missing blob data. Skipping loadPage.`);
+            return;
         }
 
         this.state.idx = i;
