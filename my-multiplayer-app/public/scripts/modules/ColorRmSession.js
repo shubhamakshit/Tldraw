@@ -634,8 +634,8 @@ export const ColorRmSession = {
             console.log(`[_uploadPageBlob] Uploading page ${pageId}, size: ${blob.size} bytes`);
 
             // Use new UUID-based endpoint
-            const url = window.Config?.apiUrl(`/api/color_rm/page/${this.app.state.sessionId}/${pageId}`)
-                     || `/api/color_rm/page/${this.app.state.sessionId}/${pageId}`;
+            const url = window.Config?.apiUrl(`/api/color_rm/page/${this.state.sessionId}/${pageId}`)
+                     || `/api/color_rm/page/${this.state.sessionId}/${pageId}`;
 
             // Convert blob to Uint8Array for maximum compatibility with Capacitor/Android
             const arrayBuffer = await blob.arrayBuffer();
