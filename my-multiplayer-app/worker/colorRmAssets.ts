@@ -28,13 +28,15 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
             // Parse the JSON to see if it contains base64 data
             const decoder = new TextDecoder();
             const jsonString = decoder.decode(bodyData);
+            console.log(`[handleColorRmUpload] Received JSON content type, raw data length: ${bodyData.byteLength}, content sample: ${jsonString.substring(0, 200)}...`);
             try {
                 const jsonData = JSON.parse(jsonString);
+                console.log(`[handleColorRmUpload] Parsed JSON object:`, jsonData);
 
                 // Check if the JSON has a 'data' field with base64 content (common CapacitorHttp format)
                 if (jsonData.data && typeof jsonData.data === 'string') {
                     // Assume it's base64 encoded, decode it
-                    console.log(`[handleColorRmUpload] Detected base64 data in JSON, decoding...`);
+                    console.log(`[handleColorRmUpload] Detected base64 data in JSON field, length: ${jsonData.data.length}, sample: ${jsonData.data.substring(0, 50)}...`);
                     const base64String = jsonData.data;
 
                     // Decode base64 to binary
@@ -44,16 +46,19 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
                         bytes[i] = binaryString.charCodeAt(i);
                     }
                     finalData = bytes.buffer;
+                    console.log(`[handleColorRmUpload] Successfully decoded base64 to binary, size: ${bytes.length} bytes`);
                 } else {
+                    console.log(`[handleColorRmUpload] No 'data' field found in JSON, using raw body`);
                     // If not base64, use the original body
                     finalData = bodyData;
                 }
             } catch (parseError) {
+                console.log(`[handleColorRmUpload] JSON parsing failed: ${parseError.message}, using raw data`);
                 // If JSON parsing fails, use the original body
-                console.log(`[handleColorRmUpload] Could not parse JSON, using raw data: ${parseError}`);
                 finalData = bodyData;
             }
         } else {
+            console.log(`[handleColorRmUpload] Non-JSON content type (${contentType}), using raw body, size: ${bodyData.byteLength} bytes`);
             // For non-JSON content types, use the original body
             finalData = bodyData;
         }
@@ -90,6 +95,20 @@ export async function handleColorRmDownload(request: IRequest, env: Env) {
         }
 
         console.log(`[handleColorRmDownload] Base file FOUND, size: ${obj.size} bytes`);
+
+        // Additional debugging: Check if the content looks like base64
+        const buffer = await obj.arrayBuffer();
+        const uint8Array = new Uint8Array(buffer.slice(0, 100)); // Check first 100 bytes
+        const textSample = new TextDecoder().decode(uint8Array);
+
+        // Check if it looks like base64 content (contains only base64 chars and padding)
+        const base64Pattern = /^[A-Za-z0-9+/]*={0,2}/;
+        if (base64Pattern.test(textSample.split('').slice(0, 50).join(''))) {
+            console.log(`[handleColorRmDownload] WARNING: File appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
+        } else {
+            console.log(`[handleColorRmDownload] File appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
+        }
+
         const headers = new Headers()
         obj.writeHttpMetadata(headers)
         headers.set('etag', obj.httpEtag)
@@ -157,13 +176,15 @@ export async function handleColorRmPageUpload(request: IRequest, env: Env) {
             // Parse the JSON to see if it contains base64 data
             const decoder = new TextDecoder();
             const jsonString = decoder.decode(bodyData);
+            console.log(`[PageUpload] Received JSON content type, raw data length: ${bodyData.byteLength}, content sample: ${jsonString.substring(0, 200)}...`);
             try {
                 const jsonData = JSON.parse(jsonString);
+                console.log(`[PageUpload] Parsed JSON object:`, jsonData);
 
                 // Check if the JSON has a 'data' field with base64 content
                 if (jsonData.data && typeof jsonData.data === 'string') {
                     // Assume it's base64 encoded, decode it
-                    console.log(`[PageUpload] Detected base64 data in JSON, decoding...`);
+                    console.log(`[PageUpload] Detected base64 data in JSON field, length: ${jsonData.data.length}, sample: ${jsonData.data.substring(0, 50)}...`);
                     const base64String = jsonData.data;
 
                     // Decode base64 to binary
@@ -173,16 +194,19 @@ export async function handleColorRmPageUpload(request: IRequest, env: Env) {
                         bytes[i] = binaryString.charCodeAt(i);
                     }
                     finalData = bytes.buffer;
+                    console.log(`[PageUpload] Successfully decoded base64 to binary, size: ${bytes.length} bytes`);
                 } else {
+                    console.log(`[PageUpload] No 'data' field found in JSON, using raw body`);
                     // If not base64, use the original body
                     finalData = bodyData;
                 }
             } catch (parseError) {
                 // If JSON parsing fails, use the original body
-                console.log(`[PageUpload] Could not parse JSON, using raw data: ${parseError}`);
+                console.log(`[PageUpload] JSON parsing failed: ${parseError.message}, using raw data`);
                 finalData = bodyData;
             }
         } else {
+            console.log(`[PageUpload] Non-JSON content type (${contentType}), using raw body, size: ${bodyData.byteLength} bytes`);
             // For non-JSON content types, use the original body
             finalData = bodyData;
         }
@@ -214,6 +238,21 @@ export async function handleColorRmPageDownload(request: IRequest, env: Env) {
         if (!obj) {
             console.log(`[PageDownload] Page not found: ${objectKey}`)
             return new Response('Page file not found', { status: 404 })
+        }
+
+        console.log(`[PageDownload] Page file FOUND for ${pageId}, size: ${obj.size} bytes`);
+
+        // Additional debugging: Check if the content looks like base64
+        const buffer = await obj.arrayBuffer();
+        const uint8Array = new Uint8Array(buffer.slice(0, 100)); // Check first 100 bytes
+        const textSample = new TextDecoder().decode(uint8Array);
+
+        // Check if it looks like base64 content (contains only base64 chars and padding)
+        const base64Pattern = /^[A-Za-z0-9+/]*={0,2}/;
+        if (base64Pattern.test(textSample.split('').slice(0, 50).join(''))) {
+            console.log(`[PageDownload] WARNING: Page ${pageId} appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
+        } else {
+            console.log(`[PageDownload] Page ${pageId} appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
         }
 
         const headers = new Headers()
