@@ -643,7 +643,7 @@ export const ColorRmSession = {
                 let success = false;
 
                 if (isCapacitorNative && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
-                    console.log(`[_uploadPageBlob] Using native CapacitorHttp for upload`);
+                    console.log(`[_uploadPageBlob] Using native CapacitorHttp for upload to: ${url}`);
                     
                     // Recommended by Capacitor docs for complex types: serialize to base64
                     const base64Data = await new Promise((resolve, reject) => {
@@ -656,21 +656,29 @@ export const ColorRmSession = {
                         reader.readAsDataURL(blob);
                     });
 
-                    const response = await window.Capacitor.Plugins.CapacitorHttp.request({
-                        url: url,
-                        method: 'POST',
-                        data: base64Data,
-                        headers: {
-                            'Content-Type': blob.type || 'image/jpeg',
-                            'x-project-name': encodeURIComponent(this.state.projectName)
-                        }
-                    });
+                    try {
+                        const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                            url: url,
+                            method: 'POST',
+                            data: base64Data,
+                            headers: {
+                                'Content-Type': blob.type || 'image/jpeg',
+                                'x-project-name': encodeURIComponent(this.state.projectName)
+                            }
+                        });
 
-                    if (response.status >= 200 && response.status < 300) {
-                        console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via CapacitorHttp`);
-                        success = true;
-                    } else {
-                        console.error(`[_uploadPageBlob] CapacitorHttp failed for ${pageId} with status ${response.status}:`, response.data);
+                        if (response.status >= 200 && response.status < 300) {
+                            console.log(`[_uploadPageBlob] Successfully uploaded page ${pageId} via CapacitorHttp`);
+                            success = true;
+                        } else {
+                            console.error(`[_uploadPageBlob] CapacitorHttp failed for ${pageId} with status ${response.status}:`, response.data);
+                        }
+                    } catch (capErr) {
+                        console.error(`[_uploadPageBlob] CapacitorHttp exception for ${pageId}:`, capErr);
+                        // If it's a protocol error,apiUrl is likely returning relative path
+                        if (capErr.message && capErr.message.includes('no protocol')) {
+                            console.error(`[_uploadPageBlob] CRITICAL: No protocol in URL: ${url}`);
+                        }
                     }
                 } else {
                     // Standard Web / Fallback: Use XMLHttpRequest

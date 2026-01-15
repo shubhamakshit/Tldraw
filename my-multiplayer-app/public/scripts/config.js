@@ -66,23 +66,29 @@ export const Config = {
     // In remote/web mode, this returns empty string (relative URLs work)
     getApiBase() {
         const isCap = this.isCapacitor();
-        
-        // Remote mode in standard browser: relative URLs work
-        if (this.isRemoteMode() && !isCap) {
-            return '';
-        }
 
-        // Bundled Capacitor mode OR Remote Capacitor mode: 
-        // NEED absolute URL because CapacitorHttp doesn't support relative paths
-        if (this.isBundledMode() || isCap) {
-            const defaultBackend = 'hf'; // Changed from cloudflare
+        // In Capacitor, we ALWAYS need an absolute URL because CapacitorHttp
+        // does not support relative paths (it will throw MalformedURLException: no protocol)
+        if (isCap) {
+            if (this.isRemoteMode()) {
+                // If we are in remote mode, use the current origin as the base
+                return window.location.origin;
+            }
+            
+            // Bundled mode: use the configured backend
+            const defaultBackend = 'hf'; 
             const preferredBackend = localStorage.getItem('color_rm_backend') || defaultBackend;
             const base = this.BACKENDS[preferredBackend] || this.BACKENDS[defaultBackend];
-            console.log('[Config] Capacitor/Bundled mode - using backend:', base);
+            console.log('[Config] Capacitor mode - using absolute backend:', base);
             return base;
         }
 
-        // Web browser: relative URLs work
+        // Standard Web browser in remote mode: relative URLs work fine
+        if (this.isRemoteMode()) {
+            return '';
+        }
+
+        // Web browser: default to relative
         return '';
     },
 
@@ -124,7 +130,7 @@ export const Config = {
 
     // Debug info
     getDebugInfo() {
-        const defaultBackend = 'cloudflare'; // REPLACED_BY_BUILD_SCRIPT
+        const defaultBackend = 'hf'; 
         return {
             isCapacitor: this.isCapacitor(),
             isBundledMode: this.isBundledMode(),

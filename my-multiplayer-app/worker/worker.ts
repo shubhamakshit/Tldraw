@@ -530,7 +530,8 @@ const router = AutoRouter<IRequest, [env: Env, ctx: ExecutionContext]>({
 
 	// bookmarks need to extract metadata from pasted URLs:
 	.get('/api/unfurl', handleUnfurlRequest)
-	.all('*', () => {
+	.all('*', (request) => {
+        console.log(`[Worker] Route not found: ${request.method} ${request.url}`);
 		return new Response('Not found', { status: 404 })
 	})
 

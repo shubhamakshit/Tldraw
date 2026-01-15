@@ -2,11 +2,13 @@ import { IRequest } from 'itty-router'
 
 export async function handleColorRmUpload(request: IRequest, env: Env) {
     const { roomId } = request.params
+    console.log(`[handleColorRmUpload] Uploading base file for roomId: ${roomId}`);
     if (!roomId) {
         return new Response('Missing roomId', { status: 400 })
     }
 
     if (!request.body) {
+        console.error(`[handleColorRmUpload] Missing request body for roomId: ${roomId}`);
         return new Response('Missing request body', { status: 400 })
     }
 
@@ -14,10 +16,12 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
     const projectName = request.headers.get('x-project-name') ? decodeURIComponent(request.headers.get('x-project-name')!) : 'ColorRM Project'
 
     try {
+        console.log(`[handleColorRmUpload] Storing base file to R2: ${objectKey}, project: ${projectName}`);
         await env.TLDRAW_BUCKET.put(objectKey, request.body, {
             httpMetadata: request.headers,
             customMetadata: { name: projectName }
         })
+        console.log(`[handleColorRmUpload] Upload successful for: ${objectKey}`);
         return new Response('Upload successful', { status: 200 })
     } catch (e: any) {
         console.error('Error uploading color_rm file:', e)
