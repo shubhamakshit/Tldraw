@@ -96,80 +96,144 @@ export const ColorRmInput = {
 
     undo() {
         const img = this.state.images[this.state.idx];
+        // Migration: If old stacks exist, clear them or ignore them. We start fresh or could migrate.
+        // For simplicity, we strictly use unifiedStack.
+        if (!img.undoStack || img.undoStack.length === 0) return;
 
-        // First check if there's a modification undo (for align, etc.)
-        if (img._modificationUndo && img._modificationUndo.length > 0) {
-            const undoEntry = img._modificationUndo.pop();
-            if (!img._modificationRedo) img._modificationRedo = [];
+        const action = img.undoStack.pop();
+        if (!img.redoStack) img.redoStack = [];
 
-            // Save current state for redo
-            const redoEntry = {
-                type: undoEntry.type,
-                items: undoEntry.indices.map(idx => ({
-                    idx,
-                    state: JSON.parse(JSON.stringify(img.history[idx]))
-                }))
-            };
-            img._modificationRedo.push(redoEntry);
-
-            // Restore previous state
-            undoEntry.items.forEach(({ idx, state }) => {
-                img.history[idx] = state;
+        if (action.type === 'create') {
+            // Undo Creation: Mark items as deleted
+            // Save 'create' action to redo stack (Redo will un-delete)
+            img.redoStack.push(action);
+            
+            action.ids.forEach(id => {
+                const item = img.history.find(i => i.id === id);
+                if (item) {
+                    item.deleted = true;
+                    item.lastMod = Date.now();
+                }
+            });
+        } else if (action.type === 'modify') {
+            // Undo Modification: Restore "before" state
+            // Capture "current" state for Redo
+            const currentStates = [];
+            action.items.forEach(snapshot => {
+                const item = img.history.find(i => i.id === snapshot.id);
+                if (item) {
+                    currentStates.push({
+                        id: item.id,
+                        state: JSON.parse(JSON.stringify(item))
+                    });
+                }
             });
 
-            this.invalidateCache();
-            this.saveCurrentImg();
-            this.render();
-            return;
+            // Push "Restore Current" action to Redo
+            img.redoStack.push({
+                type: 'modify',
+                items: currentStates
+            });
+
+            // Apply "Before" state
+            action.items.forEach(snapshot => {
+                const idx = img.history.findIndex(i => i.id === snapshot.id);
+                if (idx !== -1) {
+                    // Restore state but preserve the ID just in case
+                    const id = img.history[idx].id;
+                    img.history[idx] = JSON.parse(JSON.stringify(snapshot.state));
+                    img.history[idx].id = id; // Ensure ID persistence
+                    img.history[idx].lastMod = Date.now();
+                }
+            });
         }
 
-        // Fallback to standard undo (add/remove operations)
-        if(img.history.length > 0) {
-            if(!img.redo) img.redo = [];
-            img.redo.push(img.history.pop());
-            this.invalidateCache();
-            this.saveCurrentImg();
-            this.render();
-        }
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
     },
 
     redo() {
         const img = this.state.images[this.state.idx];
+        if (!img.redoStack || img.redoStack.length === 0) return;
 
-        // First check if there's a modification redo
-        if (img._modificationRedo && img._modificationRedo.length > 0) {
-            const redoEntry = img._modificationRedo.pop();
-            if (!img._modificationUndo) img._modificationUndo = [];
+        const action = img.redoStack.pop();
+        if (!img.undoStack) img.undoStack = [];
 
-            // Save current state for undo
-            const undoEntry = {
-                type: redoEntry.type,
-                indices: redoEntry.items.map(i => i.idx),
-                items: redoEntry.items.map(({ idx }) => ({
-                    idx,
-                    state: JSON.parse(JSON.stringify(img.history[idx]))
-                }))
-            };
-            img._modificationUndo.push(undoEntry);
-
-            // Apply redo state
-            redoEntry.items.forEach(({ idx, state }) => {
-                img.history[idx] = state;
+        if (action.type === 'create') {
+            // Redo Creation: Mark items as NOT deleted
+            img.undoStack.push(action);
+            
+            action.ids.forEach(id => {
+                const item = img.history.find(i => i.id === id);
+                if (item) {
+                    item.deleted = false;
+                    item.lastMod = Date.now();
+                }
+            });
+        } else if (action.type === 'modify') {
+            // Redo Modification: Restore "Redo" state (which was the "After" state)
+            
+            // Capture "current" (which is the "Before" state) for Undo
+            const currentStates = [];
+            action.items.forEach(snapshot => {
+                const item = img.history.find(i => i.id === snapshot.id);
+                if (item) {
+                    currentStates.push({
+                        id: item.id,
+                        state: JSON.parse(JSON.stringify(item))
+                    });
+                }
             });
 
-            this.invalidateCache();
-            this.saveCurrentImg();
-            this.render();
-            return;
+            img.undoStack.push({
+                type: 'modify',
+                items: currentStates
+            });
+
+            // Apply "Redo" state
+            action.items.forEach(snapshot => {
+                const idx = img.history.findIndex(i => i.id === snapshot.id);
+                if (idx !== -1) {
+                    const id = img.history[idx].id;
+                    img.history[idx] = JSON.parse(JSON.stringify(snapshot.state));
+                    img.history[idx].id = id;
+                    img.history[idx].lastMod = Date.now();
+                }
+            });
         }
 
-        // Fallback to standard redo
-        if(img.redo && img.redo.length > 0) {
-            img.history.push(img.redo.pop());
-            this.invalidateCache();
-            this.saveCurrentImg();
-            this.render();
-        }
+        this.invalidateCache();
+        this.saveCurrentImg();
+        this.render();
+    },
+
+    recordCreation(item) {
+        const img = this.state.images[this.state.idx];
+        if (!img.undoStack) img.undoStack = [];
+        img.redoStack = []; // Clear redo on new action
+        
+        img.undoStack.push({
+            type: 'create',
+            ids: [item.id]
+        });
+        
+        // Limit stack
+        if (img.undoStack.length > 50) img.undoStack.shift();
+    },
+
+    recordModification(snapshots) {
+        // snapshots: Array of { id, state } representing the state BEFORE modification
+        const img = this.state.images[this.state.idx];
+        if (!img.undoStack) img.undoStack = [];
+        img.redoStack = [];
+        
+        img.undoStack.push({
+            type: 'modify',
+            items: snapshots
+        });
+        
+        if (img.undoStack.length > 50) img.undoStack.shift();
     },
 
     /**
@@ -714,6 +778,7 @@ export const ColorRmInput = {
         };
 
         c.onpointerdown = e => {
+            this._eraserSessionState = null; // Start fresh for new stroke/gesture
             if (e.pointerType === "touch" && !e.isPrimary) return;
             const pt = getPt(e); startPt = pt;
             this.lastScreenX = e.clientX;
@@ -1227,6 +1292,19 @@ export const ColorRmInput = {
                         }
 
                         if (hit) {
+                            // 1. Initialize array if this is the first item hit in this gesture
+                            if (!this._eraserSessionState) this._eraserSessionState = [];
+                            
+                            // 2. Snapshot the state BEFORE deleting (if we haven't already for this stroke)
+                            if (!this._eraserSessionState.some(item => item.idx === i)) {
+                                this._eraserSessionState.push({
+                                    idx: i,
+                                    // JSON.stringify creates a deep copy of the object state (including pts, color, x, y, deleted=false)
+                                    state: JSON.parse(JSON.stringify(st)) 
+                                });
+                            }
+
+                            // 3. Apply the deletion (mutation)
                             st.deleted = true;
                             st.lastMod = Date.now();
                             changed = true;
@@ -1382,17 +1460,11 @@ export const ColorRmInput = {
             if(isMovingSelection) {
                 // Push undo state before finalizing move
                 if (initialHistoryState.length > 0 && this.state.selection.length > 0) {
-                    const img = this.state.images[this.state.idx];
-                    if (!img._modificationUndo) img._modificationUndo = [];
-                    img._modificationRedo = []; // Clear redo on new action
-                    img._modificationUndo.push({
-                        type: 'move',
-                        indices: [...this.state.selection],
-                        items: initialHistoryState.map((state, i) => ({
-                            idx: this.state.selection[i],
-                            state: state
-                        }))
-                    });
+                    const snapshots = initialHistoryState.map(state => ({
+                        id: state.id,
+                        state: state
+                    }));
+                    this.recordModification(snapshots);
                 }
 
                 isMovingSelection=false;
@@ -1430,17 +1502,11 @@ export const ColorRmInput = {
             if(isResizing) {
                 // Push undo state before finalizing resize
                 if (initialHistoryState.length > 0 && this.state.selection.length > 0) {
-                    const img = this.state.images[this.state.idx];
-                    if (!img._modificationUndo) img._modificationUndo = [];
-                    img._modificationRedo = [];
-                    img._modificationUndo.push({
-                        type: 'resize',
-                        indices: [...this.state.selection],
-                        items: initialHistoryState.map((state, i) => ({
-                            idx: this.state.selection[i],
-                            state: state
-                        }))
-                    });
+                    const snapshots = initialHistoryState.map(state => ({
+                        id: state.id,
+                        state: state
+                    }));
+                    this.recordModification(snapshots);
                 }
 
                 isResizing = false;
@@ -1457,17 +1523,11 @@ export const ColorRmInput = {
             if(isRotating) {
                 // Push undo state before finalizing rotation
                 if (initialHistoryState.length > 0 && this.state.selection.length > 0) {
-                    const img = this.state.images[this.state.idx];
-                    if (!img._modificationUndo) img._modificationUndo = [];
-                    img._modificationRedo = [];
-                    img._modificationUndo.push({
-                        type: 'rotate',
-                        indices: [...this.state.selection],
-                        items: initialHistoryState.map((state, i) => ({
-                            idx: this.state.selection[i],
-                            state: state
-                        }))
-                    });
+                    const snapshots = initialHistoryState.map(state => ({
+                        id: state.id,
+                        state: state
+                    }));
+                    this.recordModification(snapshots);
                 }
 
                 isRotating = false;
@@ -1478,6 +1538,18 @@ export const ColorRmInput = {
                 this.saveCurrentImg();
                 this.render();
                 return;
+            }
+
+            // Check if we just finished a Stroke Eraser gesture
+            if (this.state.tool === 'eraser' && this._eraserSessionState && this._eraserSessionState.length > 0) {
+                // Convert index-based session state to ID-based snapshots
+                const snapshots = this._eraserSessionState.map(entry => ({
+                    id: entry.state.id,
+                    state: entry.state
+                }));
+                this.recordModification(snapshots);
+                this._eraserSessionState = null; // Reset
+                this.saveCurrentImg(); // Persist changes
             }
 
             if(!this.isDragging) {
@@ -1549,6 +1621,7 @@ export const ColorRmInput = {
                     };
 
                     this.state.images[this.state.idx].history.push(newShape);
+                    this.recordCreation(newShape);
                     this.saveCurrentImg();
                     this.state.selection=[this.state.images[this.state.idx].history.length-1];
                     this.setTool('lasso');
@@ -1581,6 +1654,7 @@ export const ColorRmInput = {
                         // Convert stroke to shape
                         this._clearRedoStack(); // Clear redo when adding new item
                         this.state.images[this.state.idx].history.push(shapeObj);
+                        this.recordCreation(shapeObj);
                         this.saveCurrentImg(true);
                         if (this.liveSync && !this.liveSync.isInitializing) {
                             this.liveSync.addStroke(this.state.idx, shapeObj);
@@ -1595,6 +1669,7 @@ export const ColorRmInput = {
                 this._clearRedoStack(); // Clear redo when adding new item
                 const newStroke = {id: Date.now() + Math.random(), lastMod: Date.now(), tool:this.state.tool, pts:this.currentStroke, color:this.state.penColor, size:this.state.tool==='eraser'?this.state.eraserSize:this.state.penSize, deleted: false};
                 this.state.images[this.state.idx].history.push(newStroke);
+                this.recordCreation(newStroke);
                 this.saveCurrentImg(true);
                 if (this.liveSync && !this.liveSync.isInitializing) {
                     this.liveSync.addStroke(this.state.idx, newStroke);

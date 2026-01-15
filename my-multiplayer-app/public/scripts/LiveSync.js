@@ -147,9 +147,6 @@ export class LiveSyncClient {
         this.isInitializing = false;
         console.log("Liveblocks: Room Ready.");
 
-        // Start periodic page sync check (every 5 seconds)
-        this.startPeriodicPageSync();
-
         // CRITICAL: Immediate page sync after initialization
         // This ensures we catch any pages that were added while we were connecting
         setTimeout(() => {
@@ -403,7 +400,7 @@ export class LiveSyncClient {
                 } else {
                     console.log(`[Yjs] Following remote user to page ${msg.pageIdx}`);
                     this.lastLocalPageChange = Date.now(); // Prevent echo
-                    this.app.loadPage(msg.pageIdx, false); // false = don't broadcast back
+                    this.app.loadPage(msg.pageIdx, false, true); // false = don't broadcast back, true = skip animation
                 }
             }
 
@@ -569,10 +566,22 @@ export class LiveSyncClient {
                 this.renderUsers();
                 this.renderCursors();
 
+                const timeSinceLocalChange = Date.now() - (this.lastLocalPageChange || 0);
+                const isNavigatingLocally = timeSinceLocalChange < 500;
+
                 // Check if any other user has updated their page structure version
                 others.forEach(user => {
                     const presence = user.presence;
                     if (!presence) return;
+
+                    // REAL-TIME NAVIGATION: Follow the owner immediately based on presence
+                    // This creates a stroke-like real-time experience for page flips
+                    if (presence.userId === this.ownerId && presence.pageIdx !== undefined) {
+                         if (presence.pageIdx !== this.app.state.idx && !isNavigatingLocally) {
+                             // Use skipAnimation=true for instant following
+                             this.app.loadPage(presence.pageIdx, false, true);
+                         }
+                    }
 
                     // Handle page structure version changes
                     if (presence.pageStructureVersion !== undefined &&
@@ -652,6 +661,9 @@ export class LiveSyncClient {
     }
 
     renderCursors() {
+        if (!this.fadingTrails) this.fadingTrails = [];
+        if (this._rafId) cancelAnimationFrame(this._rafId);
+        
         // Beta mode: Use Yjs awareness
         if (this.useBetaSync) {
             return this._renderCursorsYjs();
@@ -708,18 +720,80 @@ export class LiveSyncClient {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
 
+        // --- Process Fading Trails ---
+        const now = Date.now();
+        this.fadingTrails = this.fadingTrails.filter(t => {
+            const age = now - t.timestamp;
+            // Shrink animation: 200ms duration
+            // animate size from original to 0
+            const progress = age / 200;
+            if (progress >= 1) return false; // Dead
+            
+            t.currentSize = t.size * (1 - progress);
+            return true;
+        });
+
         const others = this.room.getOthers();
-        let hasActiveTrails = false;
+        let hasActiveTrails = this.fadingTrails.length > 0;
+
+        // Helper to draw a trail
+        const drawTrail = (trail, color, size, opacity) => {
+            if (trail.length <= 1) return;
+            ctx.save();
+            ctx.translate(this.app.state.pan.x, this.app.state.pan.y);
+            ctx.scale(this.app.state.zoom, this.app.state.zoom);
+
+            ctx.beginPath();
+            ctx.moveTo(trail[0].x, trail[0].y);
+            for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
+
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = size || 3;
+
+            const hex = color || '#000000';
+            let r=0, g=0, b=0;
+            if(hex.length === 4) {
+                r = parseInt(hex[1]+hex[1], 16);
+                g = parseInt(hex[2]+hex[2], 16);
+                b = parseInt(hex[3]+hex[3], 16);
+            } else if (hex.length === 7) {
+                r = parseInt(hex.slice(1,3), 16);
+                g = parseInt(hex.slice(3,5), 16);
+                b = parseInt(hex.slice(5,7), 16);
+            }
+            // Use full opacity for shrink effect, or slight fade
+            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+            ctx.stroke();
+            ctx.restore();
+        };
+
+        // Draw Fading Trails
+        this.fadingTrails.forEach(t => {
+            drawTrail(t.points, t.color, t.currentSize, 1.0);
+        });
 
         others.forEach(user => {
             const presence = user.presence;
             if (!presence || !presence.cursor || presence.pageIdx !== this.app.state.idx) {
-                if (this.remoteTrails[user.connectionId]) delete this.remoteTrails[user.connectionId];
+                if (this.remoteTrails[user.connectionId]) {
+                    // Move to fading
+                    this.fadingTrails.push({
+                        points: this.remoteTrails[user.connectionId],
+                        color: this._lastColors?.[user.connectionId] || '#000000',
+                        size: 3,
+                        opacity: 1.0,
+                        timestamp: Date.now()
+                    });
+                    delete this.remoteTrails[user.connectionId];
+                    hasActiveTrails = true;
+                }
                 return;
             }
 
-            // Note: Page structure changes are handled by the "others" subscription,
-            // no need to check here to avoid duplicate processing
+            // Cache color/size for fade out
+            if (!this._lastColors) this._lastColors = {};
+            this._lastColors[user.connectionId] = presence.color;
 
             // --- Draw Live Trail ---
             if (presence.isDrawing && presence.tool === 'pen') {
@@ -732,39 +806,20 @@ export class LiveSyncClient {
                 }
                 this.remoteTrails[user.connectionId] = trail;
 
-                if (trail.length > 1) {
-                    ctx.save();
-                    // Transform to match main canvas state
-                    ctx.translate(this.app.state.pan.x, this.app.state.pan.y);
-                    ctx.scale(this.app.state.zoom, this.app.state.zoom);
-
-                    ctx.beginPath();
-                    ctx.moveTo(trail[0].x, trail[0].y);
-                    for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
-
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.lineWidth = (presence.size || 3);
-
-                    // Smooth transition: Use user's color with opacity
-                    const hex = presence.color || '#000000';
-                    let r=0, g=0, b=0;
-                    if(hex.length === 4) {
-                        r = parseInt(hex[1]+hex[1], 16);
-                        g = parseInt(hex[2]+hex[2], 16);
-                        b = parseInt(hex[3]+hex[3], 16);
-                    } else if (hex.length === 7) {
-                        r = parseInt(hex.slice(1,3), 16);
-                        g = parseInt(hex.slice(3,5), 16);
-                        b = parseInt(hex.slice(5,7), 16);
-                    }
-                    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
-
-                    ctx.stroke();
-                    ctx.restore();
-                }
+                drawTrail(trail, presence.color, presence.size, 1.0);
             } else {
-                if (this.remoteTrails[user.connectionId]) delete this.remoteTrails[user.connectionId];
+                if (this.remoteTrails[user.connectionId]) {
+                    // Move to fading
+                    this.fadingTrails.push({
+                        points: this.remoteTrails[user.connectionId],
+                        color: presence.color,
+                        size: presence.size,
+                        opacity: 1.0,
+                        timestamp: Date.now()
+                    });
+                    delete this.remoteTrails[user.connectionId];
+                    hasActiveTrails = true;
+                }
             }
 
             // --- Draw Cursor ---
@@ -792,7 +847,15 @@ export class LiveSyncClient {
         });
 
         // Hide trail canvas if no active trails to minimize risk of obstruction
-        trailCanvas.style.display = hasActiveTrails ? 'block' : 'none';
+        if (hasActiveTrails) {
+             trailCanvas.style.display = 'block';
+             // If we have fading trails, we MUST re-render to animate the fade
+             if (this.fadingTrails.length > 0) {
+                 this._rafId = requestAnimationFrame(() => this.renderCursors());
+             }
+        } else {
+             trailCanvas.style.display = 'none';
+        }
     }
 
     /**
@@ -848,14 +911,78 @@ export class LiveSyncClient {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
 
-        let hasActiveTrails = false;
+        // --- Process Fading Trails ---
+        const now = Date.now();
+        this.fadingTrails = this.fadingTrails.filter(t => {
+            const age = now - t.timestamp;
+            // Shrink animation: 200ms duration
+            const progress = age / 200;
+            if (progress >= 1) return false; // Dead
+            
+            t.currentSize = t.size * (1 - progress);
+            return true;
+        });
+
+        // Helper to draw a trail
+        const drawTrail = (trail, color, size, opacity) => {
+            if (trail.length <= 1) return;
+            ctx.save();
+            ctx.translate(this.app.state.pan.x, this.app.state.pan.y);
+            ctx.scale(this.app.state.zoom, this.app.state.zoom);
+
+            ctx.beginPath();
+            ctx.moveTo(trail[0].x, trail[0].y);
+            for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
+
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = size || 3;
+
+            const hex = color || '#000000';
+            let r=0, g=0, b=0;
+            if(hex.length === 4) {
+                r = parseInt(hex[1]+hex[1], 16);
+                g = parseInt(hex[2]+hex[2], 16);
+                b = parseInt(hex[3]+hex[3], 16);
+            } else if (hex.length === 7) {
+                r = parseInt(hex.slice(1,3), 16);
+                g = parseInt(hex.slice(3,5), 16);
+                b = parseInt(hex.slice(5,7), 16);
+            }
+            // Use full opacity for shrink effect, or slight fade
+            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+            ctx.stroke();
+            ctx.restore();
+        };
+
+        // Draw Fading Trails
+        this.fadingTrails.forEach(t => {
+            drawTrail(t.points, t.color, t.currentSize, 1.0);
+        });
+
+        let hasActiveTrails = this.fadingTrails.length > 0;
 
         this._yjsAwareness.forEach((state, clientId) => {
             if (clientId === this._yjsClientId) return; // Skip self
             if (!state || !state.cursor || state.pageIdx !== this.app.state.idx) {
-                if (this.remoteTrails[clientId]) delete this.remoteTrails[clientId];
+                if (this.remoteTrails[clientId]) {
+                     // Move to fading
+                     this.fadingTrails.push({
+                         points: this.remoteTrails[clientId],
+                         color: this._lastColors?.[clientId] || '#000000',
+                         size: 3,
+                         opacity: 1.0,
+                         timestamp: Date.now()
+                     });
+                     delete this.remoteTrails[clientId];
+                     hasActiveTrails = true;
+                }
                 return;
             }
+
+            // Cache color
+            if (!this._lastColors) this._lastColors = {};
+            this._lastColors[clientId] = state.color;
 
             // Draw live trail
             if (state.isDrawing && state.tool === 'pen') {
@@ -867,38 +994,22 @@ export class LiveSyncClient {
                 }
                 this.remoteTrails[clientId] = trail;
 
-                if (trail.length > 1) {
-                    ctx.save();
-                    ctx.translate(this.app.state.pan.x, this.app.state.pan.y);
-                    ctx.scale(this.app.state.zoom, this.app.state.zoom);
-
-                    ctx.beginPath();
-                    ctx.moveTo(trail[0].x, trail[0].y);
-                    for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
-
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.lineWidth = (state.size || 3);
-
-                    // Parse color for opacity
-                    const hex = state.color || '#000000';
-                    let r=0, g=0, b=0;
-                    if(hex.length === 4) {
-                        r = parseInt(hex[1]+hex[1], 16);
-                        g = parseInt(hex[2]+hex[2], 16);
-                        b = parseInt(hex[3]+hex[3], 16);
-                    } else if (hex.length === 7) {
-                        r = parseInt(hex.slice(1,3), 16);
-                        g = parseInt(hex.slice(3,5), 16);
-                        b = parseInt(hex.slice(5,7), 16);
-                    }
-                    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
-                    ctx.stroke();
-                    ctx.restore();
-                }
+                drawTrail(trail, state.color, state.size, 1.0);
             } else {
-                if (this.remoteTrails[clientId]) delete this.remoteTrails[clientId];
+                if (this.remoteTrails[clientId]) {
+                     // Move to fading
+                     this.fadingTrails.push({
+                         points: this.remoteTrails[clientId],
+                         color: state.color,
+                         size: state.size,
+                         opacity: 1.0,
+                         timestamp: Date.now()
+                     });
+                     delete this.remoteTrails[clientId];
+                     hasActiveTrails = true;
+                }
             }
+
 
             // Draw cursor
             const div = document.createElement('div');
@@ -1067,14 +1178,8 @@ export class LiveSyncClient {
             } else {
                 // Instant navigation - no debounce for following other users
                 console.log(`Liveblocks: Accepting remote page change to idx=${metadata.idx}`);
-                this.app.loadPage(metadata.idx, false);
+                this.app.loadPage(metadata.idx, false, true);
             }
-        }
-
-        // Page sync: Debounce reconciliation
-        if (metadata.pageCount !== this.app.state.images.length) {
-            console.log(`Liveblocks: Page count mismatch (remote: ${metadata.pageCount}, local: ${this.app.state.images.length}). Scheduling reconciliation...`);
-            this._scheduleReconciliation();
         }
 
         // Check for R2 modification updates (large file sync) - debounced
@@ -1523,35 +1628,82 @@ export class LiveSyncClient {
                 const missingPdfPages = missingPageIds.filter(pid => pid.startsWith('pdf_'));
                 const missingUserPages = missingPageIds.filter(pid => pid.startsWith('user_'));
 
-                // For PDF pages: render from base PDF
+                // For PDF pages: Create skeletons (Lazy Load)
                 if (missingPdfPages.length > 0) {
-                    console.log(`[reconcilePageStructure] Rendering ${missingPdfPages.length} PDF pages from base file...`);
-                    await this._renderPdfPagesFromBase(missingPdfPages);
+                    console.log(`[reconcilePageStructure] Creating ${missingPdfPages.length} PDF skeletons (Lazy)...`);
+                    
+                    for (const pageId of missingPdfPages) {
+                        if (this.app.state.images.find(img => img && img.pageId === pageId)) continue;
+                        
+                        const skeleton = {
+                            id: `${this.app.state.sessionId}_${this.app.state.images.length}`,
+                            sessionId: this.app.state.sessionId,
+                            pageIndex: this.app.state.images.length,
+                            pageId: pageId,
+                            blob: null, // Lazy load
+                            history: []
+                        };
+                        
+                        await this.app.dbPut('pages', skeleton);
+                        this.app.state.images.push(skeleton);
+                    }
                 }
 
                 // For user pages: fetch from R2
                 if (missingUserPages.length > 0) {
-                    console.log(`[reconcilePageStructure] Fetching ${missingUserPages.length} user pages from R2...`);
-                    let fetchedCount = 0;
-                    let failedCount = 0;
+                    console.log(`[reconcilePageStructure] Found ${missingUserPages.length} missing user pages. Lazy loading...`);
+                    
+                    const currentIdx = this.app.state.idx;
+                    const pendingIdx = this._pendingPageIdx; 
+                    const targetPageId = remotePageIds[pendingIdx !== undefined ? pendingIdx : currentIdx];
+
+                    // 1. Create Skeletons for ALL missing pages immediately
+                    // This updates the structure instantly without waiting for network
+                    let newPagesAdded = 0;
+                    
                     for (const pageId of missingUserPages) {
-                        const targetIndex = this.app.state.images.length;
-                        // Pass page metadata (for templates, infinite canvas, etc.)
+                        // Skip if already exists (double check)
+                        if (this.app.state.images.find(img => img && img.pageId === pageId)) continue;
+
                         const meta = pageMetadata[pageId] || null;
-                        const success = await this._fetchPageByIdWithRetry(pageId, targetIndex, 3, 1000, meta);
-                        if (success) {
-                            fetchedCount++;
-                        } else {
-                            failedCount++;
-                            console.warn(`[reconcilePageStructure] Failed to fetch page ${pageId}`);
+                        
+                        // Create Skeleton Page (No Blob)
+                        const skeleton = {
+                            id: `${this.app.state.sessionId}_${this.app.state.images.length}`, // Temp ID
+                            sessionId: this.app.state.sessionId,
+                            pageIndex: this.app.state.images.length, // Temp index
+                            pageId: pageId,
+                            blob: null, // <--- LAZY LOAD: Null blob means "fetch on view"
+                            history: []
+                        };
+
+                        if (meta) {
+                            if (meta.templateType) { skeleton.templateType = meta.templateType; skeleton.templateConfig = meta.templateConfig; }
+                            if (meta.isInfinite) { skeleton.isInfinite = true; skeleton.vectorGrid = meta.vectorGrid; skeleton.bounds = meta.bounds; skeleton.origin = meta.origin; }
                         }
+
+                        // Save to DB and State
+                        await this.app.dbPut('pages', skeleton);
+                        this.app.state.images.push(skeleton);
+                        newPagesAdded++;
                     }
-                    // Show toast to user about synced pages
-                    if (fetchedCount > 0) {
-                        this.app.ui.showToast(`Synced ${fetchedCount} new page${fetchedCount > 1 ? 's' : ''} from collaborator`);
+
+                    if (newPagesAdded > 0) {
+                        console.log(`[reconcilePageStructure] Created ${newPagesAdded} skeleton pages.`);
                     }
-                    if (failedCount > 0) {
-                        this.app.ui.showToast(`⚠ ${failedCount} page${failedCount > 1 ? 's' : ''} failed to sync`, 'warning');
+
+                    // 2. Fetch ONLY the Target Page immediately (if it was missing)
+                    if (missingUserPages.includes(targetPageId)) {
+                        console.log(`[reconcilePageStructure] Target page ${targetPageId} is missing blob. Fetching priority...`);
+                        const targetIndex = this.app.state.images.length; // Placeholder index
+                        const meta = pageMetadata[targetPageId] || null;
+                        
+                        // We use the existing fetch method which handles blob download and updates the object
+                        await this._fetchPageByIdWithRetry(targetPageId, targetIndex, 3, 1000, meta);
+                        this.app.ui.showToast("Synced current page");
+                    } else {
+                        // If we are not on a missing page, just show a general toast
+                        if (newPagesAdded > 0) this.app.ui.showToast(`Synced ${newPagesAdded} pages (Lazy)`);
                     }
                 }
             }
@@ -1662,6 +1814,65 @@ export class LiveSyncClient {
             }
         } catch (error) {
             console.error('[_renderPdfPagesFromBase] Error:', error);
+        }
+    }
+
+    /**
+     * Hydrates a skeleton PDF page by rendering it from the base PDF on demand
+     */
+    async hydratePdfPage(pageObj) {
+        if (!pageObj || !pageObj.pageId || !pageObj.pageId.startsWith('pdf_')) return false;
+        
+        console.log(`[hydratePdfPage] Hydrating ${pageObj.pageId}...`);
+        
+        try {
+            // Fetch base PDF (browser cache should make this fast after first load)
+            const baseUrl = window.Config?.apiUrl(`/api/color_rm/base_file/${this.app.state.sessionId}`) ||
+                `/api/color_rm/base_file/${this.app.state.sessionId}`;
+
+            const response = await fetch(baseUrl);
+            if (!response.ok) return false;
+            
+            const blob = await response.blob();
+            
+            // Handle single image base
+            if (!blob.type.includes('pdf')) {
+                if (pageObj.pageId === 'pdf_0') {
+                    pageObj.blob = blob;
+                    await this.app.dbPut('pages', pageObj);
+                    return true;
+                }
+                return false;
+            }
+
+            const arrayBuffer = await blob.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            
+            const pageNum = parseInt(pageObj.pageId.replace('pdf_', ''), 10);
+            if (pageNum >= pdf.numPages) return false;
+
+            const page = await pdf.getPage(pageNum + 1);
+            const viewport = page.getViewport({ scale: 1.5 });
+
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            await page.render({
+                canvasContext: canvas.getContext('2d'),
+                viewport: viewport
+            }).promise;
+
+            const pageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+            
+            pageObj.blob = pageBlob;
+            await this.app.dbPut('pages', pageObj);
+            
+            console.log(`[hydratePdfPage] Successfully hydrated ${pageObj.pageId}`);
+            return true;
+        } catch (e) {
+            console.error('[hydratePdfPage] Error:', e);
+            return false;
         }
     }
 
@@ -2340,64 +2551,45 @@ export class LiveSyncClient {
     // Notify other users about page navigation (smart debounced)
     // When user is rapidly flipping pages, we wait until they stop
     notifyPageNavigation(pageIdx) {
-        // Mark that we're in a page flip session
+        // 1. Mark internal state so we don't process incoming echoes
         this._isFlippingPages = true;
         this._pendingPageIdx = pageIdx;
 
-        // Show visual feedback that we're flipping (dim canvas)
-        this._showFlippingFeedback(true);
+        this._isFlippingPages = false;
+        
+        // Mark the time of this broadcast to ignore echoes
+        this.lastLocalPageChange = Date.now();
 
-        // Debounce - only notify after user stops flipping for 300ms
-        if (this._pageNavDebounceTimer) {
-            clearTimeout(this._pageNavDebounceTimer);
+        // --- Beta Mode (Yjs) ---
+        if (this.useBetaSync) {
+            // If _sendYjsPresence exists, call it. Otherwise skip.
+            if (this._sendYjsPresence) this._sendYjsPresence();
+            this._sendYjsUpdate();
+            console.log(`[Yjs] Page navigation broadcast: ${pageIdx}`);
+            return;
         }
 
-        this._pageNavDebounceTimer = setTimeout(() => {
-            // Page flipping stopped - send final page
-            this._isFlippingPages = false;
-            this._showFlippingFeedback(false);
+        // --- Standard Mode (Liveblocks) ---
+        // Update Metadata (Persistent)
+        const project = this.getProject();
+        if (project) {
+            project.get("metadata").update({ idx: pageIdx });
+        }
 
-            // Beta mode: Update presence and sync page history
-            if (this.useBetaSync) {
-                // Mark time to prevent echo-back from other users
-                this.lastLocalPageChange = Date.now();
-                this._sendYjsPresence();
-                // Also sync current page history so other clients see our page
-                this._sendYjsUpdate();
-                console.log(`[Yjs] Page navigation complete: ${pageIdx}`);
-                return;
-            }
-
-            // Mark the time of local change to prevent echo-back
-            this.lastLocalPageChange = Date.now();
-
-            // Update metadata
-            const project = this.getProject();
-            if (project) {
-                project.get("metadata").update({ idx: pageIdx });
-            }
-
-            // Update presence
-            if (this.room) {
-                this.room.updatePresence({ pageIdx: pageIdx });
-            }
-        }, 300); // 300ms debounce - quick but prevents spam
+        // Update Presence (Live)
+        if (this.room) {
+            this.room.updatePresence({ pageIdx: pageIdx });
+        }
+        
+        console.log(`[LiveSync] Page navigation broadcast: ${pageIdx}`);
     }
 
     // Visual feedback when user is rapidly flipping pages
     _showFlippingFeedback(show) {
-        const canvas = this.app.getElement('canvas');
-        if (!canvas) return;
-
-        if (show) {
-            // Dim canvas slightly but keep content visible
-            canvas.style.transition = 'opacity 0.1s ease';
-            canvas.style.opacity = '0.7';
-        } else {
-            // Restore full opacity
-            canvas.style.transition = 'opacity 0.2s ease';
-            canvas.style.opacity = '1';
-        }
+        // INTENTIONALLY LEFT EMPTY
+        // We want the teacher to see the page instantly and clearly.
+        // Dimming the canvas (previous behavior) makes scanning pages difficult.
+        return;
     }
 
     // Handle page structure change notifications from other users (debounced)

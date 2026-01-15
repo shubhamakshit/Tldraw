@@ -759,11 +759,54 @@ export const ColorRmSession = {
      * Syncs page structure to server after any page changes
      */
     async _syncPageStructureToServer() {
-        const pageIds = this._getLocalPageStructure();
-        // Calculate pdfPageCount from actual pages, not from state (which might not be set)
-        const pdfPageCount = this._calculatePdfPageCount();
-        console.log(`[_syncPageStructureToServer] Syncing ${pageIds.length} pages (${pdfPageCount} from PDF)`);
-        await this._updatePageStructure(pageIds, pdfPageCount);
+        if (!this.config.collaborative || !this.state.ownerId) return;
+
+        console.log('[_syncPageStructureToServer] Starting safe merge...');
+
+        try {
+            // 1. Fetch latest remote structure to avoid overwriting other users' work
+            const remoteStructure = await this._fetchPageStructure();
+            const remotePageIds = remoteStructure.pageIds || [];
+            
+            // 2. Get local structure (which contains our latest additions)
+            const localPageIds = this._getLocalPageStructure();
+            
+            // 3. Merge Strategy: Union
+            // Preserve remote pages (so we don't accidentally delete things we haven't synced yet)
+            // Insert our NEW pages into the remote list at the correct relative positions.
+            const merged = [...remotePageIds];
+            
+            localPageIds.forEach((id, index) => {
+                if (!merged.includes(id)) {
+                    // This is a new page locally. Insert it into the merged list.
+                    if (index === 0) {
+                        merged.unshift(id); // Insert at start
+                    } else {
+                        const prevId = localPageIds[index - 1];
+                        const prevIdxInMerged = merged.indexOf(prevId);
+                        if (prevIdxInMerged !== -1) {
+                            // Insert after the known predecessor
+                            merged.splice(prevIdxInMerged + 1, 0, id);
+                        } else {
+                            // Predecessor not found in remote (maybe also new, or we are desynced)
+                            // Append to end as fallback to ensure it's saved
+                            merged.push(id);
+                        }
+                    }
+                }
+            });
+
+            // Calculate pdfPageCount from actual pages
+            const pdfPageCount = this._calculatePdfPageCount();
+            
+            console.log(`[_syncPageStructureToServer] Merged: ${merged.length} pages (Local: ${localPageIds.length}, Remote: ${remotePageIds.length})`);
+            
+            // 4. Push the merged structure back
+            await this._updatePageStructure(merged, pdfPageCount);
+            
+        } catch (e) {
+            console.error('[_syncPageStructureToServer] Merge failed:', e);
+        }
     },
 
     // =============================================
@@ -1821,10 +1864,11 @@ export const ColorRmSession = {
 
     /**
      * Show join room dialog for Android users
-     * Uses global UI.showPrompt for consistent styling
+     * Uses native prompt for consistent behavior
      */
     async showJoinRoomDialog() {
-        const code = await this.ui.showPrompt("Join Room", "Enter room code (e.g., user_abc-proj_xyz)");
+        // User requested to stop using custom UI
+        const code = prompt("Join Room\nEnter room code (e.g., user_abc-proj_xyz):");
         if (code && code.trim()) {
             await this.joinWithCode(code.trim());
         }

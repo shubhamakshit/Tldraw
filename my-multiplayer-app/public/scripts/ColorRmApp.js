@@ -796,36 +796,34 @@ export class ColorRmApp {
         });
     }
 
-    async loadPage(i, broadcast = true) {
-        if(i<0 || i>=this.state.images.length) return;
+    async loadPage(i, broadcast = true, skipAnimation = false) {
+        if (i < 0) return;
 
-        // Debounce rapid navigation - queue the target and animate to it
-        const now = Date.now();
-        const navigationCooldown = 50; // Reduced from 150ms for snappier feel
-
-        if (this._lastNavTime && now - this._lastNavTime < navigationCooldown) {
-            // Queue this as the target page
-            this._queuedPage = i;
-            if (!this._navDebounceTimer) {
-                this._navDebounceTimer = setTimeout(() => {
-                    this._navDebounceTimer = null;
-                    if (this._queuedPage !== null && this._queuedPage !== this.state.idx) {
-                        this.loadPage(this._queuedPage, broadcast);
-                    }
-                    this._queuedPage = null;
-                }, navigationCooldown);
-            }
-            return;
+        // If index is out of bounds, try to reconcile first before giving up
+        if (i >= this.state.images.length) {
+             if (this.liveSync && this.config.collaborative) {
+                 console.log(`Page ${i} out of bounds (len=${this.state.images.length}). Reconciling...`);
+                 await this.liveSync.reconcilePageStructure();
+                 // Check again
+                 if (i >= this.state.images.length) {
+                     console.warn(`Page ${i} still out of bounds after reconcile. Max: ${this.state.images.length-1}`);
+                     return;
+                 }
+             } else {
+                 return;
+             }
         }
-        this._lastNavTime = now;
+
+        // Debounce rapid navigation - removed for instant response
+        this._lastNavTime = Date.now();
 
         // Determine animation direction
         const direction = i > this.state.idx ? 'left' : 'right';
         const viewport = this.getElement('viewport');
         const canvas = this.getElement('canvas');
 
-        // Skip animation if only one page or same page
-        const shouldAnimate = this.state.images.length > 1 && this.state.idx !== i;
+        // Skip animation if only one page or same page OR if skipAnimation is requested (e.g. remote sync)
+        const shouldAnimate = !skipAnimation && this.state.images.length > 1 && this.state.idx !== i;
 
         // Apply exit animation non-blocking
         if (canvas && viewport && shouldAnimate) {
@@ -865,8 +863,18 @@ export class ColorRmApp {
 
         let item = this.state.images[i];
         if (!item) {
-            console.warn(`Page ${i} missing from state. Skipping loadPage.`);
-            return;
+            // OPTIMIZATION: If page is missing, it might be a newly added page we haven't synced yet.
+            // Trigger reconciliation and try to load again once done.
+            if (this.liveSync) {
+                console.log(`Page ${i} missing from state. Triggering reconciliation...`);
+                await this.liveSync.reconcilePageStructure();
+                item = this.state.images[i]; // Try again
+            }
+            
+            if (!item) {
+                console.warn(`Page ${i} missing from state. Skipping loadPage.`);
+                return;
+            }
         }
 
         // If the page doesn't have a blob, try to fetch it from the backend
@@ -896,8 +904,15 @@ export class ColorRmApp {
         }
 
         if (!item || !item.blob) {
-            console.warn(`Page ${i} missing blob data. Skipping loadPage.`);
-            return;
+            // Check if it's a PDF skeleton that needs hydration
+            if (item && item.pageId && item.pageId.startsWith('pdf_') && this.liveSync) {
+                 await this.liveSync.hydratePdfPage(item);
+            }
+
+            if (!item || !item.blob) {
+                console.warn(`Page ${i} missing blob data. Skipping loadPage.`);
+                return;
+            }
         }
 
         this.state.idx = i;
@@ -947,14 +962,19 @@ export class ColorRmApp {
 
                 const ctx = c.getContext('2d', {willReadFrequently:true});
                 ctx.drawImage(img,0,0,w,h);
-                const d = ctx.getImageData(0,0,w,h).data;
-                this.cache.lab = new Float32Array(w*h*3);
-                for(let k=0,j=0; k<d.length; k+=4,j+=3) {
-                    const [l,a,b] = this.rgbToLab(d[k],d[k+1],d[k+2]);
-                    this.cache.lab[j]=l; this.cache.lab[j+1]=a; this.cache.lab[j+2]=b;
-                }
+                
+                // --- OPTIMIZATION: Defer heavy LAB calculation ---
+                // Render the page immediately, then calculate LAB in background
+                setTimeout(() => {
+                   const d = ctx.getImageData(0,0,w,h).data;
+                   this.cache.lab = new Float32Array(w*h*3);
+                   for(let k=0,j=0; k<d.length; k+=4,j+=3) {
+                       const [l,a,b] = this.rgbToLab(d[k],d[k+1],d[k+2]);
+                       this.cache.lab[j]=l; this.cache.lab[j+1]=a; this.cache.lab[j+2]=b;
+                   }
+                }, 0);
 
-                // Apply enter animation (only if multiple pages)
+                // Apply enter animation (only if multiple pages AND not skipped)
                 if (canvas && shouldAnimate) {
                     canvas.style.transform = direction === 'left' ? 'translateX(30px)' : 'translateX(-30px)';
                     canvas.style.opacity = '0.3';
