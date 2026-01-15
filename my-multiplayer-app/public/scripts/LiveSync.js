@@ -1685,8 +1685,8 @@ export class LiveSyncClient {
                 this.app.ui.updateProgress(0, '');
 
                 // Update UI to reflect current page count even if no structure
-                const pt = this.app.getElement('pageTotal');
-                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+                const pageTotal = this.app.getElement('pageTotal');
+                if (pageTotal) pageTotal.innerText = '/ ' + this.app.state.images.length;
 
                 // Update page input max value to reflect current total
                 const pageInput = this.app.getElement('pageInput');
@@ -1789,6 +1789,12 @@ export class LiveSyncClient {
             const pt = this.app.getElement('pageTotal');
             if (pt) pt.innerText = '/ ' + this.app.state.images.length;
 
+            // Update page input max value to reflect new total
+            const pageInput = this.app.getElement('pageInput');
+            if (pageInput) {
+                pageInput.max = this.app.state.images.length;
+            }
+
             if (this.app.state.activeSideTab === 'pages') {
                 this.app.renderPageSidebar();
             }
@@ -1803,16 +1809,7 @@ export class LiveSyncClient {
             this.app.ui.updateProgress(100, 'Sync complete');
             setTimeout(() => this.app.ui.updateProgress(0, ''), 1000);
 
-            // Update UI to reflect new page count
-            const pt = this.app.getElement('pageTotal');
-            if (pt) pt.innerText = '/ ' + this.app.state.images.length;
-
-            // Update page input max value to reflect new total
-            const pageInput = this.app.getElement('pageInput');
-            if (pageInput) {
-                pageInput.max = this.app.state.images.length;
-            }
-
+            // Update UI to reflect new page count (already handled earlier in the function)
             if (this.app.state.activeSideTab === 'pages') {
                 this.app.renderPageSidebar();
             }
