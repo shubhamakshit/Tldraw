@@ -1138,7 +1138,9 @@ export const ColorRmSession = {
 
     async switchProject(ownerId, projectId) {
         this.ui.hideDashboard();
-        window.location.hash = `/color_rm/${ownerId}/${projectId}`;
+        // Preserve beta prefix if in beta mode
+        const prefix = this.config.useBetaSync ? '/beta/color_rm' : '/color_rm';
+        window.location.hash = `${prefix}/${ownerId}/${projectId}`;
         location.reload();
     },
 
@@ -1668,7 +1670,9 @@ export const ColorRmSession = {
 
         // Only update URL hash for main app
         if (this.config.isMain) {
-            window.location.hash = `/color_rm/${ownerId}/${projectId}`;
+            // Preserve beta prefix if in beta mode
+            const prefix = this.config.useBetaSync ? '/beta/color_rm' : '/color_rm';
+            window.location.hash = `${prefix}/${ownerId}/${projectId}`;
         }
 
         const nameInput = this.getElement('newProjectName');
@@ -3349,8 +3353,10 @@ export const ColorRmSession = {
     // Switch to a different project
     async switchProject(ownerId, projectId) {
         try {
+            // Preserve beta prefix if in beta mode
+            const prefix = this.config.useBetaSync ? '/beta/color_rm' : '/color_rm';
             // Update the URL hash to reflect the new project
-            window.location.hash = `#/color_rm/${ownerId}/${projectId}`;
+            window.location.hash = `#${prefix}/${ownerId}/${projectId}`;
 
             // Reload the page to load the new project
             location.reload();

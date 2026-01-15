@@ -91,6 +91,24 @@ export const Config = {
         return base + normalizedPath;
     },
 
+    // Helper to make WebSocket URL (for Yjs sync, etc.)
+    // Handles Capacitor bundled mode where window.location.host is not the server
+    wsUrl(path) {
+        const base = this.getApiBase();
+        // Ensure path starts with /
+        const normalizedPath = path.startsWith('/') ? path : '/' + path;
+
+        if (base) {
+            // Bundled mode - convert https:// to wss:// or http:// to ws://
+            const wsBase = base.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+            return wsBase + normalizedPath;
+        } else {
+            // Remote/web mode - use current host
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            return `${protocol}//${window.location.host}${normalizedPath}`;
+        }
+    },
+
     // Set preferred backend (for bundled mode)
     setBackend(backend) {
         if (this.BACKENDS[backend]) {

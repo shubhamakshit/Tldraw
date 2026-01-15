@@ -18,6 +18,7 @@ directory = "./dist/client"
 bindings = [
     { name = "TLDRAW_DURABLE_OBJECT", class_name = "TldrawDurableObject" },
     { name = "COLORM_DURABLE_OBJECT", class_name = "ColorRmDurableObject" },
+    { name = "YJS_DURABLE_OBJECT", class_name = "YjsDurableObject" },
 ]
 
 # Durable objects require migrations to create/modify/delete them
@@ -28,6 +29,10 @@ new_sqlite_classes = ["TldrawDurableObject"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["ColorRmDurableObject"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["YjsDurableObject"]
 
 # We store rooms and asset uploads in an R2 bucket
 [[r2_buckets]]
@@ -45,6 +50,7 @@ preview_id = "d0faab9b5c524d23abeec7f62190bacd"
 durable_objects.bindings = [
     { name = "TLDRAW_DURABLE_OBJECT", class_name = "TldrawDurableObject" },
     { name = "COLORM_DURABLE_OBJECT", class_name = "ColorRmDurableObject" },
+    { name = "YJS_DURABLE_OBJECT", class_name = "YjsDurableObject" },
 ]
 r2_buckets = [
     { binding = 'TLDRAW_BUCKET', bucket_name = 'tldraw-shubh', preview_bucket_name = 'tldraw-shubh' }
