@@ -181,8 +181,8 @@ export const ColorRmInput = {
         const img = this.state.images[this.state.idx];
         if (!img._modificationUndo) img._modificationUndo = [];
 
-        // Clear redo stack when new modification is made
-        img._modificationRedo = [];
+        // Clear all redo stacks when new modification is made
+        this._clearRedoStack();
 
         // Save current state of items being modified
         const undoEntry = {
@@ -1604,7 +1604,7 @@ export const ColorRmInput = {
                 // Regular eraser (area-based) with options
                 const img = this.state.images[this.state.idx];
                 const eraserR = this.state.eraserSize / 2;
-                let changed = false;
+                const itemsToErase = [];
 
                 // Get eraser options, default to all enabled if not set
                 const options = this.state.eraserOptions || {
@@ -1656,12 +1656,20 @@ export const ColorRmInput = {
                     }
 
                     if (hit) {
-                        st.deleted = true;
-                        st.lastMod = Date.now();
-                        changed = true;
+                        itemsToErase.push(i);
                     }
                 }
-                if (changed) {
+
+                if (itemsToErase.length > 0) {
+                    // Save state for undo before deleting
+                    this._pushModificationUndo('delete', itemsToErase);
+
+                    itemsToErase.forEach(i => {
+                        const st = img.history[i];
+                        st.deleted = true;
+                        st.lastMod = Date.now();
+                    });
+
                     this.invalidateCache();
                     this.scheduleSave();
                     this.render();

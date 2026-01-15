@@ -1821,53 +1821,13 @@ export const ColorRmSession = {
 
     /**
      * Show join room dialog for Android users
+     * Uses global UI.showPrompt for consistent styling
      */
-    showJoinRoomDialog() {
-        // Create modal using existing overlay pattern from color_rm.html
-        const modal = document.createElement('div');
-        modal.className = 'overlay';
-        modal.style.zIndex = '10000';
-        modal.innerHTML = `
-            <div class="modal" style="max-width: 320px;">
-                <div class="modal-header">
-                    <span>Join Room</span>
-                    <button class="modal-close" onclick="this.closest('.overlay').remove()"><i class="bi bi-x-lg"></i></button>
-                </div>
-                <div class="modal-body">
-                    <p style="margin-bottom: 12px; opacity: 0.7;">Enter the room code shared with you:</p>
-                    <input type="text" id="roomCodeInput" class="form-control" placeholder="e.g., user_abc123-proj_xyz789" autocomplete="off" />
-                </div>
-                <div class="modal-footer">
-                    <button class="btn" id="joinRoomCancel">Cancel</button>
-                    <button class="btn btn-primary" id="joinRoomSubmit">Join</button>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        const input = modal.querySelector('#roomCodeInput');
-        const cancelBtn = modal.querySelector('#joinRoomCancel');
-        const submitBtn = modal.querySelector('#joinRoomSubmit');
-
-        const close = () => modal.remove();
-
-        cancelBtn.onclick = close;
-        modal.onclick = (e) => { if (e.target === modal) close(); };
-
-        submitBtn.onclick = async () => {
-            const code = input.value;
-            if (code) {
-                await this.joinWithCode(code);
-            }
-        };
-
-        input.onkeydown = (e) => {
-            if (e.key === 'Enter') submitBtn.click();
-            if (e.key === 'Escape') close();
-        };
-
-        input.focus();
+    async showJoinRoomDialog() {
+        const code = await this.ui.showPrompt("Join Room", "Enter room code (e.g., user_abc-proj_xyz)");
+        if (code && code.trim()) {
+            await this.joinWithCode(code.trim());
+        }
     },
 
     /**

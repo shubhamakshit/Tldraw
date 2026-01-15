@@ -801,7 +801,7 @@ export class ColorRmApp {
 
         // Debounce rapid navigation - queue the target and animate to it
         const now = Date.now();
-        const navigationCooldown = 150; // ms between actual page loads
+        const navigationCooldown = 50; // Reduced from 150ms for snappier feel
 
         if (this._lastNavTime && now - this._lastNavTime < navigationCooldown) {
             // Queue this as the target page
@@ -827,14 +827,12 @@ export class ColorRmApp {
         // Skip animation if only one page or same page
         const shouldAnimate = this.state.images.length > 1 && this.state.idx !== i;
 
-        // Apply exit animation
+        // Apply exit animation non-blocking
         if (canvas && viewport && shouldAnimate) {
-            canvas.style.transition = 'transform 0.2s ease-out, opacity 0.15s ease-out';
+            canvas.style.transition = 'transform 0.15s ease-out, opacity 0.15s ease-out';
             canvas.style.transform = direction === 'left' ? 'translateX(-30px)' : 'translateX(30px)';
-            canvas.style.opacity = '0.3';
-
-            // Wait for exit animation
-            await new Promise(r => setTimeout(r, 100));
+            canvas.style.opacity = '0.6'; // Less transparent for better feel
+            // Removed blocking await
         }
 
         // Auto-compact current page before switching (if leaving a page)
