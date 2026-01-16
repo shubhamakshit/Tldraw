@@ -692,12 +692,14 @@ export const ColorRmSession = {
 
                         try {
                             console.log(`[_uploadPageBlob] Sending POST request via CapacitorHttp as JSON payload`);
+                            console.log(`[_uploadPageBlob] Original blob type: ${blob.type}, size: ${blob.size} bytes`);
                             const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                                 url: url,
                                 method: 'POST',
                                 data: { data: base64Data }, // Send as JSON payload with known format
                                 headers: {
-                                    'Content-Type': 'application/json', // Important: send as JSON
+                                    'Content-Type': 'application/json', // Send as JSON to CapacitorHttp
+                                    'x-original-content-type': blob.type || 'application/octet-stream', // Preserve original content type
                                     'x-project-name': encodeURIComponent(this.state.projectName)
                                 }
                             });
@@ -1581,12 +1583,14 @@ export const ColorRmSession = {
                         });
 
                         console.log(`ColorRM Sync: Sending POST request to ${url} as JSON payload`);
+                        console.log(`ColorRM Sync: Original file type: ${files[0].type}, size: ${files[0].size} bytes`);
                         const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                             url: url,
                             method: 'POST',
                             data: { data: base64Data }, // Send as JSON payload with known format
                             headers: {
-                                'Content-Type': 'application/json', // Important: send as JSON
+                                'Content-Type': 'application/json', // Send as JSON to CapacitorHttp
+                                'x-original-content-type': files[0].type || 'application/octet-stream', // Preserve original content type
                                 'x-project-name': encodeURIComponent(pName)
                             }
                         });
@@ -1971,14 +1975,18 @@ export const ColorRmSession = {
                             reader.readAsDataURL(this.state.images[0].blob);
                         });
 
+                        console.log(`[Reupload] Sending POST request as JSON payload`);
+                        console.log(`[Reupload] Original blob type: ${this.state.images[0].blob.type}, size: ${this.state.images[0].blob.size} bytes`);
                         const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                             url: url,
                             method: 'POST',
                             data: { data: base64Data }, // Send as JSON payload with known format
                             headers: {
-                                'Content-Type': 'application/json', // Important: send as JSON
+                                'Content-Type': 'application/json', // Send as JSON to CapacitorHttp
+                                'x-original-content-type': this.state.images[0].blob.type || 'application/octet-stream', // Preserve original content type
                             }
                         });
+                        console.log(`[Reupload] CapacitorHttp response status: ${response.status}`);
 
                         if (response.status >= 200 && response.status < 300) {
                             this.ui.showToast("Base file restored!");

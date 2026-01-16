@@ -1404,49 +1404,8 @@ export class LiveSyncClient {
                 console.log(`[_fetchPageByIdWithRetry] Fetch response status: ${response.status} for page ${pageId}`);
 
                 if (response.ok) {
-                    let blob = await response.blob();
+                    const blob = await response.blob();
                     console.log(`[_fetchPageByIdWithRetry] Received blob for page ${pageId}: size=${blob.size} bytes, type=${blob.type}`);
-
-                    // Check if the blob might be base64 encoded (too large for expected image, and starts with base64 chars)
-                    if (blob.size > 1000) { // If reasonably large
-                        const arrayBuffer = await blob.arrayBuffer();
-                        const uint8Array = new Uint8Array(arrayBuffer.slice(0, 100)); // Sample first 100 bytes
-                        const textSample = new TextDecoder().decode(uint8Array);
-
-                        // Check if it looks like base64 content (contains only base64 chars and padding)
-                        const base64Pattern = /^[A-Za-z0-9+/]*={0,2}/;
-                        if (base64Pattern.test(textSample.split('').slice(0, 50).join(''))) {
-                            console.log(`[_fetchPageByIdWithRetry] Detected base64 encoded content for page ${pageId}, decoding...`);
-                            try {
-                                // Decode the base64 content back to binary
-                                const base64String = new TextDecoder().decode(arrayBuffer).trim();
-
-                                // Decode base64 to binary
-                                let binaryString = '';
-                                if (typeof atob !== 'undefined') {
-                                    // Browser environment
-                                    binaryString = atob(base64String);
-                                } else {
-                                    // Node.js environment - fallback
-                                    binaryString = atob(base64String.substring(0, 1000)); // Just for test
-                                }
-
-                                const bytes = new Uint8Array(binaryString.length);
-                                for (let i = 0; i < binaryString.length; i++) {
-                                    bytes[i] = binaryString.charCodeAt(i);
-                                }
-
-                                // Create new blob with decoded binary data
-                                // Determine appropriate type based on what we expect
-                                const imageType = existingPage?.blob?.type || 'image/jpeg';
-                                blob = new Blob([bytes], { type: imageType });
-                                console.log(`[_fetchPageByIdWithRetry] Successfully decoded base64 content for page ${pageId}, new size: ${bytes.length} bytes`);
-                            } catch (decodeError) {
-                                console.error(`[_fetchPageByIdWithRetry] Failed to decode as base64 for page ${pageId}, proceeding with original:`, decodeError);
-                                // Continue with original blob if decode fails
-                            }
-                        }
-                    }
 
                     // Validate blob
                     if (!blob || blob.size === 0) {
@@ -1886,47 +1845,8 @@ export class LiveSyncClient {
                 return;
             }
 
-            let blob = await response.blob();
+            const blob = await response.blob();
             console.log(`[_renderPdfPagesFromBase] Received blob: size=${blob.size} bytes, type=${blob.type}`);
-
-            // Check if the blob might be base64 encoded (too large for expected PDF, and starts with base64 chars)
-            if (blob.size > 1000) { // If reasonably large
-                const arrayBuffer = await blob.arrayBuffer();
-                const uint8Array = new Uint8Array(arrayBuffer.slice(0, 100)); // Sample first 100 bytes
-                const textSample = new TextDecoder().decode(uint8Array);
-
-                // Check if it looks like base64 content (contains only base64 chars and padding)
-                const base64Pattern = /^[A-Za-z0-9+/]*={0,2}/;
-                if (base64Pattern.test(textSample.split('').slice(0, 50).join(''))) {
-                    console.log(`[_renderPdfPagesFromBase] Detected base64 encoded content, decoding...`);
-                    try {
-                        // Decode the base64 content back to binary
-                        const base64String = new TextDecoder().decode(arrayBuffer).trim();
-
-                        // Decode base64 to binary
-                        let binaryString = '';
-                        if (typeof atob !== 'undefined') {
-                            // Browser environment
-                            binaryString = atob(base64String);
-                        } else {
-                            // Node.js environment - fallback
-                            binaryString = atob(base64String.substring(0, 1000)); // Just for test
-                        }
-
-                        const bytes = new Uint8Array(binaryString.length);
-                        for (let i = 0; i < binaryString.length; i++) {
-                            bytes[i] = binaryString.charCodeAt(i);
-                        }
-
-                        // Create new blob with decoded binary data
-                        blob = new Blob([bytes], { type: 'application/pdf' });
-                        console.log(`[_renderPdfPagesFromBase] Successfully decoded base64 content, new size: ${bytes.length} bytes`);
-                    } catch (decodeError) {
-                        console.error(`[_renderPdfPagesFromBase] Failed to decode as base64, proceeding with original:`, decodeError);
-                        // Continue with original blob if decode fails
-                    }
-                }
-            }
 
             // Check if it's a PDF
             if (!blob.type.includes('pdf')) {

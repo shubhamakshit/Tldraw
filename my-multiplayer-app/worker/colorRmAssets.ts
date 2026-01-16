@@ -64,8 +64,18 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
         }
 
         console.log(`[handleColorRmUpload] Storing base file to R2: ${objectKey}, project: ${projectName}, size: ${finalData.byteLength} bytes`);
-        await env.TLDRAW_BUCKET.put(objectKey, finalData, {
-            httpMetadata: request.headers,
+
+        // Create headers with original content type if provided
+        const storageHeaders = new Headers(request.headers);
+        const originalContentType = request.headers.get('x-original-content-type');
+        if (originalContentType) {
+            storageHeaders.set('Content-Type', originalContentType);
+        }
+
+        // Convert ArrayBuffer to BufferSource for R2 storage
+        const blob = new Blob([finalData]);
+        await env.TLDRAW_BUCKET.put(objectKey, blob, {
+            httpMetadata: storageHeaders,
             customMetadata: { name: projectName }
         })
         console.log(`[handleColorRmUpload] Upload successful for: ${objectKey}`);
@@ -102,18 +112,29 @@ export async function handleColorRmDownload(request: IRequest, env: Env) {
         const textSample = new TextDecoder().decode(uint8Array);
 
         // Check if it looks like base64 content (contains only base64 chars and padding)
-        const base64Pattern = /^[A-Za-z0-9+/]*={0,2}/;
-        if (base64Pattern.test(textSample.split('').slice(0, 50).join(''))) {
-            console.log(`[handleColorRmDownload] WARNING: File appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
+        // But exclude common binary file headers like PDF (%PDF-), JPEG (ÿØÿ), PNG (‰PNG), etc.
+        if (textSample.startsWith('%PDF-') ||
+            (textSample.charCodeAt(0) === 0xFF && textSample.charCodeAt(1) === 0xD8) || // JPEG
+            textSample.startsWith('\x89PNG') || // PNG
+            textSample.startsWith('<svg')) {   // SVG
+            // Recognized binary file header, not base64
+            console.log(`[handleColorRmDownload] File appears to be proper binary data (recognized header). Sample: ${textSample.substring(0, 50)}...`);
         } else {
-            console.log(`[handleColorRmDownload] File appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
+            // Check if it looks like base64 content (contains only base64 chars and padding)
+            const base64Pattern = /^[A-Za-z0-9+/]{10,}/; // At least 10 chars to be considered base64
+            if (base64Pattern.test(textSample.replace(/\s/g, ''))) {
+                console.log(`[handleColorRmDownload] WARNING: File appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
+            } else {
+                console.log(`[handleColorRmDownload] File appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
+            }
         }
 
         const headers = new Headers()
         obj.writeHttpMetadata(headers)
         headers.set('etag', obj.httpEtag)
 
-        return new Response(obj.body, { headers })
+        // Use the buffer we already read instead of obj.body to avoid stream disturbance
+        return new Response(buffer, { headers })
     } catch (e: any) {
         console.error('Error downloading color_rm file:', e)
         return new Response('Error during download', { status: 500 })
@@ -211,11 +232,20 @@ export async function handleColorRmPageUpload(request: IRequest, env: Env) {
             finalData = bodyData;
         }
 
-        await env.TLDRAW_BUCKET.put(objectKey, finalData, {
-            httpMetadata: request.headers,
+        // Create headers with original content type if provided
+        const storageHeaders = new Headers(request.headers);
+        const originalContentType = request.headers.get('x-original-content-type');
+        if (originalContentType) {
+            storageHeaders.set('Content-Type', originalContentType);
+        }
+
+        // Convert ArrayBuffer to BufferSource for R2 storage
+        const blob = new Blob([finalData]);
+        await env.TLDRAW_BUCKET.put(objectKey, blob, {
+            httpMetadata: storageHeaders,
             customMetadata: { name: projectName, pageId: pageId }
         })
-        console.log(`[PageUpload] Stored page: ${objectKey}, size: ${finalData.byteLength} bytes`)
+        console.log(`[PageUpload] Stored page: ${objectKey}, size: ${finalData.byteLength} bytes, original content type: ${originalContentType || 'unknown'}`)
         return new Response('Page upload successful', { status: 200 })
     } catch (e: any) {
         console.error('Error uploading color_rm page file:', e)
@@ -248,18 +278,29 @@ export async function handleColorRmPageDownload(request: IRequest, env: Env) {
         const textSample = new TextDecoder().decode(uint8Array);
 
         // Check if it looks like base64 content (contains only base64 chars and padding)
-        const base64Pattern = /^[A-Za-z0-9+/]*={0,2}/;
-        if (base64Pattern.test(textSample.split('').slice(0, 50).join(''))) {
-            console.log(`[PageDownload] WARNING: Page ${pageId} appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
+        // But exclude common binary file headers like PDF (%PDF-), JPEG (ÿØÿ), PNG (‰PNG), etc.
+        if (textSample.startsWith('%PDF-') ||
+            (textSample.charCodeAt(0) === 0xFF && textSample.charCodeAt(1) === 0xD8) || // JPEG
+            textSample.startsWith('\x89PNG') || // PNG
+            textSample.startsWith('<svg')) {   // SVG
+            // Recognized binary file header, not base64
+            console.log(`[PageDownload] Page ${pageId} appears to be proper binary data (recognized header). Sample: ${textSample.substring(0, 50)}...`);
         } else {
-            console.log(`[PageDownload] Page ${pageId} appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
+            // Check if it looks like base64 content (contains only base64 chars and padding)
+            const base64Pattern = /^[A-Za-z0-9+/]{10,}/; // At least 10 chars to be considered base64
+            if (base64Pattern.test(textSample.replace(/\s/g, ''))) {
+                console.log(`[PageDownload] WARNING: Page ${pageId} appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
+            } else {
+                console.log(`[PageDownload] Page ${pageId} appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
+            }
         }
 
         const headers = new Headers()
         obj.writeHttpMetadata(headers)
         headers.set('etag', obj.httpEtag)
 
-        return new Response(obj.body, { headers })
+        // Use the buffer we already read instead of obj.body to avoid stream disturbance
+        return new Response(buffer, { headers })
     } catch (e: any) {
         console.error('Error downloading color_rm page file:', e)
         return new Response('Error during page download', { status: 500 })
