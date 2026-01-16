@@ -635,17 +635,22 @@ export class ColorRmApp {
                      for (let i = 0; i < binaryString.length; i++) {
                          bytes[i] = binaryString.charCodeAt(i);
                      }
-                     const blob = new Blob([bytes], { type: 'application/pdf' });
-                     
-                     // Try to get filename from URI
-                     let fileName = 'imported_pdf.pdf';
-                     
-                     // 1. Try Native getFileName
+                     // Try to get content type from native interface
+                     let contentType = 'application/octet-stream';
+                     if (window.AndroidNative && window.AndroidNative.getMimeType) {
+                         const mimeType = window.AndroidNative.getMimeType(uri);
+                         if (mimeType) contentType = mimeType;
+                     }
+
+                     const blob = new Blob([bytes], { type: contentType });
+
+                     // Try to get filename from native interface first
+                     let fileName = 'imported_file.bin';
                      if (window.AndroidNative && window.AndroidNative.getFileName) {
                          const nativeName = window.AndroidNative.getFileName(uri);
                          if (nativeName) fileName = nativeName;
-                     } 
-                     // 2. Fallback to URI parsing
+                     }
+                     // Fallback to URI parsing if native interface didn't provide a name
                      else {
                          try {
                             const parts = uri.split('/');
@@ -655,9 +660,9 @@ export class ColorRmApp {
                             }
                          } catch(e) {}
                      }
-                     
-                     console.log("Created File object:", fileName);
-                     return new File([blob], fileName, { type: 'application/pdf' });
+
+                     console.log("Created File object:", fileName, "with type:", contentType);
+                     return new File([blob], fileName, { type: contentType });
                 } else {
                     console.error("AndroidNative returned null/empty for URI");
                 }
@@ -684,11 +689,24 @@ export class ColorRmApp {
                     for (let i = 0; i < binaryString.length; i++) {
                         bytes[i] = binaryString.charCodeAt(i);
                     }
-                    const blob = new Blob([bytes], { type: 'application/pdf' });
+
+                    // Try to get content type from native interface
+                    let contentType = 'application/octet-stream';
+                    if (window.AndroidNative && window.AndroidNative.getMimeType) {
+                        const mimeType = window.AndroidNative.getMimeType(uri);
+                        if (mimeType) contentType = mimeType;
+                    }
+
+                    const blob = new Blob([bytes], { type: contentType });
 
                     // Create a file object from the blob
-                    const fileName = uri.split('/').pop().split('?')[0] || 'imported_pdf.pdf';
-                    return new File([blob], fileName, { type: 'application/pdf' });
+                    let fileName = uri.split('/').pop().split('?')[0] || 'imported_file.bin';
+                    // Try to get filename from native interface first
+                    if (window.AndroidNative && window.AndroidNative.getFileName) {
+                        const nativeName = window.AndroidNative.getFileName(uri);
+                        if (nativeName) fileName = nativeName;
+                    }
+                    return new File([blob], fileName, { type: contentType });
                 }
             }
         } catch (error) {
@@ -1007,6 +1025,7 @@ export class ColorRmApp {
             };
         });
     }
+
 }
 
 // Mixin all modules into the prototype
