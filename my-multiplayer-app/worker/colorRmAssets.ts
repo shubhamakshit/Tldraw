@@ -52,7 +52,7 @@ export async function handleColorRmUpload(request: IRequest, env: Env) {
                     // If not base64, use the original body
                     finalData = bodyData;
                 }
-            } catch (parseError) {
+            } catch (parseError: any) {
                 console.log(`[handleColorRmUpload] JSON parsing failed: ${parseError.message}, using raw data`);
                 // If JSON parsing fails, use the original body
                 finalData = bodyData;
@@ -221,7 +221,7 @@ export async function handleColorRmPageUpload(request: IRequest, env: Env) {
                     // If not base64, use the original body
                     finalData = bodyData;
                 }
-            } catch (parseError) {
+            } catch (parseError: any) {
                 // If JSON parsing fails, use the original body
                 console.log(`[PageUpload] JSON parsing failed: ${parseError.message}, using raw data`);
                 finalData = bodyData;
