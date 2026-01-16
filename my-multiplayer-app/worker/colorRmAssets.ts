@@ -106,28 +106,8 @@ export async function handleColorRmDownload(request: IRequest, env: Env) {
 
         console.log(`[handleColorRmDownload] Base file FOUND, size: ${obj.size} bytes`);
 
-        // Additional debugging: Check if the content looks like base64
+        // Read the buffer for response
         const buffer = await obj.arrayBuffer();
-        const uint8Array = new Uint8Array(buffer.slice(0, 100)); // Check first 100 bytes
-        const textSample = new TextDecoder().decode(uint8Array);
-
-        // Check if it looks like base64 content (contains only base64 chars and padding)
-        // But exclude common binary file headers like PDF (%PDF-), JPEG (ÿØÿ), PNG (‰PNG), etc.
-        if (textSample.startsWith('%PDF-') ||
-            (textSample.charCodeAt(0) === 0xFF && textSample.charCodeAt(1) === 0xD8) || // JPEG
-            textSample.startsWith('\x89PNG') || // PNG
-            textSample.startsWith('<svg')) {   // SVG
-            // Recognized binary file header, not base64
-            console.log(`[handleColorRmDownload] File appears to be proper binary data (recognized header). Sample: ${textSample.substring(0, 50)}...`);
-        } else {
-            // Check if it looks like base64 content (contains only base64 chars and padding)
-            const base64Pattern = /^[A-Za-z0-9+/]{10,}/; // At least 10 chars to be considered base64
-            if (base64Pattern.test(textSample.replace(/\s/g, ''))) {
-                console.log(`[handleColorRmDownload] WARNING: File appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
-            } else {
-                console.log(`[handleColorRmDownload] File appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
-            }
-        }
 
         const headers = new Headers()
         obj.writeHttpMetadata(headers)
@@ -272,28 +252,8 @@ export async function handleColorRmPageDownload(request: IRequest, env: Env) {
 
         console.log(`[PageDownload] Page file FOUND for ${pageId}, size: ${obj.size} bytes`);
 
-        // Additional debugging: Check if the content looks like base64
+        // Read the buffer for response
         const buffer = await obj.arrayBuffer();
-        const uint8Array = new Uint8Array(buffer.slice(0, 100)); // Check first 100 bytes
-        const textSample = new TextDecoder().decode(uint8Array);
-
-        // Check if it looks like base64 content (contains only base64 chars and padding)
-        // But exclude common binary file headers like PDF (%PDF-), JPEG (ÿØÿ), PNG (‰PNG), etc.
-        if (textSample.startsWith('%PDF-') ||
-            (textSample.charCodeAt(0) === 0xFF && textSample.charCodeAt(1) === 0xD8) || // JPEG
-            textSample.startsWith('\x89PNG') || // PNG
-            textSample.startsWith('<svg')) {   // SVG
-            // Recognized binary file header, not base64
-            console.log(`[PageDownload] Page ${pageId} appears to be proper binary data (recognized header). Sample: ${textSample.substring(0, 50)}...`);
-        } else {
-            // Check if it looks like base64 content (contains only base64 chars and padding)
-            const base64Pattern = /^[A-Za-z0-9+/]{10,}/; // At least 10 chars to be considered base64
-            if (base64Pattern.test(textSample.replace(/\s/g, ''))) {
-                console.log(`[PageDownload] WARNING: Page ${pageId} appears to be base64 encoded instead of binary! Sample: ${textSample.substring(0, 50)}...`);
-            } else {
-                console.log(`[PageDownload] Page ${pageId} appears to be proper binary data. Sample: ${textSample.substring(0, 50)}...`);
-            }
-        }
 
         const headers = new Headers()
         obj.writeHttpMetadata(headers)
