@@ -24,7 +24,26 @@ async function restore() {
         const command = `hf download ${REPO_ID} --include ".wrangler_backup/*" --local-dir ${tempRestoreDir} --repo-type dataset --token ${TOKEN} --quiet`;
         
         console.log(`[${new Date().toISOString()}] Executing download command...`);
-        execSync(command, { stdio: 'inherit' });
+        
+        let success = false;
+        for (let i = 1; i <= 3; i++) {
+            try {
+                execSync(command, { stdio: 'inherit' });
+                success = true;
+                break;
+            } catch (e) {
+                console.warn(`[${new Date().toISOString()}] Download attempt ${i} failed: ${e.message}`);
+                if (i < 3) {
+                    console.log(`[${new Date().toISOString()}] Retrying in 5 seconds...`);
+                    // Synchronous sleep
+                    const start = Date.now();
+                    while (Date.now() - start < 5000) {} 
+                } else {
+                    console.error(`[${new Date().toISOString()}] All download attempts failed.`);
+                    throw e;
+                }
+            }
+        }
 
         const actualRestoredDir = path.join(tempRestoreDir, '.wrangler_backup');
 

@@ -1,5 +1,37 @@
 export const ColorRmUI = {
-    setupUI() {
+    // --- Page Load Progress ---
+    // AI Agent Marker: Progress Bar Logic
+    startPageLoadProgress() {
+        const bar = document.getElementById('pageLoadProgress');
+        if (!bar) return;
+        bar.style.width = '0%';
+        bar.style.opacity = '1';
+        
+        // Force reflow
+        bar.offsetHeight;
+        
+        // Animate to 90% over 2s (accelerates then slows)
+        bar.style.transition = 'width 2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+        bar.style.width = '90%';
+    },
+
+    finishPageLoadProgress() {
+        const bar = document.getElementById('pageLoadProgress');
+        if (!bar) return;
+        
+        // Fast completion
+        bar.style.transition = 'width 0.2s ease-out, opacity 0.2s ease-out';
+        bar.style.width = '100%';
+        
+        setTimeout(() => {
+            bar.style.opacity = '0';
+            setTimeout(() => {
+                bar.style.width = '0%';
+            }, 200);
+        }, 300);
+    },
+
+    initUI() {
         // Use getElement to support scoped lookup or fallback
         const wheelEl = this.getElement("iroWheel");
 

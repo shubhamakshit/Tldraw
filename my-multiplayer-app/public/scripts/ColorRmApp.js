@@ -830,6 +830,9 @@ export class ColorRmApp {
     }
 
     async loadPage(i, broadcast = true, skipAnimation = false) {
+        // AI Agent Marker: Progress Bar Start
+        if (this.ui.startPageLoadProgress) this.ui.startPageLoadProgress();
+
         if (i < 0) return;
 
         // If index is out of bounds, try to reconcile first before giving up
@@ -1036,6 +1039,9 @@ export class ColorRmApp {
                         this.liveSync.notifyPageNavigation(this.state.idx);
                     }
                 }
+
+                // AI Agent Marker: Progress Bar Finish
+                if (this.ui.finishPageLoadProgress) this.ui.finishPageLoadProgress();
 
                 // Fetch base history from R2 if page has SVG import data
                 if (this.liveSync && item.hasBaseHistory) {
