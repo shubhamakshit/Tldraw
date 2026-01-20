@@ -397,26 +397,33 @@ export const ColorRmRenderer = {
                         tmpC.height = this.state.viewH;
                         const tmpCtx = tmpC.getContext('2d', {willReadFrequently: true});
                         tmpCtx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
-                        const imgD = tmpCtx.getImageData(0, 0, this.state.viewW, this.state.viewH);
-                        const d = imgD.data;
+                        
                         const lab = this.cache.lab;
-                        const sq = this.state.strict**2;
-                        for(let i=0, j=0; i<d.length; i+=4, j+=3) {
-                            if(d[i+3]===0) continue;
-                            const l=lab[j], a=lab[j+1], b=lab[j+2];
-                            let keep = false;
-                            for(let t of targets) {
-                                if(((l-t[0])**2 + (a-t[1])**2 + (b-t[2])**2) <= sq) { keep = true; break; }
+                        // If LAB data isn't ready yet, we can't generate the preview.
+                        // Fallback to normal image (the re-render triggered by loadPage will fix this shortly)
+                        if (!lab) {
+                            ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);
+                        } else {
+                            const imgD = tmpCtx.getImageData(0, 0, this.state.viewW, this.state.viewH);
+                            const d = imgD.data;
+                            const sq = this.state.strict**2;
+                            for(let i=0, j=0; i<d.length; i+=4, j+=3) {
+                                if(d[i+3]===0) continue;
+                                const l=lab[j], a=lab[j+1], b=lab[j+2];
+                                let keep = false;
+                                for(let t of targets) {
+                                    if(((l-t[0])**2 + (a-t[1])**2 + (b-t[2])**2) <= sq) { keep = true; break; }
+                                }
+                                if(!keep) d[i+3] = 0;
                             }
-                            if(!keep) d[i+3] = 0;
+                            tmpCtx.putImageData(imgD, 0, 0);
+
+                            // Cache the result
+                            this._previewCache = tmpC;
+                            this._previewCacheKey = cacheKey;
+
+                            ctx.drawImage(tmpC, 0, 0);
                         }
-                        tmpCtx.putImageData(imgD, 0, 0);
-
-                        // Cache the result
-                        this._previewCache = tmpC;
-                        this._previewCacheKey = cacheKey;
-
-                        ctx.drawImage(tmpC, 0, 0);
                     }
                 } else {
                     ctx.drawImage(this.cache.currentImg, 0, 0, this.state.viewW, this.state.viewH);

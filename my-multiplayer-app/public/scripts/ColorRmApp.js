@@ -993,6 +993,9 @@ export class ColorRmApp {
                 const ctx = c.getContext('2d', {willReadFrequently:true});
                 ctx.drawImage(img,0,0,w,h);
                 
+                // Clear old LAB data immediately to prevent artifacts
+                this.cache.lab = null;
+
                 // --- OPTIMIZATION: Defer heavy LAB calculation ---
                 // Render the page immediately, then calculate LAB in background
                 setTimeout(() => {
@@ -1001,6 +1004,10 @@ export class ColorRmApp {
                    for(let k=0,j=0; k<d.length; k+=4,j+=3) {
                        const [l,a,b] = this.rgbToLab(d[k],d[k+1],d[k+2]);
                        this.cache.lab[j]=l; this.cache.lab[j+1]=a; this.cache.lab[j+2]=b;
+                   }
+                   // If preview mode is active, we need to re-render now that LAB data is ready
+                   if (this.state.previewOn || (this.tempHex && this.state.pickerMode==='remove')) {
+                       this.render();
                    }
                 }, 0);
 
