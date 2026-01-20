@@ -92,7 +92,7 @@ export class ColorRmApp {
         }
 
         // 2. Setup UI
-        this.setupUI();
+        this.initUI();
         this.setupDrawing();
         this.makeDraggable();
         this.setupShortcuts();
