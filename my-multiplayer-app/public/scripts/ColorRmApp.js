@@ -805,7 +805,18 @@ export class ColorRmApp {
                 this.state.images = q.result.sort((a,b)=>a.pageIndex-b.pageIndex);
                 this.ui.hideDashboard();
                 this.updateLockUI();
-                const targetIdx = (session && session.idx !== undefined) ? session.idx : 0;
+                
+                // Try to recover last visited page from localStorage first
+                const localLastPage = localStorage.getItem('crm_last_page_' + id);
+                let targetIdx = localLastPage ? parseInt(localLastPage) : 0;
+                
+                if (isNaN(targetIdx)) targetIdx = 0;
+                
+                // Fallback to session data if localStorage not set
+                if (!localLastPage && session && session.idx !== undefined) {
+                    targetIdx = session.idx;
+                }
+                
                 if(this.state.images.length>0) {
                     this.loadPage(targetIdx).then(resolve);
                 } else {
@@ -932,6 +943,9 @@ export class ColorRmApp {
         }
 
         this.state.idx = i;
+        if (this.state.sessionId) {
+            localStorage.setItem('crm_last_page_' + this.state.sessionId, i);
+        }
         const pageInput = this.getElement('pageInput');
         if (pageInput) pageInput.value = i + 1;
         const pageTotal = this.getElement('pageTotal');

@@ -383,7 +383,8 @@ export const ColorRmRenderer = {
                         strict: this.state.strict,
                         tempHex: this.tempHex,
                         viewW: this.state.viewW,
-                        viewH: this.state.viewH
+                        viewH: this.state.viewH,
+                        pageIdx: this.state.idx // Ensure cache is unique per page
                     });
 
                     // Use cached preview if available and valid
