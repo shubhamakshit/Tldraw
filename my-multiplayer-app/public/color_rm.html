@@ -607,6 +607,9 @@
         }
     </script>
 
+    <!-- Page Load Progress Bar -->
+    <div id="pageLoadProgress" style="position:fixed; top:0; left:0; height:4px; background:var(--accent); width:0%; z-index:9999; transition: width 0.3s ease-out, opacity 0.3s ease-out; pointer-events:none; box-shadow: 0 1px 4px rgba(0, 112, 243, 0.6);"></div>
+
     <!-- Toast -->
     <div id="toast" class="toast">Added to Box!</div>
 
@@ -1691,7 +1694,6 @@
         </aside>
 
         <main class="viewport" id="viewport">
-            <div id="pageLoadProgress" style="position:absolute; top:0; left:0; height:3px; background:var(--accent); width:0%; z-index:200; transition: width 0.3s ease-out, opacity 0.3s ease-out; pointer-events:none;"></div>
             <div id="cursorLayer" class="cursor-layer"></div>
                 <canvas id="canvas" oncontextmenu="return false;"></canvas>
             <!-- Navigation Island -->
