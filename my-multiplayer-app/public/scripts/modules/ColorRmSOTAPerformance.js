@@ -1566,6 +1566,3 @@ export class SOTABenchmark {
         return 'D (Poor)';
     }
 }
-
-// Export benchmark class
-export { SOTABenchmark };
