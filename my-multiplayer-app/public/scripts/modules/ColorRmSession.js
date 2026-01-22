@@ -1744,9 +1744,11 @@ export const ColorRmSession = {
                             for (let j = 0; j < BATCH_SIZE && (i + j) <= pdf.numPages; j++) {
                                 const pNum = i + j;
                                 batch.push(pdf.getPage(pNum).then(async page => {
+                                    // 3x DPI (216 DPI) for high-quality rasterization
+                                    const PDF_RENDER_SCALE = 3.0;
                                     const v = page.getViewport({
-                                        scale: 1.5
-                                    }); // Increased scale for higher quality
+                                        scale: PDF_RENDER_SCALE
+                                    });
                                     const cvs = document.createElement('canvas');
                                     cvs.width = v.width;
                                     cvs.height = v.height;
@@ -1754,7 +1756,8 @@ export const ColorRmSession = {
                                         canvasContext: cvs.getContext('2d'),
                                         viewport: v
                                     }).promise;
-                                    const b = await new Promise(r => cvs.toBlob(r, 'image/jpeg', 0.9)); // Higher quality JPEG
+                                    // High quality JPEG (0.92) for good compression with minimal artifacts
+                                    const b = await new Promise(r => cvs.toBlob(r, 'image/jpeg', 0.92));
                                     const pageIdx = idx + j;
                                     const pageId = this._generatePageId('pdf', pNum - 1); // PDF pages are 1-indexed, we want 0-indexed
                                     const pageObj = {
@@ -1766,8 +1769,14 @@ export const ColorRmSession = {
                                         history: []
                                     };
                                     await this.dbPut('pages', pageObj);
-                                    // NOTE: PDF pages are NOT uploaded individually - base PDF is uploaded once
-                                    // and clients render pages from it. Only user-added pages go to R2.
+
+                                    // Upload rasterized PDF page to R2 for multi-user sync
+                                    try {
+                                        await this._uploadPageBlob(pageId, b);
+                                    } catch (uploadErr) {
+                                        console.warn(`[PDF Import] Failed to upload page ${pageId} to R2:`, uploadErr);
+                                    }
+
                                     return pageObj;
                                 }));
                             }

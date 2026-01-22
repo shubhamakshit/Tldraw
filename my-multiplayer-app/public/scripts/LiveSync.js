@@ -210,9 +210,15 @@ export class LiveSyncClient {
                     if (typeof event.data === 'string') {
                         const msg = JSON.parse(event.data);
                         this._handleYjsMessage(msg);
+                    } else if (event.data instanceof Blob) {
+                        // Binary message - could be Yjs update
+                        // Ignore for now as we use JSON-based sync
                     }
                 } catch (err) {
-                    console.error('[Yjs] Message parse error:', err);
+                    // Only log actual parse errors, not empty objects
+                    if (event.data && event.data.length > 2) {
+                        console.warn('[Yjs] Message parse error:', err.message);
+                    }
                 }
             };
 
@@ -401,7 +407,11 @@ export class LiveSyncClient {
                 color: msg.color,
                 size: msg.size
             });
-            console.log(`[Yjs] Received presence from ${msg.clientId}: page ${msg.pageIdx}`);
+            // Throttle presence logging to reduce console spam
+            if (!this._lastPresenceLogTime || Date.now() - this._lastPresenceLogTime > 2000) {
+                console.log(`[Yjs] Presence from ${msg.clientId}: page ${msg.pageIdx}`);
+                this._lastPresenceLogTime = Date.now();
+            }
 
             // Follow mode: Navigate to the same page as the other user
             // (Skip if this is an echo of our own change or if we recently changed pages)

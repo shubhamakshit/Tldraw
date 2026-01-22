@@ -28,7 +28,12 @@ export const ColorRmExport = {
                 this.state.dlSelection.sort((a,b)=>a-b);
                 el.className = `thumb-item ${this.state.dlSelection.includes(i)?'selected':''}`;
             };
-            const im = new Image(); im.src = URL.createObjectURL(img.blob);
+            const im = new Image();
+            const blobUrl = URL.createObjectURL(img.blob);
+            im.src = blobUrl;
+            // Revoke blob URL after image loads to prevent memory leak
+            im.onload = () => URL.revokeObjectURL(blobUrl);
+            im.onerror = () => URL.revokeObjectURL(blobUrl);
             el.appendChild(im);
             const sp = document.createElement('span'); sp.innerText = i+1; el.appendChild(sp);
             g.appendChild(el);

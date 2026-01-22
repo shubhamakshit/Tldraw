@@ -1036,28 +1036,63 @@ export const ColorRmRenderer = {
         return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
     },
 
-    // Image cache for loaded images
+    // Image cache for loaded images with size limit to prevent memory leaks
     _imageCache: new Map(),
+    _imageCacheOrder: [], // LRU tracking
+    _imageCacheMaxSize: 50, // Maximum cached images
+
+    // Manage image cache with LRU eviction
+    _addToImageCache(key, img) {
+        // Remove oldest entries if at limit
+        while (this._imageCache.size >= this._imageCacheMaxSize && this._imageCacheOrder.length > 0) {
+            const oldestKey = this._imageCacheOrder.shift();
+            this._imageCache.delete(oldestKey);
+        }
+        this._imageCache.set(key, img);
+        this._imageCacheOrder.push(key);
+    },
+
+    _touchImageCache(key) {
+        const idx = this._imageCacheOrder.indexOf(key);
+        if (idx > -1) {
+            this._imageCacheOrder.splice(idx, 1);
+            this._imageCacheOrder.push(key);
+        }
+    },
+
+    // Clear image cache (call when switching pages or low memory)
+    clearImageCache() {
+        this._imageCache.clear();
+        this._imageCacheOrder = [];
+    },
 
     // Helper to render images (v2 feature)
     _renderImage(ctx, st) {
         const cacheKey = st.src;
         let img = this._imageCache.get(cacheKey);
 
+        if (img) {
+            this._touchImageCache(cacheKey); // Update LRU
+        }
+
         if (!img) {
             // Load image asynchronously
             img = new Image();
             img.onload = () => {
-                this._imageCache.set(cacheKey, img);
+                this._addToImageCache(cacheKey, img);
                 img._loaded = true;
                 // Trigger re-render
                 this.invalidateCache();
             };
             img.onerror = () => {
                 console.warn('Failed to load image:', st.src?.substring(0, 50));
+                // Show error to user for important images
+                if (this.ui && this.ui.showToast) {
+                    this.ui.showToast('Failed to load image');
+                }
             };
             img.src = st.src;
-            this._imageCache.set(cacheKey, img);
+            this._addToImageCache(cacheKey, img);
             return; // Don't render until loaded
         }
 

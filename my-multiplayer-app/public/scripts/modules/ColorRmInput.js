@@ -375,12 +375,30 @@ export const ColorRmInput = {
         let isDragging = false; let startX, startY, initLeft, initTop;
         const handle = this.getElement('pickerDragHandle');
         if(handle) {
+            // Store event handlers for cleanup
+            const onMouseMove = (e) => { if(!isDragging) return; el.style.left = (initLeft + (e.clientX - startX)) + 'px'; el.style.top = (initTop + (e.clientY - startY)) + 'px'; };
+            const onMouseUp = () => isDragging = false;
+
             handle.onmousedown = (e) => { isDragging = true; startX = e.clientX; startY = e.clientY; const r = el.getBoundingClientRect(); initLeft = r.left; initTop = r.top; };
-            // Use document instead of window to be more contained
-            // Each instance's isDragging flag prevents cross-instance interference
-            document.addEventListener('mousemove', (e) => { if(!isDragging) return; el.style.left = (initLeft + (e.clientX - startX)) + 'px'; el.style.top = (initTop + (e.clientY - startY)) + 'px'; });
-            document.addEventListener('mouseup', () => isDragging = false);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+
+            // Store cleanup function for later
+            this._draggableCleanup = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
         }
+    },
+
+    // Cleanup event listeners (call when destroying app instance)
+    cleanup() {
+        if (this._draggableCleanup) this._draggableCleanup();
+        if (this._pointerMoveCleanup) this._pointerMoveCleanup();
+        if (this._pointerUpCleanup) this._pointerUpCleanup();
+        if (this._resizeCleanup) this._resizeCleanup();
+        if (this._spenEngineCleanup) this._spenEngineCleanup();
+        console.log('[ColorRmInput] Event listeners cleaned up');
     },
 
     setupShortcuts() {
@@ -1335,10 +1353,12 @@ export const ColorRmInput = {
         };
 
         window.addEventListener('pointermove', onPointerMove, { passive: true });
+        // Store cleanup function
+        this._pointerMoveCleanup = () => window.removeEventListener('pointermove', onPointerMove);
 
         // Only main app listens to window resize for cursor re-rendering
         if (this.config.isMain) {
-            window.addEventListener('resize', () => {
+            const onResize = () => {
                 if (this.liveSync && this.liveSync.renderCursors) this.liveSync.renderCursors();
 
                 // Update infinite canvas dimensions on resize
@@ -1355,7 +1375,9 @@ export const ColorRmInput = {
                         this.render();
                     }
                 }
-            });
+            };
+            window.addEventListener('resize', onResize);
+            this._resizeCleanup = () => window.removeEventListener('resize', onResize);
         }
         const vp = this.getElement('viewport');
         if(vp) vp.addEventListener('scroll', () => this.liveSync && this.liveSync.renderCursors && this.liveSync.renderCursors(), { passive: true });

@@ -1,9 +1,54 @@
+import { fetchWithTimeout, TIMEOUT } from './NetworkUtils.js';
+
 export const ColorRmStorage = {
-    async dbPut(s, v) { return new Promise(r=>{const t=this.db.transaction(s,'readwrite'); t.objectStore(s).put(v); t.oncomplete=()=>r()}); },
+    async dbPut(s, v) {
+        return new Promise((resolve, reject) => {
+            try {
+                const t = this.db.transaction(s, 'readwrite');
+                t.objectStore(s).put(v);
+                t.oncomplete = () => resolve();
+                t.onerror = (e) => {
+                    console.error(`[dbPut] Error saving to ${s}:`, e.target.error);
+                    reject(e.target.error);
+                };
+            } catch (e) {
+                console.error(`[dbPut] Transaction error:`, e);
+                reject(e);
+            }
+        });
+    },
 
-    async dbGet(s, k) { return new Promise(r=>{const q=this.db.transaction(s,'readonly').objectStore(s).get(k);q.onsuccess=()=>r(q.result)}); },
+    async dbGet(s, k) {
+        return new Promise((resolve, reject) => {
+            try {
+                const q = this.db.transaction(s, 'readonly').objectStore(s).get(k);
+                q.onsuccess = () => resolve(q.result);
+                q.onerror = (e) => {
+                    console.error(`[dbGet] Error reading from ${s}:`, e.target.error);
+                    resolve(null); // Return null on error to avoid breaking flows
+                };
+            } catch (e) {
+                console.error(`[dbGet] Transaction error:`, e);
+                resolve(null);
+            }
+        });
+    },
 
-    async dbGetAll(s) { return new Promise(r=>{const q=this.db.transaction(s,'readonly').objectStore(s).getAll();q.onsuccess=()=>r(q.result||[]);q.onerror=()=>r([])}); },
+    async dbGetAll(s) {
+        return new Promise((resolve) => {
+            try {
+                const q = this.db.transaction(s, 'readonly').objectStore(s).getAll();
+                q.onsuccess = () => resolve(q.result || []);
+                q.onerror = (e) => {
+                    console.error(`[dbGetAll] Error reading all from ${s}:`, e.target.error);
+                    resolve([]);
+                };
+            } catch (e) {
+                console.error(`[dbGetAll] Transaction error:`, e);
+                resolve([]);
+            }
+        });
+    },
 
     async saveSessionState() {
         if(!this.state.sessionId || (this.liveSync && this.liveSync.isInitializing) || this.isUploading) return;
@@ -159,14 +204,18 @@ export const ColorRmStorage = {
                 const modsUrl = window.Config?.apiUrl(`/api/color_rm/modifications/${this.state.sessionId}/${page.pageId}`)
                     || `/api/color_rm/modifications/${this.state.sessionId}/${page.pageId}`;
 
-                await fetch(modsUrl, {
+                const response = await fetchWithTimeout(modsUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         modifications: m,
                         timestamp: Date.now()
                     })
-                });
+                }, TIMEOUT.MEDIUM);
+
+                if (!response.ok) {
+                    throw new Error(`Upload failed: ${response.status}`);
+                }
 
                 // Only sync deltas via Liveblocks (usually small)
                 // Also notify that modifications are in R2
@@ -213,11 +262,15 @@ export const ColorRmStorage = {
                 const historyUrl = window.Config?.apiUrl(`/api/color_rm/history/${this.state.sessionId}/${pageId}`)
                     || `/api/color_rm/history/${this.state.sessionId}/${pageId}`;
 
-                await fetch(historyUrl, {
+                const response = await fetchWithTimeout(historyUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(currentPage.history)
-                });
+                }, TIMEOUT.LONG);
+
+                if (!response.ok) {
+                    throw new Error(`Upload failed: ${response.status}`);
+                }
 
                 // Mark page as having base history in R2
                 currentPage.hasBaseHistory = true;

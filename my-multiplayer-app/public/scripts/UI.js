@@ -1,8 +1,41 @@
 export const UI = {
+    // Mini loading indicator for quick operations (non-blocking)
+    showMiniLoader: (text = 'Loading...') => {
+        let mini = document.getElementById('miniLoader');
+        if (!mini) {
+            mini = document.createElement('div');
+            mini.id = 'miniLoader';
+            mini.style.cssText = 'position:fixed;top:10px;right:10px;background:rgba(0,0,0,0.8);color:white;padding:8px 16px;border-radius:6px;font-size:13px;z-index:9999;display:flex;align-items:center;gap:8px;';
+            mini.innerHTML = '<span class="spinner" style="width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.8s linear infinite;"></span><span id="miniLoaderText"></span>';
+            // Add spinner animation if not exists
+            if (!document.getElementById('miniLoaderStyle')) {
+                const style = document.createElement('style');
+                style.id = 'miniLoaderStyle';
+                style.textContent = '@keyframes spin{to{transform:rotate(360deg)}}';
+                document.head.appendChild(style);
+            }
+            document.body.appendChild(mini);
+        }
+        const textEl = mini.querySelector('#miniLoaderText');
+        if (textEl) textEl.textContent = text;
+        mini.style.display = 'flex';
+    },
+
+    hideMiniLoader: () => {
+        const mini = document.getElementById('miniLoader');
+        if (mini) mini.style.display = 'none';
+    },
+
     showDashboard: () => {
         const db = document.getElementById('dashboardModal');
         if (db) db.style.display='flex';
-        if (window.App && window.App.loadSessionList) window.App.loadSessionList();
+        // Show loading indicator while loading sessions
+        UI.showMiniLoader('Loading projects...');
+        if (window.App && window.App.loadSessionList) {
+            window.App.loadSessionList().finally(() => UI.hideMiniLoader());
+        } else {
+            UI.hideMiniLoader();
+        }
     },
     hideDashboard: () => {
         const db = document.getElementById('dashboardModal');
@@ -11,7 +44,17 @@ export const UI = {
     showExportModal: () => {
         const em = document.getElementById('exportModal');
         if (em) em.style.display='flex';
-        if (window.App && window.App.renderDlGrid) window.App.renderDlGrid();
+        // Show loading indicator while preparing export grid
+        UI.showMiniLoader('Loading pages...');
+        if (window.App && window.App.renderDlGrid) {
+            try {
+                window.App.renderDlGrid();
+            } finally {
+                UI.hideMiniLoader();
+            }
+        } else {
+            UI.hideMiniLoader();
+        }
 
         // Load persisted export preferences
         try {
@@ -117,10 +160,21 @@ export const UI = {
             if (msgEl) msgEl.innerText = message;
             modal.style.display = 'flex';
 
+            // Keyboard handler for accessibility
+            const keyHandler = (e) => {
+                if (e.key === 'Escape') {
+                    cancelBtn.click();
+                } else if (e.key === 'Enter') {
+                    okBtn.click();
+                }
+            };
+            document.addEventListener('keydown', keyHandler);
+
             const cleanup = () => {
                 modal.style.display = 'none';
                 okBtn.onclick = null;
                 cancelBtn.onclick = null;
+                document.removeEventListener('keydown', keyHandler);
             };
 
             okBtn.onclick = () => {
@@ -133,6 +187,9 @@ export const UI = {
                 if (onCancel) onCancel();
                 resolve(false);
             };
+
+            // Focus confirm button for keyboard access
+            okBtn.focus();
         });
     },
     showAlert: (title, message) => {
@@ -162,10 +219,22 @@ export const UI = {
             if (msgEl) msgEl.innerText = message;
             modal.style.display = 'flex';
 
+            // Keyboard handler for accessibility
+            const keyHandler = (e) => {
+                if (e.key === 'Escape' || e.key === 'Enter') {
+                    okBtn.click();
+                }
+            };
+            document.addEventListener('keydown', keyHandler);
+
             okBtn.onclick = () => {
                 modal.style.display = 'none';
+                document.removeEventListener('keydown', keyHandler);
                 resolve();
             };
+
+            // Focus OK button for keyboard access
+            okBtn.focus();
         });
     },
     showPrompt: (title, placeholder, defaultValue = '') => {
