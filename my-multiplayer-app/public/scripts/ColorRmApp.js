@@ -7,6 +7,7 @@ import { ColorRmSession } from './modules/ColorRmSession.js';
 import { ColorRmExport } from './modules/ColorRmExport.js';
 import { PerformanceManager } from './modules/ColorRmPerformance.js';
 import { ColorRmSvgImporter } from './modules/ColorRmSvgImporter.js';
+import { SOTAPerformanceManager, sotaPerf, SOTABenchmark } from './modules/ColorRmSOTAPerformance.js';
 
 export class ColorRmApp {
     constructor(config = {}) {
@@ -65,6 +66,18 @@ export class ColorRmApp {
 
         // SOTA Performance Manager
         this.performanceManager = new PerformanceManager();
+
+        // SOTA v2 Performance Manager (for 8000+ history items)
+        this.sotaPerf = sotaPerf;
+
+        // Configure SOTA performance thresholds
+        this.sotaPerf.config.virtualizationThreshold = 500;
+        this.sotaPerf.config.spatialIndexThreshold = 200;
+
+        // Hook up incremental sync batching
+        this.sotaPerf.incrementalSync.onBatchReady = (batch) => {
+            this._handleSyncBatch(batch);
+        };
 
         this.lastCursorUpdateTime = 0;
         this.cursorUpdateThrottle = 30; // 30ms throttle, approx 33fps
@@ -1048,9 +1061,135 @@ export class ColorRmApp {
                     this.liveSync.ensureBaseHistory(this.state.idx);
                 }
 
+                // SOTA v2: Initialize performance manager with current page history
+                if (item.history && item.history.length > 0) {
+                    this.sotaPerf.initialize(item.history);
+                }
+
                 resolve();
             };
         });
+    }
+
+    /**
+     * SOTA v2: Handle batched sync operations
+     * Called by the incremental sync manager when a batch is ready
+     */
+    _handleSyncBatch(batch) {
+        if (!this.liveSync || !this.state.syncEnabled) return;
+
+        // Convert operation batch to sync format
+        const currentPage = this.state.images[this.state.idx];
+        if (!currentPage) return;
+
+        // For pages with base history, use delta sync
+        if (currentPage.hasBaseHistory && currentPage._baseHistory) {
+            const deltas = [];
+            const modifications = {};
+
+            for (const op of batch) {
+                if (op.type === 'add') {
+                    deltas.push(op.data);
+                } else if (op.type === 'modify' || op.type === 'delete') {
+                    modifications[op.strokeId] = op.type === 'delete'
+                        ? { id: op.strokeId, deleted: true, lastMod: op.timestamp }
+                        : { id: op.strokeId, ...op.changes, lastMod: op.timestamp };
+                } else if (op.type === 'batch-move') {
+                    // Batch moves become individual modifications
+                    for (const id of op.strokeIds) {
+                        modifications[id] = { id, moved: true, dx: op.dx, dy: op.dy, lastMod: op.timestamp };
+                    }
+                }
+            }
+
+            this.liveSync.syncPageDeltas(this.state.idx, deltas, modifications);
+        } else {
+            // For regular pages, sync full history (but debounced via this batch)
+            this.scheduleSave();
+        }
+
+        // Mark sync as complete
+        this.sotaPerf.markSyncComplete();
+    }
+
+    /**
+     * SOTA v2: Add stroke with performance tracking
+     */
+    addStrokeWithTracking(stroke) {
+        // Track via SOTA perf manager
+        this.sotaPerf.addStroke(stroke);
+
+        // Add to actual history
+        const currentPage = this.state.images[this.state.idx];
+        if (currentPage) {
+            if (!currentPage.history) currentPage.history = [];
+            currentPage.history.push(stroke);
+        }
+
+        return stroke;
+    }
+
+    /**
+     * SOTA v2: Delete strokes with performance tracking
+     */
+    deleteStrokesWithTracking(indices) {
+        const currentPage = this.state.images[this.state.idx];
+        if (!currentPage || !currentPage.history) return;
+
+        for (const idx of indices) {
+            const stroke = currentPage.history[idx];
+            if (stroke) {
+                this.sotaPerf.deleteStroke(stroke);
+                stroke.deleted = true;
+                stroke.lastMod = Date.now();
+            }
+        }
+    }
+
+    /**
+     * SOTA v2: Move strokes with performance tracking
+     */
+    moveStrokesWithTracking(indices, dx, dy) {
+        const currentPage = this.state.images[this.state.idx];
+        if (!currentPage || !currentPage.history) return;
+
+        const strokes = indices.map(idx => currentPage.history[idx]).filter(Boolean);
+        this.sotaPerf.batchMove(strokes, dx, dy);
+    }
+
+    /**
+     * SOTA v2: Get visible strokes for current viewport (spatial culling)
+     */
+    getVisibleStrokes() {
+        const currentPage = this.state.images[this.state.idx];
+        if (!currentPage || !currentPage.history) return [];
+
+        const viewport = { width: this.state.viewW, height: this.state.viewH };
+        return this.sotaPerf.queryVisible(
+            currentPage.history,
+            viewport,
+            this.state.zoom,
+            this.state.pan
+        );
+    }
+
+    /**
+     * SOTA v2: Get performance stats for debugging
+     */
+    getPerformanceStats() {
+        return {
+            sota: this.sotaPerf.getStats(),
+            legacy: this.performanceManager.getStats()
+        };
+    }
+
+    /**
+     * SOTA v2: Run comprehensive performance benchmark
+     * Usage: window.App.runBenchmark(8000)
+     */
+    async runBenchmark(itemCount = 8000) {
+        const benchmark = new SOTABenchmark(this);
+        return await benchmark.runFullBenchmark(itemCount);
     }
 
 }

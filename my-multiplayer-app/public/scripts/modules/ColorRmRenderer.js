@@ -8,6 +8,10 @@ export const ColorRmRenderer = {
         if (this.performanceManager) {
             this.performanceManager.invalidateAll();
         }
+        // SOTA v2: Invalidate dirty regions
+        if (this.sotaPerf) {
+            this.sotaPerf.invalidateAll();
+        }
     },
 
     // Invalidate only the preview cache (call when colors/strict change)
@@ -434,6 +438,9 @@ export const ColorRmRenderer = {
 
             const activeHistory = currentImg?.history?.filter(st => !st.deleted) || [];
 
+            // SOTA v2: Use optimized rendering for large history (8000+ items)
+            const useSOTAv2Rendering = this.sotaPerf && activeHistory.length > 500;
+
             // HYBRID RENDERING: Use cache when idle, render live when interacting
             const isInteracting = this.isDragging || this.state.selection.length > 0;
             const cacheThreshold = this._getStrokeCacheThreshold();
@@ -453,7 +460,27 @@ export const ColorRmRenderer = {
             // DISABLED: Causes objects to disappear and rendering bugs
             const useSOTARendering = false;
 
-            if (useSOTARendering) {
+            if (useSOTAv2Rendering) {
+                // SOTA v2: Optimized rendering for large history
+                // Uses R-Tree spatial index for viewport culling
+                const viewport = { width: this.state.viewW, height: this.state.viewH };
+                const visibleStrokes = this.sotaPerf.queryVisible(
+                    activeHistory,
+                    viewport,
+                    this.state.zoom,
+                    this.state.pan
+                );
+
+                // Render only visible strokes (O(log n) query instead of O(n) iteration)
+                visibleStrokes.forEach((st) => {
+                    const idx = activeHistory.indexOf(st);
+                    if (this.state.selection.includes(idx)) return;
+                    this.renderObject(ctx, st, 0, 0);
+                });
+
+                // Clear dirty regions after successful render
+                this.sotaPerf.clearDirtyRegions();
+            } else if (useSOTARendering) {
                 // SOTA OPTIMIZED RENDERING for infinite canvas
                 const viewport = { width: this.state.viewW, height: this.state.viewH };
 

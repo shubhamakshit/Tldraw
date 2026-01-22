@@ -312,7 +312,7 @@ export class LiveSyncClient {
         if (this.isInitializing) return;
 
         if (msg.type === 'state-update') {
-            // Apply remote state
+            // Apply remote state with CRDT-based merging
             console.log(`[Yjs] Received state-update for page ${msg.pageIdx}: ${msg.history?.length || 0} strokes`);
 
             // Sync project name from metadata (like Liveblocks does)
@@ -338,23 +338,29 @@ export class LiveSyncClient {
 
             const localImg = this.app.state.images[msg.pageIdx];
             if (localImg && msg.history) {
-                // For beta sync, we always accept remote state as the source of truth
-                // This handles both additions and deletions
-                const localNonDeleted = (localImg.history || []).filter(s => !s.deleted);
+                // SOTA v2: CRDT-based merge instead of last-write-wins
+                // This preserves local changes while integrating remote changes
+                const mergedHistory = this._crdtMergeHistory(
+                    localImg.history || [],
+                    msg.history,
+                    msg.timestamp || Date.now()
+                );
+
+                const localLen = (localImg.history || []).filter(s => !s.deleted).length;
                 const remoteLen = msg.history.length;
-                const localLen = localNonDeleted.length;
+                const mergedLen = mergedHistory.filter(s => !s.deleted).length;
 
-                // Check if content actually differs (by comparing visible strokes)
-                const needsUpdate = remoteLen !== localLen ||
-                    JSON.stringify(msg.history) !== JSON.stringify(localNonDeleted);
-
-                if (needsUpdate) {
-                    // Replace local history with remote (non-deleted strokes only)
-                    localImg.history = msg.history;
-                    console.log(`[Yjs] Applied remote state for page ${msg.pageIdx}: ${remoteLen} strokes (was ${localLen})`);
+                // Only update if merge produced changes
+                if (JSON.stringify(localImg.history) !== JSON.stringify(mergedHistory)) {
+                    localImg.history = mergedHistory;
+                    console.log(`[Yjs] CRDT Merged: local=${localLen}, remote=${remoteLen} -> merged=${mergedLen}`);
 
                     // Only re-render if this is the current page
                     if (msg.pageIdx === this.app.state.idx) {
+                        // SOTA v2: Reinitialize perf manager with merged history
+                        if (mergedHistory.length > 500 && this.app.sotaPerf) {
+                            this.app.sotaPerf.initialize(mergedHistory);
+                        }
                         this.app.invalidateCache();
                         this.app.render();
                     }
@@ -2071,10 +2077,21 @@ export class LiveSyncClient {
                     // Merge: modified base + deltas from Liveblocks
                     localImg.history = [...modifiedBase, ...deltaHist];
                 } else {
-                    localImg.history = deltaHist;
+                    // CRDT merge: combine local and remote history
+                    const mergedHistory = this._crdtMergeHistory(
+                        localImg.history || [],
+                        deltaHist,
+                        Date.now()
+                    );
+                    localImg.history = mergedHistory;
                 }
                 currentIdxChanged = true;
                 if (this.app.invalidateCache) this.app.invalidateCache();
+
+                // SOTA v2: Reinitialize performance manager with updated history
+                if (localImg.history && localImg.history.length > 500 && this.app.sotaPerf) {
+                    this.app.sotaPerf.initialize(localImg.history);
+                }
 
                 // Auto-recalculate infinite canvas bounds from synced strokes
                 if (localImg.isInfinite && this.app.recalculateInfiniteCanvasBounds) {
@@ -2114,7 +2131,13 @@ export class LiveSyncClient {
                     });
                     img.history = [...modifiedBase, ...deltaHist];
                 } else {
-                    img.history = deltaHist;
+                    // CRDT merge: combine local and remote history
+                    const mergedHistory = this._crdtMergeHistory(
+                        img.history || [],
+                        deltaHist,
+                        Date.now()
+                    );
+                    img.history = mergedHistory;
                 }
 
                 // Auto-recalculate infinite canvas bounds for all infinite pages
@@ -2130,6 +2153,79 @@ export class LiveSyncClient {
         if (pagesToFetchBase.length > 0) {
             this._fetchMissingBaseHistories(pagesToFetchBase);
         }
+    }
+
+    /**
+     * CRDT-based history merge for multi-user collaboration
+     * Implements a Last-Writer-Wins with ID-based merge strategy:
+     * - Items with same ID: keep the one with later lastMod timestamp
+     * - New items from either side: add all of them
+     * - Deletions: respect deletions (deleted items stay deleted)
+     */
+    _crdtMergeHistory(localHistory, remoteHistory, remoteTimestamp) {
+        // Build a map keyed by stroke ID for efficient merging
+        const mergedMap = new Map();
+
+        // Add all local items first
+        for (const item of localHistory) {
+            if (item.id) {
+                mergedMap.set(item.id, { ...item });
+            }
+        }
+
+        // Merge remote items with CRDT rules
+        for (const remoteItem of remoteHistory) {
+            if (!remoteItem.id) continue;
+
+            const localItem = mergedMap.get(remoteItem.id);
+
+            if (!localItem) {
+                // New item from remote - add it
+                mergedMap.set(remoteItem.id, { ...remoteItem });
+            } else {
+                // Item exists in both - use Last-Writer-Wins based on lastMod
+                const localTime = localItem.lastMod || 0;
+                const remoteTime = remoteItem.lastMod || remoteTimestamp;
+
+                if (remoteTime > localTime) {
+                    // Remote is newer - take remote version
+                    mergedMap.set(remoteItem.id, { ...remoteItem });
+                } else if (remoteTime === localTime) {
+                    // Same timestamp - merge properties (conflict resolution)
+                    // Prefer local for position/size, remote for deletion status
+                    const merged = {
+                        ...localItem,
+                        // If either marks as deleted, keep it deleted
+                        deleted: localItem.deleted || remoteItem.deleted,
+                        // Update lastMod to latest
+                        lastMod: Math.max(localTime, remoteTime)
+                    };
+                    mergedMap.set(remoteItem.id, merged);
+                }
+                // else local is newer - keep local version (already in map)
+            }
+        }
+
+        // Convert back to array, preserving order (newer items at end)
+        const result = Array.from(mergedMap.values());
+
+        // Sort by creation time (approximated by ID or lastMod) to maintain order
+        result.sort((a, b) => {
+            // Extract timestamp from ID if possible (e.g., "stroke_1234567890_xyz")
+            const getCreationTime = (item) => {
+                if (item.id && item.id.includes('_')) {
+                    const parts = item.id.split('_');
+                    if (parts.length >= 2) {
+                        const ts = parseInt(parts[1]);
+                        if (!isNaN(ts)) return ts;
+                    }
+                }
+                return item.lastMod || 0;
+            };
+            return getCreationTime(a) - getCreationTime(b);
+        });
+
+        return result;
     }
 
     /**
