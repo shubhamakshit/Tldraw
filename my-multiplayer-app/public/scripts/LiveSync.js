@@ -206,18 +206,12 @@ export class LiveSyncClient {
             };
 
             this._yjsSocket.onmessage = (event) => {
-                try {
-                    if (typeof event.data === 'string') {
+                if (typeof event.data === 'string') {
+                    try {
                         const msg = JSON.parse(event.data);
                         this._handleYjsMessage(msg);
-                    } else if (event.data instanceof Blob) {
-                        // Binary message - could be Yjs update
-                        // Ignore for now as we use JSON-based sync
-                    }
-                } catch (err) {
-                    // Only log actual parse errors, not empty objects
-                    if (event.data && event.data.length > 2) {
-                        console.warn('[Yjs] Message parse error:', err.message);
+                    } catch (err) {
+                        // Ignore parse errors for non-JSON messages
                     }
                 }
             };
@@ -286,20 +280,39 @@ export class LiveSyncClient {
      */
     _sendYjsUpdate() {
         if (!this._yjsSocket || !this._yjsConnected) {
-            console.warn('[Yjs] Cannot send update - not connected');
             return;
         }
 
         const img = this.app.state.images[this.app.state.idx];
         if (!img) {
-            console.warn('[Yjs] Cannot send update - no image for current page');
             return;
         }
 
+        // THROTTLE: Don't send more than once every 50ms while drawing
+        const now = Date.now();
+        if (this.app.isDragging) {
+            if (this._lastYjsUpdateTime && now - this._lastYjsUpdateTime < 50) {
+                // Schedule a delayed update to ensure final state is sent
+                if (!this._yjsUpdatePending) {
+                    this._yjsUpdatePending = true;
+                    setTimeout(() => {
+                        this._yjsUpdatePending = false;
+                        this._sendYjsUpdate();
+                    }, 60);
+                }
+                return;
+            }
+        }
+        this._lastYjsUpdateTime = now;
+
+        // IMPORTANT: Send ALL items including deleted ones
+        // Deleted items have { deleted: true, lastMod: timestamp }
+        // This allows other clients to receive deletion info via CRDT merge
         const msg = {
             type: 'state-update',
             pageIdx: this.app.state.idx,
-            history: (img.history || []).filter(s => !s.deleted),
+            history: img.history || [],
+            timestamp: now,
             metadata: {
                 name: this.app.state.projectName,
                 idx: this.app.state.idx,
@@ -308,7 +321,6 @@ export class LiveSyncClient {
         };
 
         this._yjsSocket.send(JSON.stringify(msg));
-        console.log(`[Yjs] Sent state update for page ${this.app.state.idx}: ${msg.history.length} strokes`);
     }
 
     /**
@@ -318,8 +330,7 @@ export class LiveSyncClient {
         if (this.isInitializing) return;
 
         if (msg.type === 'state-update') {
-            // Apply remote state with CRDT-based merging
-            console.log(`[Yjs] Received state-update for page ${msg.pageIdx}: ${msg.history?.length || 0} strokes`);
+            // Apply remote state with CRDT-based merging (no logging for performance)
 
             // Sync project name from metadata (like Liveblocks does)
             if (msg.metadata && msg.metadata.name) {
@@ -334,7 +345,6 @@ export class LiveSyncClient {
                 if (!(isOwner && remoteIsUntitled && localHasName)) {
                     // Accept remote name
                     if (localName !== remoteName) {
-                        console.log(`[Yjs] Name Sync: "${localName}" -> "${remoteName}"`);
                         this.app.state.projectName = remoteName;
                         const titleEl = this.app.getElement('headerTitle');
                         if (titleEl) titleEl.innerText = remoteName;
@@ -344,29 +354,32 @@ export class LiveSyncClient {
 
             const localImg = this.app.state.images[msg.pageIdx];
             if (localImg && msg.history) {
-                // SOTA v2: CRDT-based merge instead of last-write-wins
-                // This preserves local changes while integrating remote changes
+                const localHistory = localImg.history || [];
+                const remoteHistory = msg.history;
+
+                // CRDT merge - handles additions, deletions, and conflicts
                 const mergedHistory = this._crdtMergeHistory(
-                    localImg.history || [],
-                    msg.history,
+                    localHistory,
+                    remoteHistory,
                     msg.timestamp || Date.now()
                 );
 
-                const localLen = (localImg.history || []).filter(s => !s.deleted).length;
-                const remoteLen = msg.history.length;
-                const mergedLen = mergedHistory.filter(s => !s.deleted).length;
+                // Check if merge changed anything
+                const hasChanges = mergedHistory.length !== localHistory.length ||
+                    mergedHistory.some((item, i) => {
+                        const local = localHistory[i];
+                        if (!local) return true;
+                        if (item.id !== local.id) return true;
+                        if (item.deleted !== local.deleted) return true;
+                        if (item.lastMod !== local.lastMod) return true;
+                        return false;
+                    });
 
-                // Only update if merge produced changes
-                if (JSON.stringify(localImg.history) !== JSON.stringify(mergedHistory)) {
+                if (hasChanges) {
                     localImg.history = mergedHistory;
-                    console.log(`[Yjs] CRDT Merged: local=${localLen}, remote=${remoteLen} -> merged=${mergedLen}`);
 
                     // Only re-render if this is the current page
                     if (msg.pageIdx === this.app.state.idx) {
-                        // SOTA v2: Reinitialize perf manager with merged history
-                        if (mergedHistory.length > 500 && this.app.sotaPerf) {
-                            this.app.sotaPerf.initialize(mergedHistory);
-                        }
                         this.app.invalidateCache();
                         this.app.render();
                     }
@@ -377,24 +390,73 @@ export class LiveSyncClient {
             const remotePageCount = msg.pageCount || 0;
             const localPageCount = this.app.state.images.length;
             const remotePageIds = msg.pageIds || [];
+            const remotePageMetadata = msg.pageMetadata || {};
             const localPageIds = this.app.state.images.map(img => img?.pageId).filter(Boolean);
 
             console.log(`[Yjs] Received page-structure: remote=${remotePageCount} pages, local=${localPageCount} pages`);
 
-            // Check if structure actually differs (count or order)
-            const countDiffers = remotePageCount !== localPageCount;
-            const orderDiffers = JSON.stringify(remotePageIds) !== JSON.stringify(localPageIds);
+            // Find pages we're missing
+            const missingPageIds = remotePageIds.filter(pid => !localPageIds.includes(pid));
 
-            if (countDiffers || orderDiffers) {
-                // Page structure changed - run reconciliation via R2 (source of truth)
-                console.log(`[Yjs] Page structure mismatch (count: ${countDiffers}, order: ${orderDiffers}), triggering reconciliation...`);
-                // Debounce to avoid rapid re-fetches
+            if (missingPageIds.length > 0) {
+                console.log(`[Yjs] Creating ${missingPageIds.length} missing pages from WebSocket metadata`);
+
+                // Create placeholder pages immediately using metadata
+                for (const pageId of missingPageIds) {
+                    const meta = remotePageMetadata[pageId] || {};
+                    const pageIndex = remotePageIds.indexOf(pageId);
+
+                    // Create a placeholder page object
+                    const pageObj = {
+                        id: `${this.app.state.sessionId}_${pageIndex}`,
+                        sessionId: this.app.state.sessionId,
+                        pageIndex: pageIndex,
+                        pageId: pageId,
+                        width: meta.width || 2000,
+                        height: meta.height || 1500,
+                        bg: meta.bg || '#ffffff',
+                        blob: null, // Will be fetched from R2
+                        history: [],
+                        undoStack: [],
+                        redoStack: [],
+                        isInfinite: meta.isInfinite || false,
+                        templateType: meta.templateType || null,
+                        _needsBlobFetch: true // Mark for R2 fetch
+                    };
+
+                    // Insert at correct position
+                    if (pageIndex < this.app.state.images.length) {
+                        this.app.state.images.splice(pageIndex, 0, pageObj);
+                    } else {
+                        this.app.state.images.push(pageObj);
+                    }
+                }
+
+                // Update UI
+                const pt = this.app.getElement('pageTotal');
+                if (pt) pt.innerText = '/ ' + this.app.state.images.length;
+                if (this.app.state.activeSideTab === 'pages') {
+                    this.app.renderPageSidebar();
+                }
+
+                // Now trigger R2 reconciliation to fetch blobs in background
                 if (this._yjsReconcileTimer) clearTimeout(this._yjsReconcileTimer);
                 this._yjsReconcileTimer = setTimeout(() => {
                     this.reconcilePageStructure();
                 }, 500);
-            } else {
-                console.log(`[Yjs] Page structure matches, no reconciliation needed`);
+            }
+
+            // Check if order differs (need reorder)
+            const orderDiffers = JSON.stringify(remotePageIds) !== JSON.stringify(
+                this.app.state.images.map(img => img?.pageId).filter(Boolean)
+            );
+
+            if (orderDiffers && missingPageIds.length === 0) {
+                console.log(`[Yjs] Page order mismatch, triggering reconciliation...`);
+                if (this._yjsReconcileTimer) clearTimeout(this._yjsReconcileTimer);
+                this._yjsReconcileTimer = setTimeout(() => {
+                    this.reconcilePageStructure();
+                }, 500);
             }
         } else if (msg.type === 'presence') {
             // Update presence map
@@ -685,7 +747,7 @@ export class LiveSyncClient {
     renderCursors() {
         if (!this.fadingTrails) this.fadingTrails = [];
         if (this._rafId) cancelAnimationFrame(this._rafId);
-        
+
         // Beta mode: Use Yjs awareness
         if (this.useBetaSync) {
             return this._renderCursorsYjs();
@@ -747,10 +809,9 @@ export class LiveSyncClient {
         this.fadingTrails = this.fadingTrails.filter(t => {
             const age = now - t.timestamp;
             // Shrink animation: 200ms duration
-            // animate size from original to 0
             const progress = age / 200;
             if (progress >= 1) return false; // Dead
-            
+
             t.currentSize = t.size * (1 - progress);
             return true;
         });
@@ -805,6 +866,7 @@ export class LiveSyncClient {
                         color: this._lastColors?.[user.connectionId] || '#000000',
                         size: 3,
                         opacity: 1.0,
+                        currentSize: 3,
                         timestamp: Date.now()
                     });
                     delete this.remoteTrails[user.connectionId];
@@ -837,6 +899,7 @@ export class LiveSyncClient {
                         color: presence.color,
                         size: presence.size,
                         opacity: 1.0,
+                        currentSize: presence.size,
                         timestamp: Date.now()
                     });
                     delete this.remoteTrails[user.connectionId];
@@ -933,14 +996,38 @@ export class LiveSyncClient {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, trailCanvas.width, trailCanvas.height);
 
-        // --- Process Fading Trails ---
+        // --- Process Pending Trails (waiting for sync) ---
         const now = Date.now();
+
+        if (!this.pendingTrails) this.pendingTrails = [];
+        this.pendingTrails = this.pendingTrails.filter(t => {
+            // Simple timeout approach: keep trail visible for 300ms after drawing stops
+            // This gives enough time for the sync to complete
+            const age = now - t.timestamp;
+
+            if (age > 300) {
+                // Move to fading trails for quick fade out
+                this.fadingTrails.push({
+                    points: t.points,
+                    color: t.color,
+                    size: t.size,
+                    opacity: 1.0,
+                    currentSize: t.size,
+                    timestamp: Date.now()
+                });
+                return false; // Remove from pending
+            }
+
+            return true; // Keep pending
+        });
+
+        // --- Process Fading Trails ---
         this.fadingTrails = this.fadingTrails.filter(t => {
             const age = now - t.timestamp;
             // Shrink animation: 200ms duration
             const progress = age / 200;
             if (progress >= 1) return false; // Dead
-            
+
             t.currentSize = t.size * (1 - progress);
             return true;
         });
@@ -982,18 +1069,22 @@ export class LiveSyncClient {
             drawTrail(t.points, t.color, t.currentSize, 1.0);
         });
 
-        let hasActiveTrails = this.fadingTrails.length > 0;
+        // Draw Pending Trails (waiting for sync) at full size
+        this.pendingTrails.forEach(t => {
+            drawTrail(t.points, t.color, t.size, 0.7); // Slightly transparent to indicate pending
+        });
+
+        let hasActiveTrails = this.fadingTrails.length > 0 || this.pendingTrails.length > 0;
 
         this._yjsAwareness.forEach((state, clientId) => {
             if (clientId === this._yjsClientId) return; // Skip self
             if (!state || !state.cursor || state.pageIdx !== this.app.state.idx) {
                 if (this.remoteTrails[clientId]) {
-                     // Move to fading
-                     this.fadingTrails.push({
+                     // Move to pending (wait for stroke to appear in history)
+                     this.pendingTrails.push({
                          points: this.remoteTrails[clientId],
                          color: this._lastColors?.[clientId] || '#000000',
                          size: 3,
-                         opacity: 1.0,
                          timestamp: Date.now()
                      });
                      delete this.remoteTrails[clientId];
@@ -1019,12 +1110,11 @@ export class LiveSyncClient {
                 drawTrail(trail, state.color, state.size, 1.0);
             } else {
                 if (this.remoteTrails[clientId]) {
-                     // Move to fading
-                     this.fadingTrails.push({
+                     // Move to pending (wait for stroke to appear in history)
+                     this.pendingTrails.push({
                          points: this.remoteTrails[clientId],
                          color: state.color,
                          size: state.size,
-                         opacity: 1.0,
                          timestamp: Date.now()
                      });
                      delete this.remoteTrails[clientId];
@@ -1055,7 +1145,15 @@ export class LiveSyncClient {
         });
 
         // Hide trail canvas if no active trails
-        trailCanvas.style.display = hasActiveTrails ? 'block' : 'none';
+        if (hasActiveTrails) {
+            trailCanvas.style.display = 'block';
+            // If we have fading or pending trails, we MUST re-render to check for stroke appearance
+            if (this.fadingTrails.length > 0 || this.pendingTrails.length > 0) {
+                this._rafId = requestAnimationFrame(() => this.renderCursors());
+            }
+        } else {
+            trailCanvas.style.display = 'none';
+        }
     }
 
     renderUsers() {
@@ -2066,9 +2164,15 @@ export class LiveSyncClient {
                 const needsBase = (pageMeta?.hasBaseHistory || localImg.hasBaseHistory) && !localImg._baseHistory;
 
                 if (needsBase) {
-                    // Queue for base history fetch, use deltas only for now
+                    // Queue for base history fetch, use CRDT merge with deltas for now
                     pagesToFetchBase.push(this.app.state.idx);
-                    localImg.history = deltaHist;
+                    // Don't replace - merge to avoid losing local strokes
+                    const mergedHistory = this._crdtMergeHistory(
+                        localImg.history || [],
+                        deltaHist,
+                        Date.now()
+                    );
+                    localImg.history = mergedHistory;
                 } else if (localImg.hasBaseHistory && localImg._baseHistory) {
                     // If page has base history, merge it with deltas and apply modifications
                     // Get modifications from Liveblocks + R2 (if large)
@@ -2123,9 +2227,15 @@ export class LiveSyncClient {
                 const needsBase = (pageMeta?.hasBaseHistory || img.hasBaseHistory) && !img._baseHistory;
 
                 if (needsBase) {
-                    // Queue for base history fetch, use deltas only for now
+                    // Queue for base history fetch, use CRDT merge with deltas for now
                     pagesToFetchBase.push(idx);
-                    img.history = deltaHist;
+                    // Don't replace - merge to avoid losing local strokes
+                    const mergedHistory = this._crdtMergeHistory(
+                        img.history || [],
+                        deltaHist,
+                        Date.now()
+                    );
+                    img.history = mergedHistory;
                 } else if (img.hasBaseHistory && img._baseHistory) {
                     // If page has base history, merge it with deltas and apply modifications
                     // Get modifications from Liveblocks + R2 (if large)
@@ -2173,69 +2283,82 @@ export class LiveSyncClient {
      * - Deletions: respect deletions (deleted items stay deleted)
      */
     _crdtMergeHistory(localHistory, remoteHistory, remoteTimestamp) {
-        // Build a map keyed by stroke ID for efficient merging
+        // FAST PATH: If remote is subset or equal to local, no merge needed
+        if (!remoteHistory || remoteHistory.length === 0) {
+            return localHistory || [];
+        }
+        if (!localHistory || localHistory.length === 0) {
+            return [...remoteHistory];
+        }
+
+        // FAST PATH: Simple append detection
+        // If remote has more items and all local items exist in remote (same order), just use remote
+        if (remoteHistory.length >= localHistory.length) {
+            let isSimpleAppend = true;
+            const localLen = localHistory.length;
+            for (let i = 0; i < localLen && isSimpleAppend; i++) {
+                const localId = localHistory[i]?.id;
+                const remoteId = remoteHistory[i]?.id;
+                if (localId !== remoteId) {
+                    isSimpleAppend = false;
+                }
+            }
+            if (isSimpleAppend) {
+                // Remote is local + new items, just use remote directly
+                return [...remoteHistory];
+            }
+        }
+
+        // FAST PATH: If local has more items and remote is prefix, keep local
+        if (localHistory.length > remoteHistory.length) {
+            let remoteIsPrefix = true;
+            const remoteLen = remoteHistory.length;
+            for (let i = 0; i < remoteLen && remoteIsPrefix; i++) {
+                const localId = localHistory[i]?.id;
+                const remoteId = remoteHistory[i]?.id;
+                if (localId !== remoteId) {
+                    remoteIsPrefix = false;
+                }
+            }
+            if (remoteIsPrefix) {
+                // Local already has everything remote has plus more
+                return localHistory;
+            }
+        }
+
+        // FULL MERGE: Only when there are actual conflicts
         const mergedMap = new Map();
 
-        // Add all local items first
+        // Add all local items
         for (const item of localHistory) {
-            if (item.id) {
-                mergedMap.set(item.id, { ...item });
+            const itemId = item.id != null ? String(item.id) : null;
+            if (itemId) {
+                mergedMap.set(itemId, item); // Don't copy, just reference
             }
         }
 
-        // Merge remote items with CRDT rules
+        // Merge remote items
         for (const remoteItem of remoteHistory) {
-            if (!remoteItem.id) continue;
+            const remoteId = remoteItem.id != null ? String(remoteItem.id) : null;
+            if (!remoteId) continue;
 
-            const localItem = mergedMap.get(remoteItem.id);
-
+            const localItem = mergedMap.get(remoteId);
             if (!localItem) {
-                // New item from remote - add it
-                mergedMap.set(remoteItem.id, { ...remoteItem });
+                mergedMap.set(remoteId, remoteItem);
             } else {
-                // Item exists in both - use Last-Writer-Wins based on lastMod
+                // Conflict - use newer
                 const localTime = localItem.lastMod || 0;
                 const remoteTime = remoteItem.lastMod || remoteTimestamp;
-
                 if (remoteTime > localTime) {
-                    // Remote is newer - take remote version
-                    mergedMap.set(remoteItem.id, { ...remoteItem });
-                } else if (remoteTime === localTime) {
-                    // Same timestamp - merge properties (conflict resolution)
-                    // Prefer local for position/size, remote for deletion status
-                    const merged = {
-                        ...localItem,
-                        // If either marks as deleted, keep it deleted
-                        deleted: localItem.deleted || remoteItem.deleted,
-                        // Update lastMod to latest
-                        lastMod: Math.max(localTime, remoteTime)
-                    };
-                    mergedMap.set(remoteItem.id, merged);
+                    mergedMap.set(remoteId, remoteItem);
+                } else if (remoteTime === localTime && (remoteItem.deleted && !localItem.deleted)) {
+                    // Respect deletions
+                    mergedMap.set(remoteId, remoteItem);
                 }
-                // else local is newer - keep local version (already in map)
             }
         }
 
-        // Convert back to array, preserving order (newer items at end)
-        const result = Array.from(mergedMap.values());
-
-        // Sort by creation time (approximated by ID or lastMod) to maintain order
-        result.sort((a, b) => {
-            // Extract timestamp from ID if possible (e.g., "stroke_1234567890_xyz")
-            const getCreationTime = (item) => {
-                if (item.id && item.id.includes('_')) {
-                    const parts = item.id.split('_');
-                    if (parts.length >= 2) {
-                        const ts = parseInt(parts[1]);
-                        if (!isNaN(ts)) return ts;
-                    }
-                }
-                return item.lastMod || 0;
-            };
-            return getCreationTime(a) - getCreationTime(b);
-        });
-
-        return result;
+        return Array.from(mergedMap.values());
     }
 
     /**
@@ -2673,19 +2796,37 @@ export class LiveSyncClient {
 
     /**
      * Send page structure update via Yjs WebSocket
+     * Includes metadata so receiving clients can create pages without waiting for R2
      */
     _sendYjsPageStructure() {
         if (!this._yjsSocket || !this._yjsConnected) return;
+
+        // Build page metadata for each page (for immediate creation on receiving end)
+        const pageMetadata = {};
+        for (const page of this.app.state.images) {
+            if (page && page.pageId) {
+                pageMetadata[page.pageId] = {
+                    width: page.width || this.app.state.viewW,
+                    height: page.height || this.app.state.viewH,
+                    bg: page.bg || '#ffffff',
+                    isInfinite: page.isInfinite || false,
+                    templateType: page.templateType || null,
+                    pageIndex: page.pageIndex
+                };
+            }
+        }
 
         const msg = {
             type: 'page-structure',
             pageCount: this.app.state.images.length,
             pageIds: this.app.state.images.map(img => img?.pageId).filter(Boolean),
-            currentIdx: this.app.state.idx
+            pageMetadata: pageMetadata,
+            currentIdx: this.app.state.idx,
+            timestamp: Date.now()
         };
 
         this._yjsSocket.send(JSON.stringify(msg));
-        console.log(`[Yjs] Sent page structure: ${msg.pageCount} pages`);
+        console.log(`[Yjs] Sent page structure: ${msg.pageCount} pages with metadata`);
     }
 
     /**

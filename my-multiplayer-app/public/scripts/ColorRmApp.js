@@ -895,12 +895,26 @@ export class ColorRmApp {
             this.liveSync.lastLocalPageChange = Date.now();
         }
 
-        if (this.liveSync) {
+        // Sync history from Liveblocks ONLY if this page exists in remote
+        // Do NOT overwrite local history if remote is empty (prevents losing local strokes)
+        if (this.liveSync && !this.liveSync.useBetaSync) {
             const project = this.liveSync.getProject();
             if (project) {
-                const remoteHistory = project.get("pagesHistory").get(i.toString());
-                if (remoteHistory) {
-                    this.state.images[i].history = remoteHistory.toArray();
+                const pagesHistory = project.get("pagesHistory");
+                if (pagesHistory && pagesHistory.has(i.toString())) {
+                    const remoteHistory = pagesHistory.get(i.toString());
+                    if (remoteHistory && remoteHistory.length > 0) {
+                        // CRDT merge instead of replace to prevent data loss
+                        const localHistory = this.state.images[i]?.history || [];
+                        const remoteArr = remoteHistory.toArray();
+                        if (remoteArr.length > 0) {
+                            this.state.images[i].history = this.liveSync._crdtMergeHistory(
+                                localHistory,
+                                remoteArr,
+                                Date.now()
+                            );
+                        }
+                    }
                 }
             }
         }
