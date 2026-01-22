@@ -1720,6 +1720,9 @@ export const ColorRmSession = {
                     // Sync page structure to server (pageIds array)
                     await this._syncPageStructureToServer();
 
+                    // Sync page structure to Liveblocks for real-time notification
+                    this._syncPageStructureToLive();
+
                     // Signal readiness to Liveblocks
                     if (this.liveSync && !this.liveSync.isInitializing) {
                         this.liveSync.updateMetadata({
@@ -1770,12 +1773,10 @@ export const ColorRmSession = {
                                     };
                                     await this.dbPut('pages', pageObj);
 
-                                    // Upload rasterized PDF page to R2 for multi-user sync
-                                    try {
-                                        await this._uploadPageBlob(pageId, b);
-                                    } catch (uploadErr) {
-                                        console.warn(`[PDF Import] Failed to upload page ${pageId} to R2:`, uploadErr);
-                                    }
+                                    // NOTE: Do NOT upload PDF page blobs to R2 here.
+                                    // The base PDF is already uploaded, and pages are rendered on-demand.
+                                    // Other users will render from the base PDF when they fetch the project.
+                                    // Only the page structure (pageIds) is synced via Liveblocks.
 
                                     return pageObj;
                                 }));

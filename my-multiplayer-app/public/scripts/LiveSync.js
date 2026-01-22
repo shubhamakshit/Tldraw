@@ -42,9 +42,13 @@ export class LiveSyncClient {
     }
 
     async init(ownerId, projectId) {
-        // 1. Reconcile Immediately (Parallel)
-        console.log('[LiveSync] Triggering early reconciliation...');
-        this.reconcilePageStructure();
+        // 1. Reconcile Immediately (Parallel) - but skip if uploading
+        if (!this.app.isUploading) {
+            console.log('[LiveSync] Triggering early reconciliation...');
+            this.reconcilePageStructure();
+        } else {
+            console.log('[LiveSync] Skipping early reconciliation - upload in progress');
+        }
 
         // We need Registry to be available globally or passed in.
         // Assuming window.Registry is still global for now or we import it.
@@ -1732,6 +1736,12 @@ export class LiveSyncClient {
         // Skip if a local page operation is in progress
         if (this._isLocalPageOperation) {
             console.log('[reconcilePageStructure] Skipped - local page operation in progress');
+            return;
+        }
+
+        // Skip if the app is currently uploading/importing a file
+        if (this.app.isUploading) {
+            console.log('[reconcilePageStructure] Skipped - file upload/import in progress');
             return;
         }
 
